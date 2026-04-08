@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Frio Gestion
 
-## Getting Started
+Sistema de gestion para comercios tecnicos (ferreteria, refrigeracion, insumos).
 
-First, run the development server:
+## Requisitos
+- Node.js 18+
+- Postgres local (sin Docker)
 
+## Base de datos (sin Docker)
+
+Opcion A: Homebrew
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+brew install postgresql@16
+brew services start postgresql@16
+createdb friogestion
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Opcion B: Postgres.app
+- Instala Postgres.app, inicia el servicio y crea la base `friogestion`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Configuracion
+1. Copia las variables de entorno:
+   - `cp .env.example .env`
+2. Ajusta `DATABASE_URL` y `JWT_SECRET` en `.env`.
+3. (Opcional) Completa `AFIP_CUIT` y `AFIP_ACCESS_TOKEN` si vas a probar Afip SDK.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Prisma + seed
+```bash
+npx prisma migrate dev -n init
+npx prisma db seed
+```
 
-## Learn More
+## Desarrollo
+```bash
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Calidad
+```bash
+npm run lint
+npm run test
+npm run build
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- CI automatizado en `.github/workflows/ci.yml`.
+- Healthcheck: `GET /api/health`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Login demo
+- Email: `admin@friogestion.local`
+- Password: `admin1234`
 
-## Deploy on Vercel
+## Notas
+- Multi-empresa: usar el selector "Empresa" en la topbar para cambiar de organizacion.
+- Cotizacion USD: cargar en `/app/config`.
+- Admin basico: `/app/admin` (crear organizaciones, usuarios y roles).
+- PDF demo: `/api/pdf/demo`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## AFIP SDK (preparacion)
+Instalado con `@afipsdk/afip.js`. Para habilitarlo:
+- Obtener `access_token` en https://app.afipsdk.com
+- Configurar `AFIP_CUIT` y `AFIP_ACCESS_TOKEN` en `.env`
+- Opcional: `AFIP_CERT_BASE64` y `AFIP_KEY_BASE64` para fallback global
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Seguridad de acceso
+- El endpoint `POST /api/auth/register` queda habilitado solo para bootstrap inicial (cuando no existe ningun usuario).
+- El alta normal de usuarios se hace desde `/app/admin`.
+
+## Arquitectura
+- Lineamientos y convenciones: `docs/ARCHITECTURE.md`
+- Flujo AFIP/ARCA: `docs/AFIP_ARCA.md`
+
+## Deploy
+- Guia de salida a produccion (GitHub + Vercel + DigitalOcean): `docs/DEPLOY_PRODUCCION.md`

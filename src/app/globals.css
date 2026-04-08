@@ -1,3 +1,4 @@
+@config "../../tailwind.config.ts";
 @import "tailwindcss";
 
 :root {
@@ -8,19 +9,171 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Avenir Next", "Montserrat", "Segoe UI", "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  body {
+    @apply min-h-screen bg-zinc-50 text-zinc-900 antialiased;
+  }
+
+  button:not(:disabled),
+  [role="button"],
+  summary,
+  input[type="checkbox"],
+  input[type="radio"] {
+    cursor: pointer;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer components {
+  .glass {
+    @apply bg-white backdrop-blur-xl border border-zinc-200 shadow-[0_2px_10px_-8px_rgba(82,82,91,0.28)];
+  }
+
+  .pill {
+    @apply rounded-full px-3 py-2;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-3 py-2 text-sm font-medium text-zinc-900/90 transition-colors hover:bg-white;
+    @apply bg-white border border-zinc-200 backdrop-blur-xl shadow-[0_2px_10px_-8px_rgba(82,82,91,0.26)];
+    @apply cursor-pointer disabled:cursor-not-allowed disabled:opacity-60;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40;
+  }
+
+  .btn-sky {
+    @apply border border-sky-200 bg-white text-sky-950 hover:bg-white;
+  }
+
+  .btn-emerald {
+    @apply border border-emerald-200 bg-white text-emerald-950 hover:bg-white;
+  }
+
+  .btn-amber {
+    @apply border border-amber-200 bg-white text-amber-950 hover:bg-white;
+  }
+
+  .btn-indigo {
+    @apply border border-indigo-200 bg-white text-indigo-950 hover:bg-white;
+  }
+
+  .btn-rose {
+    @apply border border-rose-200 bg-white text-rose-950 hover:bg-white;
+  }
+
+  .input {
+    @apply rounded-full px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-500 outline-none transition focus:ring-2 focus:ring-sky-400/40;
+    @apply bg-white border border-zinc-200 backdrop-blur-xl shadow-[0_2px_10px_-8px_rgba(82,82,91,0.24)];
+    @apply hover:bg-white;
+    @apply disabled:cursor-not-allowed disabled:opacity-60;
+    @apply focus:border-sky-200;
+  }
+
+  .card {
+    @apply rounded-2xl p-5 bg-white border border-zinc-200 backdrop-blur-xl shadow-none;
+    @apply overflow-visible;
+  }
+
+  .section-title {
+    @apply text-xs font-semibold uppercase tracking-wide text-zinc-500;
+  }
+
+  .section-subtitle {
+    @apply text-xs text-zinc-500;
+  }
+
+  .field-stack {
+    @apply space-y-2;
+  }
+
+  .input-label {
+    @apply mb-1 block text-[11px] font-semibold uppercase tracking-wide text-zinc-500;
+  }
+
+  .field-stack > .input,
+  .field-stack > .btn,
+  .field-stack > .toggle-pill,
+  .field-stack > .pill {
+    margin-top: 0.125rem;
+  }
+
+  .toggle-pill {
+    @apply inline-flex items-center justify-center rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-white;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40;
+    @apply cursor-pointer disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .toggle-pill-active {
+    @apply border-sky-200 bg-white text-sky-900;
+  }
+
+  .segmented-toggle {
+    @apply relative inline-grid grid-cols-2 rounded-full border border-zinc-200 bg-white p-1;
+  }
+
+  .segmented-toggle-indicator {
+    @apply pointer-events-none absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full border border-sky-200 bg-white transition-transform duration-200 ease-out;
+    @apply shadow-[0_4px_10px_-8px_rgba(14,116,144,0.32)];
+  }
+
+  .segmented-toggle-item {
+    @apply relative z-10 inline-flex items-center justify-center rounded-full px-4 py-1.5 text-xs font-medium text-zinc-600 transition-colors;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40;
+  }
+
+  .segmented-toggle-item-active {
+    @apply text-sky-900;
+  }
+
+  .subtle-divider {
+    @apply border-t border-zinc-200/60;
+  }
+
+  .table-scroll {
+    @apply overflow-x-auto overflow-y-visible;
+  }
+
+  .reveal-motion {
+    @apply overflow-hidden px-1 pb-1 -mx-1 -mb-1;
+  }
+
+  @keyframes panel-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  details[open] .details-motion {
+    animation: panel-reveal 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .no-spinner {
+    -moz-appearance: textfield;
+  }
+
+  .no-spinner::-webkit-outer-spin-button,
+  .no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+@layer components {
+  select.input {
+    @apply cursor-pointer pr-10 appearance-none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+    background-position: right 0.85rem center;
+    background-size: 12px;
+    background-repeat: no-repeat;
+  }
 }

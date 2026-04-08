@@ -1,0 +1,1148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  SALES
+  CASHIER
+  VIEWER
+}
+
+enum CustomerType {
+  CONSUMER_FINAL
+  INSTALLER
+  BUSINESS
+  PUBLIC_ENTITY
+}
+
+enum PurchaseStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum SaleStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum BillingStatus {
+  NOT_BILLED
+  TO_BILL
+  BILLED
+}
+
+enum SalePaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PurchasePaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum ExtraChargeType {
+  PERCENT
+  FIXED
+}
+
+enum SaleChargeType {
+  INTEREST
+}
+
+enum FiscalConfigStatus {
+  PENDING
+  CONNECTED
+  ERROR
+}
+
+enum ArcaJobStatus {
+  PENDING
+  RUNNING
+  WAITING
+  REQUIRES_ACTION
+  COMPLETED
+  ERROR
+}
+
+enum ArcaJobStep {
+  CREATE_CERT
+  AUTH_WS
+  DONE
+}
+
+enum ArcaJobAction {
+  CONNECT
+  ROTATE
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  ADJUST
+}
+
+enum PaymentMethodType {
+  CASH
+  TRANSFER
+  CARD
+  CHECK
+  OTHER
+}
+
+enum FinanceAccountType {
+  CASH
+  BANK
+  VIRTUAL
+}
+
+enum SupplierPaymentStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum SupplierRetentionType {
+  VAT
+  INCOME
+  IIBB
+  OTHER
+}
+
+enum SupplierArcaVerificationStatus {
+  PENDING
+  MATCH
+  PARTIAL
+  MISMATCH
+  NO_ENCONTRADO
+  ERROR
+}
+
+enum PurchaseArcaValidationStatus {
+  PENDING
+  AUTHORIZED
+  OBSERVED
+  REJECTED
+  ERROR
+}
+
+enum DeliveryNoteType {
+  R
+  X
+}
+
+enum DeliveryNoteStatus {
+  DRAFT
+  ISSUED
+  DELIVERED
+  CANCELLED
+}
+
+enum ReceiptStatus {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum InstallmentPlanType {
+  CARD
+  CREDIT
+}
+
+enum InstallmentFrequency {
+  MONTHLY
+}
+
+enum InstallmentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+}
+
+enum AccountMovementDirection {
+  IN
+  OUT
+}
+
+enum LedgerCounterpartyType {
+  CUSTOMER
+  SUPPLIER
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerSourceType {
+  SALE
+  RECEIPT
+  PURCHASE
+  SUPPLIER_PAYMENT
+  ADJUSTMENT
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  legalName String?
+  taxId     String?
+  receiptApprovalRoles String[] @default([])
+  receiptDoubleCheckRoles String[] @default([])
+  defaultDeliveryNotePointOfSale Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships    Membership[]
+  currencies     FinanceCurrency[]
+  exchangeRates  ExchangeRate[]
+  accounts       FinanceAccount[]
+  paymentMethods PaymentMethod[]
+  products       Product[]
+  customers      Customer[]
+  suppliers      Supplier[]
+  priceLists     PriceList[]
+  purchases      PurchaseInvoice[]
+  quotes         Quote[]
+  sales          Sale[]
+  saleEvents     SaleEvent[]
+  saleCharges    SaleCharge[]
+  receipts       Receipt[]
+  accountMoves   AccountMovement[]
+  currentAccountEntries CurrentAccountEntry[]
+  supplierPayments SupplierPayment[]
+  cashReconciliations CashReconciliation[]
+  stockMoves     StockMovement[]
+  fiscalInvoices FiscalInvoice[]
+  creditNotes    FiscalCreditNote[]
+  installmentPlans InstallmentPlan[]
+  fiscalConfig   OrganizationFiscalConfig?
+  arcaJobs       ArcaConnectionJob[]
+  counters       OrganizationCounter[]
+  arcaTaxpayerLookupCache ArcaTaxpayerLookupCache[]
+  supplierArcaVerifications SupplierArcaVerification[]
+  purchaseArcaValidations PurchaseArcaValidation[]
+  deliveryNotes  DeliveryNote[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String?
+  email        String   @unique
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships       Membership[]
+  saleEvents        SaleEvent[]
+  receiptsCreated   Receipt[] @relation("ReceiptCreatedBy")
+  receiptsConfirmed Receipt[] @relation("ReceiptConfirmedBy")
+  accountMovementsVerified AccountMovement[] @relation("AccountMovementVerifiedBy")
+  supplierPaymentsCancelled SupplierPayment[] @relation("SupplierPaymentCancelledBy")
+  cashReconciliationsCreated CashReconciliation[] @relation("CashReconciliationCreatedBy")
+  supplierArcaVerifications SupplierArcaVerification[] @relation("SupplierArcaVerificationActor")
+  purchaseArcaValidations PurchaseArcaValidation[] @relation("PurchaseArcaValidationActor")
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MembershipRole
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model FinanceCurrency {
+  id             String   @id @default(cuid())
+  organizationId String
+  code           String
+  name           String
+  symbol         String?
+  isDefault      Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+}
+
+model ExchangeRate {
+  id             String   @id @default(cuid())
+  organizationId String
+  baseCode       String
+  quoteCode      String
+  rate           Decimal  @db.Decimal(18, 6)
+  asOf           DateTime @default(now())
+  source         String?
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, asOf])
+}
+
+model FinanceAccount {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  type           FinanceAccountType @default(CASH)
+  currencyCode   String
+  bankName       String?
+  accountNumber  String?
+  cbu            String?
+  alias          String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id])
+  movements    AccountMovement[]
+  receiptLines ReceiptLine[]
+  supplierPaymentLines SupplierPaymentLine[]
+  cashReconciliationLines CashReconciliationLine[]
+
+  @@index([organizationId])
+}
+
+model PaymentMethod {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  type            PaymentMethodType @default(OTHER)
+  requiresAccount Boolean  @default(false)
+  requiresApproval Boolean @default(false)
+  requiresDoubleCheck Boolean @default(false)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  receiptLines ReceiptLine[]
+  supplierPaymentLines SupplierPaymentLine[]
+
+  @@index([organizationId])
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  organizationId String
+  sku            String?
+  name           String
+  brand          String?
+  model          String?
+  unit           String?
+  cost           Decimal? @db.Decimal(12, 2)
+  price          Decimal? @db.Decimal(12, 2)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id])
+  priceItems    PriceListItem[]
+  purchaseItems PurchaseItem[]
+  quoteItems    QuoteItem[]
+  saleItems     SaleItem[]
+  stockMoves    StockMovement[]
+  deliveryNoteItems DeliveryNoteItem[]
+
+  @@index([organizationId])
+  @@unique([organizationId, sku])
+}
+
+model Customer {
+  id                 String       @id @default(cuid())
+  organizationId     String
+  systemKey          String?
+  displayName        String
+  legalName          String?
+  taxId              String?
+  email              String?
+  phone              String?
+  address            String?
+  type               CustomerType @default(CONSUMER_FINAL)
+  defaultPriceListId String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  organization     Organization @relation(fields: [organizationId], references: [id])
+  defaultPriceList PriceList?   @relation(fields: [defaultPriceListId], references: [id])
+  quotes           Quote[]
+  sales            Sale[]
+  receipts         Receipt[]
+  currentAccountEntries CurrentAccountEntry[]
+  deliveryNotes    DeliveryNote[]
+
+  @@index([organizationId])
+  @@unique([organizationId, systemKey])
+}
+
+model Supplier {
+  id                      String                         @id @default(cuid())
+  organizationId          String
+  displayName             String
+  legalName               String?
+  taxId                   String?
+  email                   String?
+  phone                   String?
+  address                 String?
+  arcaVerificationStatus  SupplierArcaVerificationStatus @default(PENDING)
+  arcaVerificationCheckedAt DateTime?
+  arcaVerificationMessage String?
+  arcaVerificationSnapshot Json?
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime                       @updatedAt
+
+  organization     Organization   @relation(fields: [organizationId], references: [id])
+  purchaseInvoices PurchaseInvoice[]
+  supplierPayments SupplierPayment[]
+  currentAccountEntries CurrentAccountEntry[]
+  arcaVerifications SupplierArcaVerification[]
+  deliveryNotes      DeliveryNote[]
+
+  @@index([organizationId])
+  @@index([organizationId, arcaVerificationStatus])
+}
+
+model PriceList {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  currencyCode   String
+  isDefault      Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  items         PriceListItem[]
+  customers     Customer[]
+
+  @@index([organizationId])
+}
+
+model PriceListItem {
+  id          String  @id @default(cuid())
+  priceListId String
+  productId   String
+  price       Decimal @db.Decimal(12, 2)
+
+  priceList PriceList @relation(fields: [priceListId], references: [id])
+  product   Product   @relation(fields: [productId], references: [id])
+
+  @@unique([priceListId, productId])
+}
+
+model PurchaseInvoice {
+  id                    String                       @id @default(cuid())
+  organizationId        String
+  supplierId            String
+  status                PurchaseStatus
+  paymentStatus         PurchasePaymentStatus        @default(UNPAID)
+  invoiceNumber         String?
+  invoiceDate           DateTime?
+  subtotal              Decimal?                     @db.Decimal(12, 2)
+  taxes                 Decimal?                     @db.Decimal(12, 2)
+  total                 Decimal?                     @db.Decimal(12, 2)
+  paidTotal             Decimal                      @default(0) @db.Decimal(12, 2)
+  balance               Decimal                      @default(0) @db.Decimal(12, 2)
+  arcaValidationStatus  PurchaseArcaValidationStatus @default(PENDING)
+  arcaValidationCheckedAt DateTime?
+  arcaValidationMessage String?
+  arcaValidationRequest Json?
+  arcaValidationResponse Json?
+  createdAt             DateTime                     @default(now())
+  updatedAt             DateTime                     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  items        PurchaseItem[]
+  allocations  SupplierPaymentAllocation[]
+  currentAccountEntries CurrentAccountEntry[]
+  arcaValidations PurchaseArcaValidation[]
+  deliveryNotes   DeliveryNote[]
+
+  @@index([organizationId])
+  @@index([organizationId, arcaValidationStatus])
+}
+
+model PurchaseItem {
+  id                String   @id @default(cuid())
+  purchaseInvoiceId String
+  productId         String
+  qty               Decimal  @db.Decimal(12, 3)
+  unitCost          Decimal  @db.Decimal(12, 2)
+  total             Decimal  @db.Decimal(12, 2)
+
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+  product         Product         @relation(fields: [productId], references: [id])
+  stockMovement   StockMovement?
+
+  @@index([purchaseInvoiceId])
+}
+
+model Quote {
+  id             String      @id @default(cuid())
+  organizationId String
+  customerId     String
+  status         QuoteStatus
+  quoteNumber    String?
+  validUntil     DateTime?
+  subtotal       Decimal?    @db.Decimal(12, 2)
+  taxes          Decimal?    @db.Decimal(12, 2)
+  extraType      ExtraChargeType?
+  extraValue     Decimal?    @db.Decimal(12, 2)
+  extraAmount    Decimal?    @db.Decimal(12, 2)
+  total          Decimal?    @db.Decimal(12, 2)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  items        QuoteItem[]
+  sale         Sale?        @relation("QuoteSale")
+
+  @@index([organizationId])
+}
+
+model QuoteItem {
+  id        String  @id @default(cuid())
+  quoteId   String
+  productId String
+  qty       Decimal @db.Decimal(12, 3)
+  unitPrice Decimal @db.Decimal(12, 2)
+  total     Decimal @db.Decimal(12, 2)
+  taxRate   Decimal? @db.Decimal(5, 2)
+  taxAmount Decimal? @db.Decimal(12, 2)
+
+  quote   Quote   @relation(fields: [quoteId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model Sale {
+  id            String        @id @default(cuid())
+  organizationId String
+  customerId     String
+  quoteId        String?      @unique
+  status         SaleStatus
+  billingStatus  BillingStatus
+  paymentStatus  SalePaymentStatus @default(UNPAID)
+  saleNumber     String?
+  saleDate       DateTime?
+  subtotal       Decimal?     @db.Decimal(12, 2)
+  taxes          Decimal?     @db.Decimal(12, 2)
+  extraType      ExtraChargeType?
+  extraValue     Decimal?     @db.Decimal(12, 2)
+  extraAmount    Decimal?     @db.Decimal(12, 2)
+  total          Decimal?     @db.Decimal(12, 2)
+  paidTotal      Decimal      @default(0) @db.Decimal(12, 2)
+  balance        Decimal      @default(0) @db.Decimal(12, 2)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  quote        Quote?       @relation("QuoteSale", fields: [quoteId], references: [id])
+  items        SaleItem[]
+  saleEvents  SaleEvent[]
+  saleCharges SaleCharge[]
+  installmentPlan InstallmentPlan?
+  receipts     Receipt[]
+  currentAccountEntries CurrentAccountEntry[]
+  fiscalInvoice FiscalInvoice?
+  creditNotes  FiscalCreditNote[]
+  deliveryNotes DeliveryNote[]
+
+  @@index([organizationId])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  productId String
+  qty       Decimal @db.Decimal(12, 3)
+  unitPrice Decimal @db.Decimal(12, 2)
+  total     Decimal @db.Decimal(12, 2)
+  taxRate   Decimal? @db.Decimal(5, 2)
+  taxAmount Decimal? @db.Decimal(12, 2)
+
+  sale         Sale          @relation(fields: [saleId], references: [id])
+  product      Product       @relation(fields: [productId], references: [id])
+  stockMovement StockMovement?
+
+  @@index([saleId])
+}
+
+model SaleEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  saleId         String
+  actorUserId    String?
+  action         String
+  note           String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+  actor        User?        @relation(fields: [actorUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([saleId])
+  @@index([actorUserId])
+}
+
+model Receipt {
+  id            String   @id @default(cuid())
+  organizationId String
+  customerId    String
+  saleId        String?
+  status        ReceiptStatus @default(PENDING)
+  createdByUserId String?
+  confirmedByUserId String?
+  confirmedAt   DateTime?
+  receiptNumber String?
+  receivedAt    DateTime @default(now())
+  total         Decimal  @db.Decimal(12, 2)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  sale         Sale?        @relation(fields: [saleId], references: [id])
+  createdBy    User?        @relation("ReceiptCreatedBy", fields: [createdByUserId], references: [id])
+  confirmedBy  User?        @relation("ReceiptConfirmedBy", fields: [confirmedByUserId], references: [id])
+  lines        ReceiptLine[]
+  installmentPayments InstallmentPayment[]
+  currentAccountEntries CurrentAccountEntry[]
+
+  @@index([organizationId])
+  @@index([createdByUserId])
+  @@index([confirmedByUserId])
+}
+
+model ReceiptLine {
+  id              String   @id @default(cuid())
+  receiptId       String
+  paymentMethodId String
+  accountId       String?
+  currencyCode    String
+  amount          Decimal  @db.Decimal(12, 2)
+  amountBase      Decimal  @db.Decimal(12, 2)
+  fxRateUsed      Decimal? @db.Decimal(18, 6)
+
+  receipt        Receipt       @relation(fields: [receiptId], references: [id])
+  paymentMethod  PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+  account        FinanceAccount? @relation(fields: [accountId], references: [id])
+  accountMovement AccountMovement?
+
+  @@index([receiptId])
+}
+
+model SaleCharge {
+  id             String   @id @default(cuid())
+  organizationId String
+  saleId         String
+  type           SaleChargeType
+  amount         Decimal  @db.Decimal(12, 2)
+  note           String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+
+  @@index([organizationId])
+  @@index([saleId])
+}
+
+model InstallmentPlan {
+  id               String   @id @default(cuid())
+  organizationId   String
+  saleId           String   @unique
+  type             InstallmentPlanType
+  installmentsCount Int
+  interestRate     Decimal? @db.Decimal(5, 2)
+  principal        Decimal  @db.Decimal(12, 2)
+  interestAmount   Decimal  @db.Decimal(12, 2)
+  total            Decimal  @db.Decimal(12, 2)
+  startDate        DateTime
+  frequency        InstallmentFrequency @default(MONTHLY)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale         @relation(fields: [saleId], references: [id])
+  installments Installment[]
+
+  @@index([organizationId])
+}
+
+model Installment {
+  id        String   @id @default(cuid())
+  planId    String
+  number    Int
+  dueDate   DateTime
+  amount    Decimal  @db.Decimal(12, 2)
+  paidAmount Decimal @default(0) @db.Decimal(12, 2)
+  status    InstallmentStatus @default(PENDING)
+  paidAt    DateTime?
+
+  plan      InstallmentPlan @relation(fields: [planId], references: [id])
+  payments  InstallmentPayment[]
+
+  @@index([planId])
+}
+
+model InstallmentPayment {
+  id            String   @id @default(cuid())
+  installmentId String
+  receiptId     String
+  amount        Decimal  @db.Decimal(12, 2)
+  createdAt     DateTime @default(now())
+
+  installment Installment @relation(fields: [installmentId], references: [id])
+  receipt     Receipt     @relation(fields: [receiptId], references: [id])
+
+  @@index([installmentId])
+  @@index([receiptId])
+}
+
+model AccountMovement {
+  id             String   @id @default(cuid())
+  organizationId String
+  accountId      String
+  occurredAt     DateTime @default(now())
+  direction      AccountMovementDirection
+  amount         Decimal  @db.Decimal(12, 2)
+  currencyCode   String
+  requiresVerification Boolean @default(false)
+  verifiedAt   DateTime?
+  verifiedByUserId String?
+  note           String?
+  receiptLineId  String?  @unique
+  supplierPaymentLineId String? @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  account      FinanceAccount @relation(fields: [accountId], references: [id])
+  receiptLine  ReceiptLine?  @relation(fields: [receiptLineId], references: [id])
+  supplierPaymentLine SupplierPaymentLine? @relation(fields: [supplierPaymentLineId], references: [id])
+  verifiedBy   User? @relation("AccountMovementVerifiedBy", fields: [verifiedByUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([verifiedByUserId])
+}
+
+model SupplierPayment {
+  id             String   @id @default(cuid())
+  organizationId String
+  supplierId     String
+  status         SupplierPaymentStatus @default(CONFIRMED)
+  paidAt         DateTime @default(now())
+  total          Decimal  @db.Decimal(12, 2)
+  withheldTotal  Decimal  @default(0) @db.Decimal(12, 2)
+  cancelledAt    DateTime?
+  cancelledByUserId String?
+  cancellationNote String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  cancelledBy  User?        @relation("SupplierPaymentCancelledBy", fields: [cancelledByUserId], references: [id])
+  lines        SupplierPaymentLine[]
+  allocations  SupplierPaymentAllocation[]
+  retentions   SupplierPaymentRetention[]
+  currentAccountEntries CurrentAccountEntry[]
+
+  @@index([organizationId])
+  @@index([supplierId])
+}
+
+model SupplierPaymentRetention {
+  id                String   @id @default(cuid())
+  supplierPaymentId String
+  type              SupplierRetentionType
+  baseAmount        Decimal? @db.Decimal(12, 2)
+  rate              Decimal? @db.Decimal(5, 2)
+  amount            Decimal  @db.Decimal(12, 2)
+  note              String?
+
+  supplierPayment SupplierPayment @relation(fields: [supplierPaymentId], references: [id])
+
+  @@index([supplierPaymentId])
+}
+
+model SupplierPaymentLine {
+  id               String   @id @default(cuid())
+  supplierPaymentId String
+  paymentMethodId  String
+  accountId        String?
+  currencyCode     String
+  amount           Decimal  @db.Decimal(12, 2)
+  amountBase       Decimal  @db.Decimal(12, 2)
+  fxRateUsed       Decimal? @db.Decimal(18, 6)
+
+  supplierPayment SupplierPayment @relation(fields: [supplierPaymentId], references: [id])
+  paymentMethod   PaymentMethod   @relation(fields: [paymentMethodId], references: [id])
+  account         FinanceAccount? @relation(fields: [accountId], references: [id])
+  accountMovement AccountMovement?
+
+  @@index([supplierPaymentId])
+}
+
+model SupplierPaymentAllocation {
+  id                String   @id @default(cuid())
+  supplierPaymentId String
+  purchaseInvoiceId String
+  amount            Decimal  @db.Decimal(12, 2)
+  createdAt         DateTime @default(now())
+
+  supplierPayment SupplierPayment @relation(fields: [supplierPaymentId], references: [id])
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id])
+
+  @@index([supplierPaymentId])
+  @@index([purchaseInvoiceId])
+}
+
+model CashReconciliation {
+  id             String   @id @default(cuid())
+  organizationId String
+  periodStart    DateTime
+  periodEnd      DateTime
+  note           String?
+  createdByUserId String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  createdBy   User? @relation("CashReconciliationCreatedBy", fields: [createdByUserId], references: [id])
+  lines       CashReconciliationLine[]
+
+  @@index([organizationId])
+  @@index([createdByUserId])
+}
+
+model CashReconciliationLine {
+  id               String   @id @default(cuid())
+  reconciliationId String
+  accountId        String
+  currencyCode     String
+  expectedAmount   Decimal  @db.Decimal(12, 2)
+  countedAmount    Decimal  @db.Decimal(12, 2)
+  difference       Decimal  @db.Decimal(12, 2)
+  note             String?
+
+  reconciliation CashReconciliation @relation(fields: [reconciliationId], references: [id])
+  account       FinanceAccount @relation(fields: [accountId], references: [id])
+
+  @@index([reconciliationId])
+  @@index([accountId])
+}
+
+model CurrentAccountEntry {
+  id                String   @id @default(cuid())
+  organizationId    String
+  counterpartyType  LedgerCounterpartyType
+  customerId        String?
+  supplierId        String?
+  direction         LedgerDirection
+  sourceType        LedgerSourceType
+  saleId            String?
+  receiptId         String?
+  purchaseInvoiceId String?
+  supplierPaymentId String?
+  amount            Decimal  @db.Decimal(12, 2)
+  occurredAt        DateTime @default(now())
+  note              String?
+  createdAt         DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  customer     Customer?    @relation(fields: [customerId], references: [id])
+  supplier     Supplier?    @relation(fields: [supplierId], references: [id])
+  sale         Sale?        @relation(fields: [saleId], references: [id])
+  receipt      Receipt?     @relation(fields: [receiptId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+  supplierPayment SupplierPayment? @relation(fields: [supplierPaymentId], references: [id])
+
+  @@index([organizationId])
+  @@index([organizationId, counterpartyType])
+  @@index([customerId])
+  @@index([supplierId])
+  @@index([saleId])
+  @@index([receiptId])
+  @@index([purchaseInvoiceId])
+  @@index([supplierPaymentId])
+}
+
+model StockMovement {
+  id             String            @id @default(cuid())
+  organizationId String
+  productId      String
+  type           StockMovementType
+  qty            Decimal           @db.Decimal(12, 3)
+  unit           String?
+  occurredAt     DateTime          @default(now())
+  note           String?
+  purchaseItemId String?           @unique
+  saleItemId     String?           @unique
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  product      Product      @relation(fields: [productId], references: [id])
+  purchaseItem PurchaseItem? @relation(fields: [purchaseItemId], references: [id])
+  saleItem     SaleItem?     @relation(fields: [saleItemId], references: [id])
+
+  @@index([organizationId])
+}
+
+model FiscalInvoice {
+  id             String   @id @default(cuid())
+  organizationId String
+  saleId         String   @unique
+  type           String?
+  pointOfSale    String?
+  number         String?
+  cae            String?
+  caeDueDate     DateTime?
+  issuedAt       DateTime?
+  currencyCode   String?
+  payloadAfip    Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  sale         Sale        @relation(fields: [saleId], references: [id])
+  creditNotes  FiscalCreditNote[]
+
+  @@index([organizationId])
+}
+
+model FiscalCreditNote {
+  id              String   @id @default(cuid())
+  organizationId  String
+  saleId          String?
+  fiscalInvoiceId String?
+  creditNumber    String?
+  pointOfSale     String?
+  type            String?
+  cae             String?
+  caeDueDate      DateTime?
+  issuedAt        DateTime?
+  payloadAfip     Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization  Organization  @relation(fields: [organizationId], references: [id])
+  sale          Sale?          @relation(fields: [saleId], references: [id])
+  fiscalInvoice FiscalInvoice? @relation(fields: [fiscalInvoiceId], references: [id])
+
+  @@index([organizationId])
+  @@index([saleId])
+  @@index([fiscalInvoiceId])
+}
+
+model OrganizationFiscalConfig {
+  id                 String             @id @default(cuid())
+  organizationId     String             @unique
+  taxIdRepresentado  String
+  taxIdLogin         String
+  alias              String
+  certEncrypted      String?
+  keyEncrypted       String?
+  authorizedServices String[]
+  status             FiscalConfigStatus @default(PENDING)
+  lastError          String?
+  lastOkAt           DateTime?
+  logoUrl            String?
+  logoFilename       String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+model ArcaConnectionJob {
+  id                  String       @id @default(cuid())
+  organizationId      String
+  action              ArcaJobAction
+  status              ArcaJobStatus
+  step                ArcaJobStep
+  services            String[]
+  currentServiceIndex Int          @default(0)
+  longJobId           String?
+  taxIdRepresentado   String
+  taxIdLogin          String
+  alias               String
+  lastError           String?
+  completedAt         DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+}
+
+model ArcaTaxpayerLookupCache {
+  id             String   @id @default(cuid())
+  organizationId String
+  taxId          String
+  payload        Json
+  checkedAt      DateTime
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, taxId])
+  @@index([organizationId])
+  @@index([expiresAt])
+}
+
+model SupplierArcaVerification {
+  id             String                         @id @default(cuid())
+  organizationId String
+  supplierId     String?
+  taxId          String
+  requestPayload Json?
+  responsePayload Json?
+  status         SupplierArcaVerificationStatus
+  message        String?
+  checkedAt      DateTime                       @default(now())
+  actorUserId    String?
+  createdAt      DateTime                       @default(now())
+  updatedAt      DateTime                       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  supplier     Supplier?    @relation(fields: [supplierId], references: [id])
+  actorUser    User?        @relation("SupplierArcaVerificationActor", fields: [actorUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([supplierId])
+  @@index([taxId])
+  @@index([checkedAt])
+  @@index([status])
+}
+
+model PurchaseArcaValidation {
+  id               String                       @id @default(cuid())
+  organizationId   String
+  purchaseInvoiceId String?
+  requestPayload   Json?
+  responsePayload  Json?
+  status           PurchaseArcaValidationStatus
+  message          String?
+  checkedAt        DateTime                     @default(now())
+  actorUserId      String?
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  organization   Organization   @relation(fields: [organizationId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+  actorUser      User?          @relation("PurchaseArcaValidationActor", fields: [actorUserId], references: [id])
+
+  @@index([organizationId])
+  @@index([purchaseInvoiceId])
+  @@index([checkedAt])
+  @@index([status])
+}
+
+model DeliveryNote {
+  id               String             @id @default(cuid())
+  organizationId   String
+  type             DeliveryNoteType
+  pointOfSale      Int
+  number           Int?
+  status           DeliveryNoteStatus @default(DRAFT)
+  issuedAt         DateTime?
+  deliveredAt      DateTime?
+  customerId       String?
+  supplierId       String?
+  saleId           String?
+  purchaseInvoiceId String?
+  observations     String?
+  digitalRepresentation Boolean       @default(true)
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  organization   Organization    @relation(fields: [organizationId], references: [id])
+  customer       Customer?       @relation(fields: [customerId], references: [id])
+  supplier       Supplier?       @relation(fields: [supplierId], references: [id])
+  sale           Sale?           @relation(fields: [saleId], references: [id])
+  purchaseInvoice PurchaseInvoice? @relation(fields: [purchaseInvoiceId], references: [id])
+  items          DeliveryNoteItem[]
+
+  @@unique([organizationId, type, pointOfSale, number])
+  @@index([organizationId])
+  @@index([status])
+  @@index([customerId])
+  @@index([supplierId])
+  @@index([saleId])
+  @@index([purchaseInvoiceId])
+}
+
+model DeliveryNoteItem {
+  id             String   @id @default(cuid())
+  deliveryNoteId String
+  productId      String?
+  description    String
+  qty            Decimal  @db.Decimal(12, 3)
+  unit           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  deliveryNote DeliveryNote @relation(fields: [deliveryNoteId], references: [id])
+  product      Product?     @relation(fields: [productId], references: [id])
+
+  @@index([deliveryNoteId])
+  @@index([productId])
+}
+
+model OrganizationCounter {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  nextValue      Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, key])
+  @@index([organizationId])
+}

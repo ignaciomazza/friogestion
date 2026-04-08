@@ -1,0 +1,77 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
+import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
+import { getAfipClient } from "@/lib/afip/client";
+import { getAfipStatus } from "@/lib/afip/status";
+import BillingClient from "./billing-client";
+
+export default async function BillingPage() {
+  const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
+  if (!token) {
+    redirect("/login");
+  }
+
+  let payload;
+  try {
+    payload = await verifyToken(token);
+  } catch {
+    redirect("/login");
+  }
+
+  if (!payload.activeOrgId) {
+    redirect("/login");
+  }
+
+  const membership = await prisma.membership.findUnique({
+    where: {
+      organizationId_userId: {
+        organizationId: payload.activeOrgId,
+        userId: payload.userId,
+      },
+    },
+  });
+
+  if (!membership) {
+    redirect("/app");
+  }
+
+  const sales = await prisma.sale.findMany({
+    where: { organizationId: membership.organizationId },
+    include: { customer: true },
+    orderBy: { createdAt: "desc" },
+    take: 80,
+  });
+
+  const afipStatus = await getAfipStatus(membership.organizationId);
+  let clientReady = false;
+
+  if (afipStatus.ok) {
+    try {
+      await getAfipClient(membership.organizationId);
+      clientReady = true;
+    } catch {
+      clientReady = false;
+    }
+  }
+
+  return (
+    <BillingClient
+      afipStatus={{ ...afipStatus, clientReady }}
+      initialSales={sales.map((sale) => ({
+        id: sale.id,
+        customerName: sale.customer.displayName,
+        customerTaxId: sale.customer.taxId,
+        customerType: sale.customer.type,
+        saleNumber: sale.saleNumber,
+        saleDate: sale.saleDate?.toISOString() ?? null,
+        createdAt: sale.createdAt.toISOString(),
+        subtotal: sale.subtotal?.toString() ?? null,
+        taxes: sale.taxes?.toString() ?? null,
+        total: sale.total?.toString() ?? null,
+        status: sale.status,
+        billingStatus: sale.billingStatus,
+      }))}
+    />
+  );
+}

@@ -1,0 +1,92 @@
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
+import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
+import QuotesClient from "./quotes-client";
+
+export default async function QuotesPage() {
+  const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
+  if (!token) {
+    redirect("/login");
+  }
+
+  let payload;
+  try {
+    payload = await verifyToken(token);
+  } catch {
+    redirect("/login");
+  }
+
+  if (!payload.activeOrgId) {
+    redirect("/login");
+  }
+
+  const membership = await prisma.membership.findUnique({
+    where: {
+      organizationId_userId: {
+        organizationId: payload.activeOrgId,
+        userId: payload.userId,
+      },
+    },
+  });
+
+  if (!membership) {
+    redirect("/app");
+  }
+
+  const [customers, products, quotes] = await Promise.all([
+    prisma.customer.findMany({
+      where: { organizationId: membership.organizationId, systemKey: null },
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    }),
+    prisma.product.findMany({
+      where: { organizationId: membership.organizationId },
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    }),
+    prisma.quote.findMany({
+      where: { organizationId: membership.organizationId },
+      include: { customer: true, sale: true },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+  ]);
+
+  return (
+    <QuotesClient
+      initialCustomers={customers.map((customer) => ({
+        id: customer.id,
+        displayName: customer.displayName,
+        legalName: customer.legalName,
+        taxId: customer.taxId,
+        email: customer.email,
+        phone: customer.phone,
+        address: customer.address,
+        type: customer.type,
+        systemKey: customer.systemKey,
+      }))}
+      initialProducts={products.map((product) => ({
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        brand: product.brand,
+        model: product.model,
+        unit: product.unit,
+        price: product.price?.toString() ?? null,
+      }))}
+      initialQuotes={quotes.map((quote) => ({
+        id: quote.id,
+        customerName: quote.customer.displayName,
+        quoteNumber: quote.quoteNumber,
+        validUntil: quote.validUntil?.toISOString() ?? null,
+        createdAt: quote.createdAt.toISOString(),
+        subtotal: quote.subtotal?.toString() ?? null,
+        taxes: quote.taxes?.toString() ?? null,
+        total: quote.total?.toString() ?? null,
+        status: quote.status,
+        saleId: quote.sale?.id ?? null,
+      }))}
+    />
+  );
+}
