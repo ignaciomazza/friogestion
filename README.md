@@ -21,8 +21,9 @@ Opcion B: Postgres.app
 ## Configuracion
 1. Copia las variables de entorno:
    - `cp .env.example .env`
-2. Ajusta `DATABASE_URL` y `JWT_SECRET` en `.env`.
-3. (Opcional) Completa `AFIP_CUIT` y `AFIP_ACCESS_TOKEN` si vas a probar Afip SDK.
+2. Ajusta `DATABASE_URL`, `DIRECT_URL` y `JWT_SECRET` en `.env`.
+3. Completa `ARCA_SECRETS_KEY` para cifrado de secretos ARCA.
+4. (Opcional) Completa `AFIP_SDK_ACCESS_TOKEN` (o alias legacy `AFIP_ACCESS_TOKEN`) si vas a probar Afip SDK.
 
 ## Prisma + seed
 ```bash
@@ -49,6 +50,19 @@ npm run build
 - Email: `admin@friogestion.local`
 - Password: `admin1234`
 
+## Bootstrap developer (usuario + empresa testing)
+Desde el panel:
+- Ingresar a `/app/developer`
+- Seccion `Bootstrap usuario developer`
+
+Por terminal:
+```bash
+npm run bootstrap:developer -- \
+  --email developer@friogestion.com \
+  --organization-name "Frio Gestion Developer Lab" \
+  --name "Developer"
+```
+
 ## Notas
 - Multi-empresa: usar el selector "Empresa" en la topbar para cambiar de organizacion.
 - Cotizacion USD: cargar en `/app/config`.
@@ -58,8 +72,8 @@ npm run build
 ## AFIP SDK (preparacion)
 Instalado con `@afipsdk/afip.js`. Para habilitarlo:
 - Obtener `access_token` en https://app.afipsdk.com
-- Configurar `AFIP_CUIT` y `AFIP_ACCESS_TOKEN` en `.env`
-- Opcional: `AFIP_CERT_BASE64` y `AFIP_KEY_BASE64` para fallback global
+- Configurar `AFIP_SDK_ACCESS_TOKEN` (o `AFIP_ACCESS_TOKEN`) en `.env`
+- Opcional: `AFIP_CUIT`, `AFIP_CERT_BASE64` y `AFIP_KEY_BASE64` solo para fallback global por entorno
 
 ## Seguridad de acceso
 - El endpoint `POST /api/auth/register` queda habilitado solo para bootstrap inicial (cuando no existe ningun usuario).

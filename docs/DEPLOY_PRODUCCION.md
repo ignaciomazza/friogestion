@@ -15,8 +15,8 @@ npm run build
 Verifica tambien que `.env` local tenga al menos:
 
 - `DATABASE_URL`
+- `DIRECT_URL`
 - `JWT_SECRET`
-- `PUBLIC_ID_SECRET`
 - `ARCA_SECRETS_KEY` o `AFIP_SECRET_KEY`
 
 ## 2) Subir el repo a GitHub (nuevo)
@@ -56,12 +56,13 @@ Notas:
 
 En Vercel (`Project -> Settings -> Environment Variables`) carga, como minimo:
 
-- `DATABASE_URL` (Postgres de DigitalOcean)
+- `DATABASE_URL` (URL del pool de conexiones)
+- `DIRECT_URL` (URL directa del cluster)
 - `JWT_SECRET`
-- `PUBLIC_ID_SECRET`
 - `AFIP_ENV`
 - `ARCA_SECRETS_KEY` o `AFIP_SECRET_KEY`
-- Si aplica AFIP real: `AFIP_CUIT`, `AFIP_ACCESS_TOKEN`, `AFIP_SDK_ACCESS_TOKEN`, `AFIP_CERT_BASE64`, `AFIP_KEY_BASE64`
+- Si aplica AFIP real: `AFIP_ACCESS_TOKEN` o `AFIP_SDK_ACCESS_TOKEN`
+- Solo si usas fallback global por entorno: `AFIP_CUIT`, `AFIP_CERT_BASE64`, `AFIP_KEY_BASE64`
 
 Para generar secretos fuertes:
 
@@ -111,7 +112,28 @@ Checklist rapido:
 4. No hay errores en Runtime Logs de Vercel.
 5. SSL activo en `https://friogestion.com`.
 
-## 8) Flujo de cambios en produccion
+## 8) Bootstrap de usuario developer (empresa testing)
+
+Una vez desplegado, crea el usuario developer con empresa propia de testing.
+
+Opcion panel:
+1. Inicia sesion con un usuario `OWNER`.
+2. Ir a `/app/developer`.
+3. Completa `Bootstrap usuario developer`.
+
+Opcion terminal (contra la DB productiva):
+```bash
+npm run bootstrap:developer -- \
+  --email developer@friogestion.com \
+  --organization-name "Frio Gestion Developer Lab" \
+  --name "Developer"
+```
+
+Notas:
+- Si omites `--password`, el script genera una contraseña temporal y la muestra una sola vez.
+- El proceso es idempotente: si el usuario o la empresa ya existen, los reutiliza y asegura los defaults.
+
+## 9) Flujo de cambios en produccion
 
 Para cambios de esquema:
 

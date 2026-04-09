@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { verifyPassword } from "@/lib/auth/password";
 import { AUTH_COOKIE_NAME, signToken } from "@/lib/auth/jwt";
+import { logServerError } from "@/lib/server/log";
 
 export const runtime = "nodejs";
 
@@ -87,6 +88,7 @@ export async function POST(req: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
     }
+    logServerError("api.auth.login.post", error);
     return NextResponse.json({ error: "Error al iniciar sesion" }, { status: 500 });
   }
 }

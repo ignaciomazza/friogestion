@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/auth/tenant";
+import { createOrganizationWithDefaults } from "@/lib/organizations/bootstrap";
 
 const orgSchema = z.object({
   name: z.string().min(2),
@@ -36,100 +37,30 @@ export async function POST(req: NextRequest) {
     const { payload } = await requireRole(req, ["OWNER"]);
     const body = orgSchema.parse(await req.json());
 
-    const organization = await prisma.organization.create({
-      data: {
-        name: body.name,
-        legalName: body.legalName,
-        taxId: body.taxId,
-        receiptApprovalRoles: ["OWNER"],
-      },
-    });
+    const organization = await prisma.$transaction(
+      async (tx) => {
+        const created = await createOrganizationWithDefaults(
+          tx,
+          {
+            name: body.name,
+            legalName: body.legalName,
+            taxId: body.taxId,
+          },
+          "admin"
+        );
 
-    await prisma.$transaction([
-      prisma.membership.create({
-        data: {
-          organizationId: organization.id,
-          userId: payload.userId,
-          role: "OWNER",
-        },
-      }),
-      prisma.financeCurrency.createMany({
-        data: [
-          {
-            organizationId: organization.id,
-            code: "ARS",
-            name: "Peso Argentino",
-            symbol: "$",
-            isDefault: true,
-            isActive: true,
+        await tx.membership.create({
+          data: {
+            organizationId: created.id,
+            userId: payload.userId,
+            role: "OWNER",
           },
-          {
-            organizationId: organization.id,
-            code: "USD",
-            name: "Dolar USA",
-            symbol: "US$",
-            isDefault: false,
-            isActive: true,
-          },
-        ],
-      }),
-      prisma.exchangeRate.create({
-        data: {
-          organizationId: organization.id,
-          baseCode: "USD",
-          quoteCode: "ARS",
-          rate: "1200.00",
-          source: "admin",
-        },
-      }),
-      prisma.financeAccount.createMany({
-        data: [
-          {
-            organizationId: organization.id,
-            name: "Caja ARS",
-            type: "CASH",
-            currencyCode: "ARS",
-            isActive: true,
-          },
-          {
-            organizationId: organization.id,
-            name: "Banco ARS",
-            type: "BANK",
-            currencyCode: "ARS",
-            isActive: true,
-          },
-        ],
-      }),
-      prisma.paymentMethod.createMany({
-        data: [
-          {
-            organizationId: organization.id,
-            name: "Efectivo",
-            type: "CASH",
-            requiresAccount: false,
-            requiresApproval: false,
-            isActive: true,
-          },
-          {
-            organizationId: organization.id,
-            name: "Transferencia",
-            type: "TRANSFER",
-            requiresAccount: true,
-            requiresApproval: false,
-            isActive: true,
-          },
-        ],
-      }),
-      prisma.priceList.create({
-        data: {
-          organizationId: organization.id,
-          name: "Lista General",
-          currencyCode: "ARS",
-          isDefault: true,
-          isActive: true,
-        },
-      }),
-    ]);
+        });
+
+        return created;
+      },
+      { maxWait: 10_000, timeout: 60_000 }
+    );
 
     return NextResponse.json({
       id: organization.id,
