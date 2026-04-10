@@ -11,6 +11,7 @@ const createPriceListSchema = z.object({
   name: z.string().min(2),
   currencyCode: z.string().min(3).max(3).optional(),
   isDefault: z.boolean().optional(),
+  isConsumerFinal: z.boolean().optional(),
 });
 
 const updatePriceListSchema = z.object({
@@ -18,6 +19,7 @@ const updatePriceListSchema = z.object({
   name: z.string().min(2),
   currencyCode: z.string().min(3).max(3).optional(),
   isDefault: z.boolean().optional(),
+  isConsumerFinal: z.boolean().optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -34,6 +36,7 @@ export async function GET(req: NextRequest) {
         name: priceList.name,
         currencyCode: priceList.currencyCode,
         isDefault: priceList.isDefault,
+        isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
       })),
     );
@@ -50,12 +53,19 @@ export async function POST(req: NextRequest) {
     const name = body.name.trim();
     const currencyCode = (body.currencyCode?.trim() || "ARS").toUpperCase();
     const isDefault = body.isDefault ?? false;
+    const isConsumerFinal = body.isConsumerFinal ?? false;
 
     const created = await prisma.$transaction(async (tx) => {
       if (isDefault) {
         await tx.priceList.updateMany({
           where: { organizationId, isDefault: true },
           data: { isDefault: false },
+        });
+      }
+      if (isConsumerFinal) {
+        await tx.priceList.updateMany({
+          where: { organizationId, isActive: true, isConsumerFinal: true },
+          data: { isConsumerFinal: false },
         });
       }
 
@@ -65,6 +75,7 @@ export async function POST(req: NextRequest) {
           name,
           currencyCode,
           isDefault,
+          isConsumerFinal,
           isActive: true,
         },
       });
@@ -75,6 +86,7 @@ export async function POST(req: NextRequest) {
       name: created.name,
       currencyCode: created.currencyCode,
       isDefault: created.isDefault,
+      isConsumerFinal: created.isConsumerFinal,
       isActive: created.isActive,
     });
   } catch (error) {
@@ -103,6 +115,7 @@ export async function PATCH(req: NextRequest) {
     const name = body.name.trim();
     const currencyCode = (body.currencyCode?.trim() || "ARS").toUpperCase();
     const isDefault = body.isDefault ?? false;
+    const isConsumerFinal = body.isConsumerFinal ?? false;
 
     const existing = await prisma.priceList.findFirst({
       where: { id: body.id, organizationId, isActive: true },
@@ -128,6 +141,17 @@ export async function PATCH(req: NextRequest) {
           data: { isDefault: false },
         });
       }
+      if (isConsumerFinal) {
+        await tx.priceList.updateMany({
+          where: {
+            organizationId,
+            isActive: true,
+            isConsumerFinal: true,
+            id: { not: body.id },
+          },
+          data: { isConsumerFinal: false },
+        });
+      }
 
       return tx.priceList.update({
         where: { id: body.id },
@@ -135,6 +159,7 @@ export async function PATCH(req: NextRequest) {
           name,
           currencyCode,
           isDefault,
+          isConsumerFinal,
         },
       });
     });
@@ -144,6 +169,7 @@ export async function PATCH(req: NextRequest) {
       name: updated.name,
       currencyCode: updated.currencyCode,
       isDefault: updated.isDefault,
+      isConsumerFinal: updated.isConsumerFinal,
       isActive: updated.isActive,
     });
   } catch (error) {

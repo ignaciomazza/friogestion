@@ -10,9 +10,6 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
 const customerSchema = z.object({
   displayName: z.string().min(2),
-  type: z
-    .enum(["CONSUMER_FINAL", "INSTALLER", "BUSINESS", "PUBLIC_ENTITY"])
-    .optional(),
   defaultPriceListId: z.string().min(1).optional(),
   email: z.string().email().optional(),
   phone: z.string().min(4).optional(),
@@ -23,9 +20,6 @@ const customerSchema = z.object({
 const customerUpdateSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(2),
-  type: z
-    .enum(["CONSUMER_FINAL", "INSTALLER", "BUSINESS", "PUBLIC_ENTITY"])
-    .optional(),
   defaultPriceListId: z.string().min(1).optional(),
   email: z.string().email().optional(),
   phone: z.string().min(4).optional(),
@@ -46,14 +40,17 @@ const ensureDefaultPriceList = async (
 
   const priceList = await prisma.priceList.findFirst({
     where: { id: defaultPriceListId, organizationId, isActive: true },
-    select: { id: true },
+    select: {
+      id: true,
+      isConsumerFinal: true,
+    },
   });
 
   if (!priceList) {
     throw new Error("PRICE_LIST_INVALID");
   }
 
-  return priceList.id;
+  return priceList;
 };
 
 export async function GET(req: NextRequest) {
@@ -89,17 +86,20 @@ export async function POST(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = customerSchema.parse(await req.json());
-    const defaultPriceListId = await ensureDefaultPriceList(
+    const defaultPriceList = await ensureDefaultPriceList(
       organizationId,
       normalizeDefaultPriceListId(body.defaultPriceListId),
     );
+    const inferredType = defaultPriceList?.isConsumerFinal
+      ? "CONSUMER_FINAL"
+      : "BUSINESS";
 
     const customer = await prisma.customer.create({
       data: {
         organizationId,
         displayName: body.displayName.trim(),
-        type: body.type ?? "CONSUMER_FINAL",
-        defaultPriceListId: defaultPriceListId ?? undefined,
+        type: inferredType,
+        defaultPriceListId: defaultPriceList?.id ?? undefined,
         email: body.email?.trim() || undefined,
         phone: body.phone?.trim() || undefined,
         taxId: body.taxId?.trim() || undefined,
@@ -145,17 +145,27 @@ export async function PATCH(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = customerUpdateSchema.parse(await req.json());
+    let nextType: "CONSUMER_FINAL" | "BUSINESS" | undefined = undefined;
     let defaultPriceListId: string | null | undefined = undefined;
     if (body.defaultPriceListId !== undefined) {
-      defaultPriceListId = await ensureDefaultPriceList(
+      const defaultPriceList = await ensureDefaultPriceList(
         organizationId,
         normalizeDefaultPriceListId(body.defaultPriceListId),
       );
+      defaultPriceListId = defaultPriceList?.id ?? null;
+      if (defaultPriceList) {
+        nextType = defaultPriceList.isConsumerFinal
+          ? "CONSUMER_FINAL"
+          : "BUSINESS";
+      }
     }
 
     const existing = await prisma.customer.findFirst({
       where: { id: body.id, organizationId },
-      select: { id: true },
+      select: {
+        id: true,
+        type: true,
+      },
     });
 
     if (!existing) {
@@ -169,7 +179,7 @@ export async function PATCH(req: NextRequest) {
       where: { id: body.id },
       data: {
         displayName: body.displayName.trim(),
-        type: body.type ?? "CONSUMER_FINAL",
+        type: nextType ?? existing.type,
         ...(defaultPriceListId !== undefined
           ? { defaultPriceListId }
           : {}),

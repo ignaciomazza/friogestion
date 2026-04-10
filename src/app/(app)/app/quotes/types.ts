@@ -12,6 +12,8 @@ export type QuoteRow = {
   total: string | null;
   status: string;
   saleId: string | null;
+  priceListId?: string | null;
+  priceListName?: string | null;
 };
 
 export type CustomerOption = {
@@ -46,6 +48,7 @@ export type PriceListOption = {
   name: string;
   currencyCode: string;
   isDefault: boolean;
+  isConsumerFinal: boolean;
   isActive: boolean;
 };
 

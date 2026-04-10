@@ -148,7 +148,14 @@ export function QuoteRecentTable({
                         {quote.quoteNumber ?? "-"}
                       </td>
                       <td className="py-2 pr-4 text-zinc-900">
-                        {quote.customerName}
+                        <div className="space-y-0.5">
+                          <p>{quote.customerName}</p>
+                          {quote.priceListName ? (
+                            <p className="text-[11px] text-zinc-500">
+                              Lista: {quote.priceListName}
+                            </p>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="py-2 pr-4 whitespace-nowrap text-zinc-600">
                         {quote.validUntil

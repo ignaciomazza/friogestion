@@ -10,7 +10,12 @@ import {
   formatQuantityInput,
   normalizeDecimalInput,
 } from "@/lib/input-format";
-import type { CustomerOption, ProductOption, QuoteItemForm } from "../types";
+import type {
+  CustomerOption,
+  PriceListOption,
+  ProductOption,
+  QuoteItemForm,
+} from "../types";
 import { formatProductLabel, formatUnit } from "../utils";
 
 type NewQuoteFormProps = {
@@ -20,6 +25,12 @@ type NewQuoteFormProps = {
   isResolvingConsumerFinal: boolean;
   showConsumerFinalThresholdWarning: boolean;
   consumerFinalThresholdLabel: string;
+  priceLists: PriceListOption[];
+  selectedPriceListId: string;
+  selectedPriceListName: string | null;
+  customerPriceListName: string | null;
+  showPriceListMismatchWarning: boolean;
+  onSelectedPriceListChange: (value: string) => void;
   isCustomerOpen: boolean;
   customerMatches: CustomerOption[];
   customerActiveIndex: number;
@@ -76,6 +87,12 @@ export function NewQuoteForm({
   isResolvingConsumerFinal,
   showConsumerFinalThresholdWarning,
   consumerFinalThresholdLabel,
+  priceLists,
+  selectedPriceListId,
+  selectedPriceListName,
+  customerPriceListName,
+  showPriceListMismatchWarning,
+  onSelectedPriceListChange,
   isCustomerOpen,
   customerMatches,
   customerActiveIndex,
@@ -275,6 +292,39 @@ export function NewQuoteForm({
                 onChange={(event) => onValidUntilChange(event.target.value)}
                 placeholder="dd/mm/aaaa"
               />
+            </div>
+            <div className="field-stack">
+              <span className="input-label">Lista de precios</span>
+              <select
+                className="input cursor-pointer w-full"
+                value={selectedPriceListId}
+                onChange={(event) => onSelectedPriceListChange(event.target.value)}
+              >
+                <option value="">Sin lista seleccionada</option>
+                {priceLists.map((priceList) => (
+                  <option key={priceList.id} value={priceList.id}>
+                    {priceList.name}
+                    {priceList.isDefault ? " (Default)" : ""}
+                    {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                  </option>
+                ))}
+              </select>
+              {selectedPriceListName ? (
+                <p className="text-xs text-zinc-500">
+                  Lista aplicada: {selectedPriceListName}
+                </p>
+              ) : null}
+              {customerPriceListName ? (
+                <p className="text-xs text-zinc-500">
+                  Lista del cliente: {customerPriceListName}
+                </p>
+              ) : null}
+              {showPriceListMismatchWarning ? (
+                <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
+                  Advertencia: la lista seleccionada no coincide con la lista del
+                  cliente.
+                </p>
+              ) : null}
             </div>
           </div>
         </div>

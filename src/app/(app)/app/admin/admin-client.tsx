@@ -85,11 +85,16 @@ type PriceListRow = {
   name: string;
   currencyCode: string;
   isDefault: boolean;
+  isConsumerFinal: boolean;
   isActive: boolean;
 };
 
 type AdminClientProps = {
-  activeOrg: { id: string; name: string };
+  activeOrg: {
+    id: string;
+    name: string;
+    adjustStockOnQuoteConfirm: boolean;
+  };
   users: UserRow[];
   afipStatus: {
     ok: boolean;
@@ -404,6 +409,13 @@ export default function AdminClient({
   const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
   const [priceListsStatus, setPriceListsStatus] = useState<string | null>(null);
   const [priceListBusyId, setPriceListBusyId] = useState<string | null>(null);
+  const [adjustStockOnQuoteConfirm, setAdjustStockOnQuoteConfirm] = useState(
+    activeOrg.adjustStockOnQuoteConfirm,
+  );
+  const [salesSettingsStatus, setSalesSettingsStatus] = useState<string | null>(
+    null,
+  );
+  const [isSalesSettingsSaving, setIsSalesSettingsSaving] = useState(false);
   const [editingPriceListId, setEditingPriceListId] = useState<string | null>(
     null,
   );
@@ -411,11 +423,13 @@ export default function AdminClient({
     name: "",
     currencyCode: defaultCurrencyCode,
     isDefault: false,
+    isConsumerFinal: false,
   });
   const [newPriceList, setNewPriceList] = useState({
     name: "",
     currencyCode: defaultCurrencyCode,
     isDefault: false,
+    isConsumerFinal: false,
   });
   const afipReady = Boolean(afipStatus.ok && afipStatus.clientReady);
   const afipMissingItems = getAfipMissingItems(afipStatus.missing);
@@ -559,6 +573,37 @@ export default function AdminClient({
     if (res.ok) {
       const data = (await res.json()) as PriceListRow[];
       setPriceLists(data.filter((priceList) => priceList.isActive !== false));
+    }
+  };
+
+  const handleAdjustStockOnQuoteConfirm = async (enabled: boolean) => {
+    if (isSalesSettingsSaving) return;
+    const previous = adjustStockOnQuoteConfirm;
+    setSalesSettingsStatus(null);
+    setAdjustStockOnQuoteConfirm(enabled);
+    setIsSalesSettingsSaving(true);
+    try {
+      const res = await fetch("/api/admin/organizations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adjustStockOnQuoteConfirm: enabled }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setAdjustStockOnQuoteConfirm(previous);
+        setSalesSettingsStatus(data?.error ?? "No se pudo guardar configuracion");
+        return;
+      }
+
+      if (typeof data?.adjustStockOnQuoteConfirm === "boolean") {
+        setAdjustStockOnQuoteConfirm(data.adjustStockOnQuoteConfirm);
+      }
+      setSalesSettingsStatus("Configuracion guardada");
+    } catch {
+      setAdjustStockOnQuoteConfirm(previous);
+      setSalesSettingsStatus("No se pudo guardar configuracion");
+    } finally {
+      setIsSalesSettingsSaving(false);
     }
   };
 
@@ -1144,6 +1189,7 @@ export default function AdminClient({
           name: newPriceList.name.trim(),
           currencyCode: newPriceList.currencyCode.trim().toUpperCase(),
           isDefault: newPriceList.isDefault,
+          isConsumerFinal: newPriceList.isConsumerFinal,
         }),
       });
       if (!res.ok) {
@@ -1156,6 +1202,7 @@ export default function AdminClient({
         name: "",
         currencyCode: defaultCurrencyCode,
         isDefault: false,
+        isConsumerFinal: false,
       });
       setPriceListsStatus("Lista de precios creada");
       await loadPriceLists();
@@ -1172,6 +1219,7 @@ export default function AdminClient({
       name: priceList.name,
       currencyCode: priceList.currencyCode,
       isDefault: priceList.isDefault,
+      isConsumerFinal: priceList.isConsumerFinal,
     });
     setPriceListsStatus(null);
   };
@@ -1182,6 +1230,7 @@ export default function AdminClient({
       name: "",
       currencyCode: defaultCurrencyCode,
       isDefault: false,
+      isConsumerFinal: false,
     });
   };
 
@@ -1197,6 +1246,7 @@ export default function AdminClient({
           name: editingPriceList.name.trim(),
           currencyCode: editingPriceList.currencyCode.trim().toUpperCase(),
           isDefault: editingPriceList.isDefault,
+          isConsumerFinal: editingPriceList.isConsumerFinal,
         }),
       });
       if (!res.ok) {
@@ -1266,6 +1316,55 @@ export default function AdminClient({
           </div>
         </div>
       </div>
+
+      <Section
+        title="Ventas y stock"
+        subtitle="Define si las ventas confirmadas desde presupuestos descuentan stock."
+        icon={<Cog6ToothIcon className="size-4" />}
+      >
+        <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Ajuste automatico en presupuestos
+              </p>
+              <p className="text-xs text-zinc-500">
+                Se aplica al confirmar y crear venta desde Presupuestos.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-label="Ajustar stock al confirmar venta desde presupuestos"
+              aria-checked={adjustStockOnQuoteConfirm}
+              onClick={() =>
+                handleAdjustStockOnQuoteConfirm(!adjustStockOnQuoteConfirm)
+              }
+              disabled={isSalesSettingsSaving}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
+                adjustStockOnQuoteConfirm
+                  ? "border-sky-300 bg-sky-100"
+                  : "border-zinc-300 bg-zinc-100"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+                  adjustStockOnQuoteConfirm ? "translate-x-5" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-zinc-600">
+            {adjustStockOnQuoteConfirm
+              ? "Estado actual: activo (descuenta stock al confirmar venta)."
+              : "Estado actual: desactivado (no descuenta stock al confirmar venta)."}
+            {isSalesSettingsSaving ? " Guardando..." : ""}
+          </p>
+          {salesSettingsStatus ? (
+            <p className="mt-2 text-xs text-zinc-500">{salesSettingsStatus}</p>
+          ) : null}
+        </div>
+      </Section>
 
       <Section
         title="Cotizacion y moneda"
@@ -1525,6 +1624,19 @@ export default function AdminClient({
               />
               Marcar como Default
             </label>
+            <label className="flex items-center gap-2 pb-2 text-xs text-zinc-600">
+              <input
+                type="checkbox"
+                checked={newPriceList.isConsumerFinal}
+                onChange={(event) =>
+                  setNewPriceList((prev) => ({
+                    ...prev,
+                    isConsumerFinal: event.target.checked,
+                  }))
+                }
+              />
+              Consumidor final (sin identificar)
+            </label>
             <button
               type="submit"
               className="btn btn-emerald"
@@ -1599,29 +1711,51 @@ export default function AdminClient({
                         </td>
                         <td className="py-2 pr-4">
                           {isEditing ? (
-                            <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
-                              <input
-                                type="checkbox"
-                                checked={editingPriceList.isDefault}
-                                onChange={(event) =>
-                                  setEditingPriceList((prev) => ({
-                                    ...prev,
-                                    isDefault: event.target.checked,
-                                  }))
-                                }
-                              />
-                              Default
-                            </label>
+                            <div className="space-y-2">
+                              <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
+                                <input
+                                  type="checkbox"
+                                  checked={editingPriceList.isDefault}
+                                  onChange={(event) =>
+                                    setEditingPriceList((prev) => ({
+                                      ...prev,
+                                      isDefault: event.target.checked,
+                                    }))
+                                  }
+                                />
+                                Default
+                              </label>
+                              <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
+                                <input
+                                  type="checkbox"
+                                  checked={editingPriceList.isConsumerFinal}
+                                  onChange={(event) =>
+                                    setEditingPriceList((prev) => ({
+                                      ...prev,
+                                      isConsumerFinal: event.target.checked,
+                                    }))
+                                  }
+                                />
+                                Consumidor final
+                              </label>
+                            </div>
                           ) : (
-                            <span
-                              className={`pill border px-2 py-1 text-[10px] font-semibold uppercase ${
-                                priceList.isDefault
-                                  ? "border-emerald-200 bg-white text-emerald-800"
-                                  : "border-zinc-200 bg-white text-zinc-700"
-                              }`}
-                            >
-                              {priceList.isDefault ? "Default" : "Activa"}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span
+                                className={`pill border px-2 py-1 text-[10px] font-semibold uppercase ${
+                                  priceList.isDefault
+                                    ? "border-emerald-200 bg-white text-emerald-800"
+                                    : "border-zinc-200 bg-white text-zinc-700"
+                                }`}
+                              >
+                                {priceList.isDefault ? "Default" : "Activa"}
+                              </span>
+                              {priceList.isConsumerFinal ? (
+                                <span className="pill border border-sky-200 bg-white px-2 py-1 text-[10px] font-semibold uppercase text-sky-800">
+                                  Consumidor final
+                                </span>
+                              ) : null}
+                            </div>
                           )}
                         </td>
                         <td className="py-2 pr-4 text-right">

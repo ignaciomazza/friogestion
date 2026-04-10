@@ -29,11 +29,11 @@ type QuotesClientProps = {
   initialProducts: ProductOption[];
   initialQuotes: QuoteRow[];
   initialPriceLists: PriceListOption[];
+  initialAdjustStockOnConfirm: boolean;
 };
 
 type CustomerFormState = {
   displayName: string;
-  type: string;
   defaultPriceListId: string;
   email: string;
   phone: string;
@@ -42,6 +42,13 @@ type CustomerFormState = {
 };
 
 type QuoteDetail = QuoteRow & {
+  priceList: {
+    id: string;
+    name: string;
+    currencyCode: string;
+    isDefault: boolean;
+    isConsumerFinal: boolean;
+  } | null;
   customer: CustomerOption;
   items: Array<{
     productId: string;
@@ -93,12 +100,18 @@ export default function QuotesClient({
   initialProducts,
   initialQuotes,
   initialPriceLists,
+  initialAdjustStockOnConfirm,
 }: QuotesClientProps) {
   const [customers, setCustomers] =
     useState<CustomerOption[]>(initialCustomers);
   const [products] = useState<ProductOption[]>(initialProducts);
   const [priceLists] = useState<PriceListOption[]>(initialPriceLists);
   const [quotes, setQuotes] = useState<QuoteRow[]>(initialQuotes);
+  const [selectedPriceListId, setSelectedPriceListId] = useState(
+    initialPriceLists.find((priceList) => priceList.isDefault)?.id ??
+      initialPriceLists.find((priceList) => priceList.isConsumerFinal)?.id ??
+      "",
+  );
 
   const [customerId, setCustomerId] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
@@ -133,9 +146,10 @@ export default function QuotesClient({
 
   const [customerForm, setCustomerForm] = useState<CustomerFormState>({
     displayName: "",
-    type: "CONSUMER_FINAL",
     defaultPriceListId:
-      initialPriceLists.find((priceList) => priceList.isDefault)?.id ?? "",
+      initialPriceLists.find((priceList) => priceList.isDefault)?.id ??
+      initialPriceLists.find((priceList) => priceList.isConsumerFinal)?.id ??
+      "",
     email: "",
     phone: "",
     taxId: "",
@@ -146,7 +160,7 @@ export default function QuotesClient({
   const [isCustomerLookupLoading, setIsCustomerLookupLoading] = useState(false);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [quoteView, setQuoteView] = useState<"list" | "new">("new");
-  const [adjustStockOnConfirm, setAdjustStockOnConfirm] = useState(true);
+  const adjustStockOnConfirm = initialAdjustStockOnConfirm;
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNoteRow[]>([]);
   const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
   const [deliveryBusyId, setDeliveryBusyId] = useState<string | null>(null);
@@ -172,6 +186,21 @@ export default function QuotesClient({
     (consumerFinalCustomer?.id === customerId ? consumerFinalCustomer : null);
   const defaultPriceListId =
     priceLists.find((priceList) => priceList.isDefault)?.id ?? null;
+  const consumerFinalPriceListId =
+    priceLists.find((priceList) => priceList.isConsumerFinal)?.id ?? null;
+  const selectedPriceList =
+    priceLists.find((priceList) => priceList.id === selectedPriceListId) ?? null;
+  const customerDefaultPriceList = selectedCustomer?.defaultPriceListId
+    ? priceLists.find(
+        (priceList) => priceList.id === selectedCustomer.defaultPriceListId,
+      ) ?? null
+    : null;
+  const isPriceListMismatch = Boolean(
+    selectedCustomer &&
+      customerDefaultPriceList &&
+      selectedPriceList &&
+      selectedPriceList.id !== customerDefaultPriceList.id,
+  );
   const isSelectedAnonymousConsumerFinal = Boolean(
     selectedCustomer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON
   );
@@ -204,12 +233,31 @@ export default function QuotesClient({
     loadDeliveryNotes().catch(() => undefined);
   }, []);
 
+  const resolvePreferredPriceListId = (customer: CustomerOption | null) => {
+    if (customer?.defaultPriceListId) {
+      const hasPriceList = priceLists.some(
+        (priceList) => priceList.id === customer.defaultPriceListId,
+      );
+      if (hasPriceList) {
+        return customer.defaultPriceListId;
+      }
+    }
+    if (
+      customer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON &&
+      consumerFinalPriceListId
+    ) {
+      return consumerFinalPriceListId;
+    }
+    return defaultPriceListId ?? consumerFinalPriceListId ?? "";
+  };
+
   const resetForm = () => {
     setCustomerId("");
     setCustomerSearch("");
     setIsConsumerFinalAnonymous(false);
     setIsResolvingConsumerFinal(false);
     setConsumerFinalCustomer(null);
+    setSelectedPriceListId(defaultPriceListId ?? consumerFinalPriceListId ?? "");
     setValidUntil("");
     setQuoteStatus("DRAFT");
     setExtraType("NONE");
@@ -261,6 +309,7 @@ export default function QuotesClient({
       customer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
     setCustomerId(customer.id);
     setCustomerSearch(formatCustomerLabel(customer));
+    setSelectedPriceListId(resolvePreferredPriceListId(customer));
     setIsConsumerFinalAnonymous(isAnonymousConsumerFinal);
     setConsumerFinalCustomer(isAnonymousConsumerFinal ? customer : null);
     setIsCustomerOpen(false);
@@ -274,6 +323,7 @@ export default function QuotesClient({
       setConsumerFinalCustomer(null);
       setCustomerId("");
       setCustomerSearch("");
+      setSelectedPriceListId(defaultPriceListId ?? consumerFinalPriceListId ?? "");
       setIsCustomerOpen(false);
       setCustomerActiveIndex(0);
       return;
@@ -294,6 +344,7 @@ export default function QuotesClient({
       setConsumerFinalCustomer(customer);
       setCustomerId(customer.id);
       setCustomerSearch(formatCustomerLabel(customer));
+      setSelectedPriceListId(resolvePreferredPriceListId(customer));
       setIsConsumerFinalAnonymous(true);
       setIsCustomerOpen(false);
       setCustomerActiveIndex(0);
@@ -309,6 +360,7 @@ export default function QuotesClient({
     const suggestedPrice = resolveSuggestedProductPrice({
       prices: product.prices ?? [],
       productPrice: product.price,
+      preferredPriceListId: selectedPriceListId,
       customerPriceListId: selectedCustomer?.defaultPriceListId,
       defaultPriceListId,
     });
@@ -328,6 +380,29 @@ export default function QuotesClient({
 
   const handleAddItem = () => {
     setItems((prev) => [...prev, { ...EMPTY_ITEM }]);
+  };
+
+  const handleSelectedPriceListChange = (nextPriceListId: string) => {
+    setSelectedPriceListId(nextPriceListId);
+    setItems((prev) =>
+      prev.map((item) => {
+        if (!item.productId) return item;
+        const product = productMap.get(item.productId);
+        if (!product) return item;
+        const suggestedPrice = resolveSuggestedProductPrice({
+          prices: product.prices ?? [],
+          productPrice: product.price,
+          preferredPriceListId: nextPriceListId,
+          customerPriceListId: selectedCustomer?.defaultPriceListId,
+          defaultPriceListId,
+        });
+        if (!suggestedPrice) return item;
+        return {
+          ...item,
+          unitPrice: suggestedPrice,
+        };
+      }),
+    );
   };
 
   const handleRemoveItem = (index: number) => {
@@ -621,6 +696,19 @@ export default function QuotesClient({
       setStatus("Guardar y crear venta solo aplica para nuevos presupuestos");
       return;
     }
+    if (isPriceListMismatch) {
+      const customerPriceListName =
+        customerDefaultPriceList?.name ?? "lista del cliente";
+      const currentPriceListName = selectedPriceList?.name ?? "otra lista";
+      const shouldContinue = window.confirm(
+        `El cliente tiene asignada la lista "${customerPriceListName}" ` +
+          `pero estas usando "${currentPriceListName}". Queres continuar?`,
+      );
+      if (!shouldContinue) {
+        setStatus("Operacion cancelada");
+        return;
+      }
+    }
     if (!confirmConsumerFinalThreshold()) {
       setStatus("Operacion cancelada");
       return;
@@ -638,6 +726,7 @@ export default function QuotesClient({
         body: JSON.stringify({
           id: editingId ?? undefined,
           customerId,
+          priceListId: selectedPriceListId || undefined,
           validUntil: validUntil || undefined,
           status: editingId ? quoteStatus : "DRAFT",
           extraType: extraType === "NONE" ? undefined : extraType,
@@ -672,7 +761,6 @@ export default function QuotesClient({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             id: quoteId,
-            adjustStock: adjustStockOnConfirm,
           }),
         });
         const confirmData = await confirmRes.json();
@@ -725,6 +813,11 @@ export default function QuotesClient({
       setEditingId(detail.id);
       setCustomerId(detail.customer.id);
       setCustomerSearch(formatCustomerLabel(detail.customer));
+      setSelectedPriceListId(
+        detail.priceList?.id ??
+          resolvePreferredPriceListId(detail.customer) ??
+          "",
+      );
       setIsConsumerFinalAnonymous(isAnonymousConsumerFinal);
       setConsumerFinalCustomer(isAnonymousConsumerFinal ? detail.customer : null);
       setValidUntil(detail.validUntil ? detail.validUntil.split("T")[0] : "");
@@ -782,7 +875,6 @@ export default function QuotesClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: quote.id,
-          adjustStock: adjustStockOnConfirm,
         }),
       });
 
@@ -945,7 +1037,6 @@ export default function QuotesClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName: customerForm.displayName,
-          type: customerForm.type,
           defaultPriceListId: customerForm.defaultPriceListId || undefined,
           email: customerForm.email || undefined,
           phone: customerForm.phone || undefined,
@@ -961,8 +1052,7 @@ export default function QuotesClient({
       setCustomerStatus("Cliente creado");
       setCustomerForm({
         displayName: "",
-        type: "CONSUMER_FINAL",
-        defaultPriceListId: defaultPriceListId ?? "",
+        defaultPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
         email: "",
         phone: "",
         taxId: "",
@@ -1074,28 +1164,6 @@ export default function QuotesClient({
         totalEstimated={totalEstimated}
       />
 
-      <div className="inline-flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white px-3 py-2 text-xs text-zinc-700">
-        <button
-          type="button"
-          role="switch"
-          aria-label="Ajustar stock al confirmar venta"
-          aria-checked={adjustStockOnConfirm}
-          onClick={() => setAdjustStockOnConfirm((prev) => !prev)}
-          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
-            adjustStockOnConfirm
-              ? "border-sky-300 bg-sky-100"
-              : "border-zinc-300 bg-zinc-100"
-          }`}
-        >
-          <span
-            className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
-              adjustStockOnConfirm ? "translate-x-4" : "translate-x-0.5"
-            }`}
-          />
-        </button>
-        <span>Ajustar stock al confirmar venta</span>
-      </div>
-
       {quoteView === "new" ? (
         <div className="space-y-6">
           <InlineCustomerForm
@@ -1119,6 +1187,12 @@ export default function QuotesClient({
             isResolvingConsumerFinal={isResolvingConsumerFinal}
             showConsumerFinalThresholdWarning={consumerFinalThresholdReached}
             consumerFinalThresholdLabel={consumerFinalThresholdLabel}
+            priceLists={priceLists}
+            selectedPriceListId={selectedPriceListId}
+            selectedPriceListName={selectedPriceList?.name ?? null}
+            customerPriceListName={customerDefaultPriceList?.name ?? null}
+            showPriceListMismatchWarning={isPriceListMismatch}
+            onSelectedPriceListChange={handleSelectedPriceListChange}
             isCustomerOpen={isCustomerOpen}
             customerMatches={customerMatches}
             customerActiveIndex={customerActiveIndex}

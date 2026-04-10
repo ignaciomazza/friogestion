@@ -3,12 +3,17 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireAuth, requireRole } from "@/lib/auth/tenant";
+import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { createOrganizationWithDefaults } from "@/lib/organizations/bootstrap";
 
 const orgSchema = z.object({
   name: z.string().min(2),
   legalName: z.string().min(2).optional(),
   taxId: z.string().min(6).optional(),
+});
+
+const orgSettingsSchema = z.object({
+  adjustStockOnQuoteConfirm: z.boolean(),
 });
 
 export async function GET(req: NextRequest) {
@@ -73,5 +78,39 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
     }
     return NextResponse.json({ error: "No se pudo crear" }, { status: 400 });
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const { membership } = await requireRole(req, ["OWNER", "ADMIN"]);
+    const body = orgSettingsSchema.parse(await req.json());
+
+    const organization = await prisma.organization.update({
+      where: { id: membership.organizationId },
+      data: {
+        adjustStockOnQuoteConfirm: body.adjustStockOnQuoteConfirm,
+      },
+      select: {
+        id: true,
+        adjustStockOnQuoteConfirm: true,
+      },
+    });
+
+    return NextResponse.json(organization);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (isAuthError(error)) {
+      return NextResponse.json(
+        { error: "No autorizado" },
+        { status: authErrorStatus(error) }
+      );
+    }
+    return NextResponse.json(
+      { error: "No se pudo guardar configuracion" },
+      { status: 400 }
+    );
   }
 }

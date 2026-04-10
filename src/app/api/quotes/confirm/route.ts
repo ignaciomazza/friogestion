@@ -11,7 +11,6 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
 const confirmSchema = z.object({
   id: z.string().min(1),
-  adjustStock: z.boolean().optional(),
 });
 
 const parseSequenceNumber = (value?: string | null) => {
@@ -55,6 +54,12 @@ export async function POST(req: NextRequest) {
     const { payload, membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = confirmSchema.parse(await req.json());
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { adjustStockOnQuoteConfirm: true },
+    });
+    const adjustStockOnQuoteConfirm =
+      organization?.adjustStockOnQuoteConfirm ?? true;
 
     const quote = await prisma.quote.findFirst({
       where: { id: body.id, organizationId },
@@ -169,7 +174,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (body.adjustStock !== false) {
+      if (adjustStockOnQuoteConfirm) {
         const saleStock = buildSaleOutMovements({
           organizationId,
           occurredAt: created.saleDate ?? new Date(),

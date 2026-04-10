@@ -210,6 +210,7 @@ model Organization {
   taxId     String?
   receiptApprovalRoles String[] @default([])
   receiptDoubleCheckRoles String[] @default([])
+  adjustStockOnQuoteConfirm Boolean @default(true)
   defaultDeliveryNotePointOfSale Int @default(1)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -441,6 +442,7 @@ model PriceList {
   name           String
   currencyCode   String
   isDefault      Boolean  @default(false)
+  isConsumerFinal Boolean @default(false)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -448,6 +450,7 @@ model PriceList {
   organization Organization @relation(fields: [organizationId], references: [id])
   items         PriceListItem[]
   customers     Customer[]
+  quotes        Quote[]
 
   @@index([organizationId])
 }
@@ -516,6 +519,7 @@ model Quote {
   id             String      @id @default(cuid())
   organizationId String
   customerId     String
+  priceListId    String?
   status         QuoteStatus
   quoteNumber    String?
   validUntil     DateTime?
@@ -530,10 +534,12 @@ model Quote {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   customer     Customer     @relation(fields: [customerId], references: [id])
+  priceList    PriceList?   @relation(fields: [priceListId], references: [id])
   items        QuoteItem[]
   sale         Sale?        @relation("QuoteSale")
 
   @@index([organizationId])
+  @@index([priceListId])
 }
 
 model QuoteItem {

@@ -16,6 +16,21 @@ test("resolveSuggestedProductPrice prioritizes customer list", () => {
   assert.equal(result, "95.00");
 });
 
+test("resolveSuggestedProductPrice prioritizes explicit selected list", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: "100.00" },
+      { priceListId: "special", price: "90.00" },
+    ],
+    productPrice: "110.00",
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+  });
+
+  assert.equal(result, "90.00");
+});
+
 test("resolveSuggestedProductPrice falls back to default list then product", () => {
   const fromDefault = resolveSuggestedProductPrice({
     prices: [{ priceListId: "general", price: "100.00" }],
@@ -33,4 +48,3 @@ test("resolveSuggestedProductPrice falls back to default list then product", () 
   });
   assert.equal(fromProduct, "110.00");
 });
-

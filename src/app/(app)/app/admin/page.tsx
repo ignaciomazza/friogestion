@@ -114,6 +114,8 @@ export default async function AdminPage() {
       activeOrg={{
         id: activeMembership.organization.id,
         name: activeMembership.organization.name,
+        adjustStockOnQuoteConfirm:
+          activeMembership.organization.adjustStockOnQuoteConfirm,
       }}
       users={orgUsers.map((membership) => ({
         id: membership.user.id,
@@ -180,6 +182,7 @@ export default async function AdminPage() {
         name: priceList.name,
         currencyCode: priceList.currencyCode,
         isDefault: priceList.isDefault,
+        isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
       }))}
     />

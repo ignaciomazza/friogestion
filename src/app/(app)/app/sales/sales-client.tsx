@@ -334,6 +334,7 @@ export default function SalesClient({
         sales={filteredSales}
         sortOrder={sortOrder}
         onSortOrderChange={setSortOrder}
+        canManage={canManage}
         paymentMethods={paymentMethods}
         accounts={accounts}
         currencies={currencies}

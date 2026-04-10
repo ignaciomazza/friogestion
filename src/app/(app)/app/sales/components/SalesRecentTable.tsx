@@ -74,6 +74,7 @@ type SalesRecentTableProps = {
   sales: SaleRow[];
   sortOrder: string;
   onSortOrderChange: (value: string) => void;
+  canManage: boolean;
   paymentMethods: PaymentMethodOption[];
   accounts: AccountOption[];
   currencies: CurrencyOption[];
@@ -85,6 +86,7 @@ export function SalesRecentTable({
   sales,
   sortOrder,
   onSortOrderChange,
+  canManage,
   paymentMethods,
   accounts,
   currencies,
@@ -97,6 +99,8 @@ export function SalesRecentTable({
   >({});
   const [loadingReceiptId, setLoadingReceiptId] = useState<string | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<Record<string, string>>({});
+  const [tableStatus, setTableStatus] = useState<string | null>(null);
+  const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
 
   const loadReceipts = async (saleId: string) => {
     setLoadingReceiptId(saleId);
@@ -118,6 +122,43 @@ export function SalesRecentTable({
       }));
     } finally {
       setLoadingReceiptId(null);
+    }
+  };
+
+  const handleDeleteSale = async (sale: SaleRow) => {
+    if (sale.billingStatus === "BILLED") {
+      setTableStatus("Solo se pueden eliminar ventas no facturadas");
+      return;
+    }
+    if (!window.confirm("Seguro quiere eliminar esta Venta?")) return;
+    setTableStatus(null);
+    setDeletingSaleId(sale.id);
+    try {
+      const res = await fetch(`/api/sales?id=${sale.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setTableStatus(data?.error ?? "No se pudo eliminar");
+        return;
+      }
+      setTableStatus("Venta eliminada");
+      setExpandedId((prev) => (prev === sale.id ? null : prev));
+      setReceiptsBySale((prev) => {
+        const next = { ...prev };
+        delete next[sale.id];
+        return next;
+      });
+      setReceiptStatus((prev) => {
+        const next = { ...prev };
+        delete next[sale.id];
+        return next;
+      });
+      await onReceiptsUpdated();
+    } catch {
+      setTableStatus("No se pudo eliminar");
+    } finally {
+      setDeletingSaleId(null);
     }
   };
 
@@ -144,6 +185,9 @@ export function SalesRecentTable({
           </select>
         </div>
       </div>
+      {tableStatus ? (
+        <p className="text-xs text-zinc-600">{tableStatus}</p>
+      ) : null}
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
@@ -257,7 +301,7 @@ export function SalesRecentTable({
                         {formatCurrencyARS(balance)}
                       </td>
                       <td className="py-2 pr-4">
-                        <div className="flex flex-wrap items-center justify-end">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
                           <a
                             className="btn text-xs transition-transform hover:-translate-y-0.5"
                             href={`/api/pdf/sale?id=${sale.id}`}
@@ -268,6 +312,29 @@ export function SalesRecentTable({
                             <ArrowDownTrayIcon className="size-4" />
                             PDF
                           </a>
+                          {canManage ? (
+                            <button
+                              type="button"
+                              className="btn text-xs border-rose-200 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleDeleteSale(sale);
+                              }}
+                              disabled={
+                                sale.billingStatus === "BILLED" ||
+                                deletingSaleId === sale.id
+                              }
+                              title={
+                                sale.billingStatus === "BILLED"
+                                  ? "La venta ya esta facturada"
+                                  : undefined
+                              }
+                            >
+                              {deletingSaleId === sale.id
+                                ? "Eliminando..."
+                                : "Eliminar"}
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>

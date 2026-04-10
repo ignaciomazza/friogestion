@@ -34,7 +34,7 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [customers, products, quotes, priceLists] = await Promise.all([
+  const [customers, products, quotes, priceLists, organization] = await Promise.all([
     prisma.customer.findMany({
       where: { organizationId: membership.organizationId, systemKey: null },
       orderBy: { createdAt: "desc" },
@@ -55,13 +55,17 @@ export default async function QuotesPage() {
     }),
     prisma.quote.findMany({
       where: { organizationId: membership.organizationId },
-      include: { customer: true, sale: true },
+      include: { customer: true, sale: true, priceList: true },
       orderBy: { createdAt: "desc" },
       take: 50,
     }),
     prisma.priceList.findMany({
       where: { organizationId: membership.organizationId, isActive: true },
       orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+    }),
+    prisma.organization.findUnique({
+      where: { id: membership.organizationId },
+      select: { adjustStockOnQuoteConfirm: true },
     }),
   ]);
 
@@ -103,14 +107,20 @@ export default async function QuotesPage() {
         total: quote.total?.toString() ?? null,
         status: quote.status,
         saleId: quote.sale?.id ?? null,
+        priceListId: quote.priceListId ?? null,
+        priceListName: quote.priceList?.name ?? null,
       }))}
       initialPriceLists={priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,
         currencyCode: priceList.currencyCode,
         isDefault: priceList.isDefault,
+        isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
       }))}
+      initialAdjustStockOnConfirm={
+        organization?.adjustStockOnQuoteConfirm ?? true
+      }
     />
   );
 }

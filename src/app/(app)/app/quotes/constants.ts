@@ -1,19 +1,5 @@
 import type { QuoteItemForm } from "./types";
 
-export const CUSTOMER_TYPE_OPTIONS = [
-  "CONSUMER_FINAL",
-  "INSTALLER",
-  "BUSINESS",
-  "PUBLIC_ENTITY",
-] as const;
-
-export const CUSTOMER_TYPE_LABELS: Record<string, string> = {
-  CONSUMER_FINAL: "Consumidor final",
-  INSTALLER: "Instalador",
-  BUSINESS: "Empresa",
-  PUBLIC_ENTITY: "Entidad publica",
-};
-
 export const QUOTE_STATUS_OPTIONS = [
   "DRAFT",
   "SENT",

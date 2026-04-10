@@ -22,15 +22,17 @@ const findListPrice = (
 export const resolveSuggestedProductPrice = ({
   prices,
   productPrice,
+  preferredPriceListId,
   customerPriceListId,
   defaultPriceListId,
 }: {
   prices: ProductListPrice[] | null | undefined;
   productPrice: string | null | undefined;
+  preferredPriceListId?: string | null | undefined;
   customerPriceListId: string | null | undefined;
   defaultPriceListId: string | null | undefined;
 }) =>
+  findListPrice(prices, preferredPriceListId) ??
   findListPrice(prices, customerPriceListId) ??
   findListPrice(prices, defaultPriceListId) ??
   validPrice(productPrice);
-

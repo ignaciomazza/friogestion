@@ -3,11 +3,9 @@
 import type { FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PlusIcon } from "@/components/icons";
-import { CUSTOMER_TYPE_LABELS, CUSTOMER_TYPE_OPTIONS } from "../constants";
 
 type CustomerFormData = {
   displayName: string;
-  type: string;
   defaultPriceListId: string;
   email: string;
   phone: string;
@@ -20,6 +18,7 @@ type PriceListOption = {
   name: string;
   currencyCode: string;
   isDefault: boolean;
+  isConsumerFinal: boolean;
 };
 
 type InlineCustomerFormProps = {
@@ -103,45 +102,30 @@ export function InlineCustomerForm({
                   required
                 />
               </label>
-              <div className="grid gap-x-3 gap-y-2 sm:grid-cols-2">
-                <label className="flex flex-col gap-2">
-                  <span className="input-label">Tipo</span>
-                  <select
-                    className="input cursor-pointer"
-                    value={form.type}
-                    onChange={(event) => onFormChange("type", event.target.value)}
-                  >
-                    {CUSTOMER_TYPE_OPTIONS.map((type) => (
-                      <option key={type} value={type}>
-                        {CUSTOMER_TYPE_LABELS[type] ?? type}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="flex flex-col gap-2">
-                  <span className="input-label">Lista de precios</span>
-                  <select
-                    className="input cursor-pointer"
-                    value={form.defaultPriceListId}
-                    onChange={(event) =>
-                      onFormChange("defaultPriceListId", event.target.value)
-                    }
-                  >
-                    <option value="">Sin lista por defecto</option>
-                    {priceLists.map((priceList) => (
-                      <option key={priceList.id} value={priceList.id}>
-                        {priceList.name}
-                        {priceList.isDefault ? " (Default)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {defaultPriceListId ? (
-                    <p className="text-[11px] text-zinc-500">
-                      Si no elegis una, se usa la lista Default.
-                    </p>
-                  ) : null}
-                </label>
-              </div>
+              <label className="flex flex-col gap-2">
+                <span className="input-label">Lista de precios</span>
+                <select
+                  className="input cursor-pointer"
+                  value={form.defaultPriceListId}
+                  onChange={(event) =>
+                    onFormChange("defaultPriceListId", event.target.value)
+                  }
+                >
+                  <option value="">Sin lista por defecto</option>
+                  {priceLists.map((priceList) => (
+                    <option key={priceList.id} value={priceList.id}>
+                      {priceList.name}
+                      {priceList.isDefault ? " (Default)" : ""}
+                      {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                    </option>
+                  ))}
+                </select>
+                {defaultPriceListId ? (
+                  <p className="text-[11px] text-zinc-500">
+                    Si no elegis una, se usa la lista Default.
+                  </p>
+                ) : null}
+              </label>
               <div className="grid gap-x-3 gap-y-2 sm:grid-cols-2">
                 <label className="flex flex-col gap-2">
                   <span className="input-label">CUIT</span>

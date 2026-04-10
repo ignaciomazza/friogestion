@@ -29,14 +29,8 @@ type PriceListOption = {
   name: string;
   currencyCode: string;
   isDefault: boolean;
+  isConsumerFinal: boolean;
   isActive: boolean;
-};
-
-const TYPE_LABELS: Record<string, string> = {
-  CONSUMER_FINAL: "Consumidor final",
-  INSTALLER: "Instalador",
-  BUSINESS: "Empresa",
-  PUBLIC_ENTITY: "Entidad publica",
 };
 
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
@@ -48,11 +42,9 @@ export default function CustomersPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState("ALL");
   const [sortOrder, setSortOrder] = useState("az");
   const [form, setForm] = useState({
     displayName: "",
-    type: "CONSUMER_FINAL",
     email: "",
     phone: "",
     taxId: "",
@@ -62,7 +54,6 @@ export default function CustomersPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
     displayName: "",
-    type: "CONSUMER_FINAL",
     email: "",
     phone: "",
     taxId: "",
@@ -158,7 +149,6 @@ export default function CustomersPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName: form.displayName,
-          type: form.type,
           email: form.email || undefined,
           phone: form.phone || undefined,
           taxId: form.taxId || undefined,
@@ -175,7 +165,6 @@ export default function CustomersPage() {
 
       setForm({
         displayName: "",
-        type: "CONSUMER_FINAL",
         email: "",
         phone: "",
         taxId: "",
@@ -195,7 +184,6 @@ export default function CustomersPage() {
     setEditingId(item.id);
     setEditForm({
       displayName: item.displayName,
-      type: item.type ?? "CONSUMER_FINAL",
       email: item.email ?? "",
       phone: item.phone ?? "",
       taxId: item.taxId ?? "",
@@ -208,7 +196,6 @@ export default function CustomersPage() {
     setEditingId(null);
     setEditForm({
       displayName: "",
-      type: "CONSUMER_FINAL",
       email: "",
       phone: "",
       taxId: "",
@@ -229,7 +216,6 @@ export default function CustomersPage() {
         body: JSON.stringify({
           id: editingId,
           displayName: editForm.displayName,
-          type: editForm.type,
           email: editForm.email || undefined,
           phone: editForm.phone || undefined,
           taxId: editForm.taxId || undefined,
@@ -275,18 +261,25 @@ export default function CustomersPage() {
   };
 
   const totalCustomers = items.length;
-  const consumerCount = items.filter(
-    (item) => item.type === "CONSUMER_FINAL"
+  const customersWithPriceList = items.filter(
+    (item) => Boolean(item.defaultPriceListId),
   ).length;
-  const businessCount = items.filter((item) => item.type === "BUSINESS").length;
-  const installerCount = items.filter(
-    (item) => item.type === "INSTALLER"
-  ).length;
+  const customersWithoutPriceList = totalCustomers - customersWithPriceList;
+  const consumerFinalPriceListCount = items.filter((item) => {
+    if (!item.defaultPriceListId) return false;
+    const priceList = priceLists.find(
+      (candidate) => candidate.id === item.defaultPriceListId,
+    );
+    return Boolean(priceList?.isConsumerFinal);
+  }).length;
+  const priceListById = useMemo(
+    () => new Map(priceLists.map((priceList) => [priceList.id, priceList])),
+    [priceLists],
+  );
 
   const filteredItems = useMemo(() => {
     const query = normalizeQuery(customerQuery);
     const filtered = items.filter((item) => {
-      if (typeFilter !== "ALL" && item.type !== typeFilter) return false;
       if (query) {
         const haystack = normalizeQuery(
           `${item.displayName} ${item.taxId ?? ""} ${item.email ?? ""} ${
@@ -307,7 +300,7 @@ export default function CustomersPage() {
     });
 
     return filtered;
-  }, [customerQuery, items, sortOrder, typeFilter]);
+  }, [customerQuery, items, sortOrder]);
 
   return (
     <div className="space-y-6">
@@ -337,10 +330,10 @@ export default function CustomersPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-emerald-700">
                 <ShoppingCartIcon className="size-3.5" />
-                Consumidor final
+                Con lista asignada
               </span>
               <p className="text-base font-semibold text-zinc-900">
-                {consumerCount}
+                {customersWithPriceList}
               </p>
             </div>
           </div>
@@ -348,10 +341,10 @@ export default function CustomersPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-amber-700">
                 <BuildingOffice2Icon className="size-3.5" />
-                Empresas
+                Lista consumidor final
               </span>
               <p className="text-base font-semibold text-zinc-900">
-                {businessCount}
+                {consumerFinalPriceListCount}
               </p>
             </div>
           </div>
@@ -359,10 +352,10 @@ export default function CustomersPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-rose-700">
                 <Cog6ToothIcon className="size-3.5" />
-                Instaladores
+                Sin lista
               </span>
               <p className="text-base font-semibold text-zinc-900">
-                {installerCount}
+                {customersWithoutPriceList}
               </p>
             </div>
           </div>
@@ -392,45 +385,28 @@ export default function CustomersPage() {
               required
             />
           </label>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Tipo</span>
-              <select
-                className="input cursor-pointer"
-                value={form.type}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, type: event.target.value }))
-                }
-              >
-                {Object.keys(TYPE_LABELS).map((key) => (
-                  <option key={key} value={key}>
-                    {TYPE_LABELS[key]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Lista de precios</span>
-              <select
-                className="input cursor-pointer"
-                value={form.defaultPriceListId}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    defaultPriceListId: event.target.value,
-                  }))
-                }
-              >
-                <option value="">Sin lista por defecto</option>
-                {priceLists.map((priceList) => (
-                  <option key={priceList.id} value={priceList.id}>
-                    {priceList.name}
-                    {priceList.isDefault ? " (Default)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <label className="flex flex-col gap-3">
+            <span className="input-label">Lista de precios</span>
+            <select
+              className="input cursor-pointer"
+              value={form.defaultPriceListId}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  defaultPriceListId: event.target.value,
+                }))
+              }
+            >
+              <option value="">Sin lista por defecto</option>
+              {priceLists.map((priceList) => (
+                <option key={priceList.id} value={priceList.id}>
+                  {priceList.name}
+                  {priceList.isDefault ? " (Default)" : ""}
+                  {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
               <span className="input-label">CUIT</span>
@@ -517,7 +493,6 @@ export default function CustomersPage() {
             className="btn btn-sky text-xs transition-transform hover:-translate-y-0.5"
             onClick={() => {
               setCustomerQuery("");
-              setTypeFilter("ALL");
               setSortOrder("az");
             }}
           >
@@ -539,25 +514,13 @@ export default function CustomersPage() {
             Limpiar filtros
           </button>
         </div>
-        <div className="grid gap-3 lg:grid-cols-[2fr_1fr]">
+        <div className="grid gap-3">
           <input
             className="input w-full"
             value={customerQuery}
             onChange={(event) => setCustomerQuery(event.target.value)}
             placeholder="Buscar nombre, CUIT o correo"
           />
-          <select
-            className="input cursor-pointer"
-            value={typeFilter}
-            onChange={(event) => setTypeFilter(event.target.value)}
-          >
-            <option value="ALL">Todos los tipos</option>
-            {Object.keys(TYPE_LABELS).map((key) => (
-              <option key={key} value={key}>
-                {TYPE_LABELS[key]}
-              </option>
-            ))}
-          </select>
         </div>
       </div>
 
@@ -592,7 +555,14 @@ export default function CustomersPage() {
                         {item.displayName}
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
-                        {TYPE_LABELS[item.type] ?? item.type}
+                        {item.defaultPriceListId
+                          ? `${priceListById.get(item.defaultPriceListId)?.name ?? "Lista"}${
+                              priceListById.get(item.defaultPriceListId)
+                                ?.isConsumerFinal
+                                ? " (Consumidor final)"
+                                : ""
+                            }`
+                          : "-"}
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.email ?? "-"}
@@ -634,7 +604,7 @@ export default function CustomersPage() {
                         >
                           <td className="py-3" colSpan={5}>
                             <form onSubmit={handleUpdate} className="space-y-4">
-                              <div className="grid gap-3 sm:grid-cols-4">
+                            <div className="grid gap-3 sm:grid-cols-4">
                               <input
                                 className="input sm:col-span-2"
                                 value={editForm.displayName}
@@ -648,23 +618,7 @@ export default function CustomersPage() {
                                 required
                               />
                               <select
-                                className="input cursor-pointer"
-                                value={editForm.type}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    type: event.target.value,
-                                  }))
-                                }
-                              >
-                                {Object.keys(TYPE_LABELS).map((key) => (
-                                  <option key={key} value={key}>
-                                    {TYPE_LABELS[key]}
-                                  </option>
-                                ))}
-                              </select>
-                              <select
-                                className="input cursor-pointer"
+                                className="input cursor-pointer sm:col-span-2"
                                 value={editForm.defaultPriceListId}
                                 onChange={(event) =>
                                   setEditForm((prev) => ({
@@ -678,6 +632,7 @@ export default function CustomersPage() {
                                   <option key={priceList.id} value={priceList.id}>
                                     {priceList.name}
                                     {priceList.isDefault ? " (Default)" : ""}
+                                    {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
                                   </option>
                                 ))}
                               </select>

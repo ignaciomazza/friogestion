@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { ADMIN_ROLES, WRITE_ROLES } from "@/lib/auth/rbac";
@@ -452,5 +452,107 @@ export async function PATCH(req: NextRequest) {
       { error: "No se pudo actualizar" },
       { status: 400 }
     );
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { membership } = await requireRole(req, [...ADMIN_ROLES]);
+    const organizationId = membership.organizationId;
+    const id = req.nextUrl.searchParams.get("id");
+    if (!id) {
+      return NextResponse.json({ error: "Falta id" }, { status: 400 });
+    }
+
+    const existing = await prisma.sale.findFirst({
+      where: { id, organizationId },
+      select: {
+        id: true,
+        billingStatus: true,
+        fiscalInvoice: { select: { id: true } },
+        receipts: { select: { id: true }, take: 1 },
+        deliveryNotes: { select: { id: true }, take: 1 },
+        installmentPlan: { select: { id: true } },
+      },
+    });
+
+    if (!existing) {
+      return NextResponse.json(
+        { error: "Venta no encontrada" },
+        { status: 404 }
+      );
+    }
+
+    if (existing.billingStatus === "BILLED" || existing.fiscalInvoice) {
+      return NextResponse.json(
+        { error: "La venta ya esta facturada" },
+        { status: 409 }
+      );
+    }
+
+    if (existing.receipts.length) {
+      return NextResponse.json(
+        { error: "La venta tiene cobros asociados" },
+        { status: 409 }
+      );
+    }
+
+    if (existing.deliveryNotes.length) {
+      return NextResponse.json(
+        { error: "La venta tiene remitos asociados" },
+        { status: 409 }
+      );
+    }
+
+    if (existing.installmentPlan) {
+      return NextResponse.json(
+        { error: "La venta tiene un plan de cuotas asociado" },
+        { status: 409 }
+      );
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.stockMovement.deleteMany({
+        where: {
+          organizationId,
+          saleItem: { saleId: id },
+        },
+      });
+      await tx.saleCharge.deleteMany({
+        where: { organizationId, saleId: id },
+      });
+      await tx.saleEvent.deleteMany({
+        where: { organizationId, saleId: id },
+      });
+      await tx.currentAccountEntry.deleteMany({
+        where: { organizationId, saleId: id, sourceType: "SALE" },
+      });
+      await tx.saleItem.deleteMany({
+        where: { saleId: id },
+      });
+      await tx.sale.delete({
+        where: { id },
+      });
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    if (isAuthError(error)) {
+      return NextResponse.json(
+        { error: "No autorizado" },
+        { status: authErrorStatus(error) }
+      );
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2003"
+    ) {
+      return NextResponse.json(
+        { error: "La venta tiene movimientos asociados" },
+        { status: 409 }
+      );
+    }
+    logServerError("api.sales.delete", error);
+    return NextResponse.json({ error: "No se pudo eliminar" }, { status: 400 });
   }
 }

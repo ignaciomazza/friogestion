@@ -18,6 +18,7 @@ const quoteItemSchema = z.object({
 
 const quoteSchema = z.object({
   customerId: z.string().min(1),
+  priceListId: z.string().min(1).optional(),
   quoteNumber: z.string().min(1).optional(),
   validUntil: z.string().min(1).optional(),
   status: z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "EXPIRED"]).optional(),
@@ -29,6 +30,58 @@ const quoteSchema = z.object({
 const quoteUpdateSchema = quoteSchema.extend({
   id: z.string().min(1),
 });
+
+const findActivePriceListId = async (
+  organizationId: string,
+  priceListId?: string | null,
+) => {
+  if (!priceListId) return null;
+  const normalized = priceListId.trim();
+  if (!normalized) return null;
+  const priceList = await prisma.priceList.findFirst({
+    where: { id: normalized, organizationId, isActive: true },
+    select: { id: true },
+  });
+  return priceList?.id ?? null;
+};
+
+const resolveQuotePriceListId = async ({
+  organizationId,
+  requestedPriceListId,
+  customerDefaultPriceListId,
+  existingPriceListId,
+}: {
+  organizationId: string;
+  requestedPriceListId?: string | null;
+  customerDefaultPriceListId?: string | null;
+  existingPriceListId?: string | null;
+}) => {
+  const requestedId = requestedPriceListId?.trim() || null;
+  if (requestedId) {
+    const explicit = await findActivePriceListId(organizationId, requestedId);
+    if (!explicit) {
+      throw new Error("PRICE_LIST_INVALID");
+    }
+    return explicit;
+  }
+
+  for (const candidate of [customerDefaultPriceListId, existingPriceListId]) {
+    const resolved = await findActivePriceListId(organizationId, candidate);
+    if (resolved) return resolved;
+  }
+
+  const fallback = await prisma.priceList.findFirst({
+    where: { organizationId, isActive: true },
+    orderBy: [
+      { isDefault: "desc" },
+      { isConsumerFinal: "desc" },
+      { name: "asc" },
+    ],
+    select: { id: true },
+  });
+
+  return fallback?.id ?? null;
+};
 
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
@@ -120,6 +173,7 @@ export async function GET(req: NextRequest) {
         where: { id, organizationId },
         include: {
           customer: true,
+          priceList: true,
           items: {
             include: {
               product: {
@@ -152,6 +206,16 @@ export async function GET(req: NextRequest) {
         total: quote.total?.toString() ?? null,
         status: quote.status,
         saleId: quote.sale?.id ?? null,
+        priceListId: quote.priceListId ?? null,
+        priceList: quote.priceList
+          ? {
+              id: quote.priceList.id,
+              name: quote.priceList.name,
+              currencyCode: quote.priceList.currencyCode,
+              isDefault: quote.priceList.isDefault,
+              isConsumerFinal: quote.priceList.isConsumerFinal,
+            }
+          : null,
         customer: {
           id: quote.customer.id,
           displayName: quote.customer.displayName,
@@ -188,7 +252,7 @@ export async function GET(req: NextRequest) {
 
     const quotes = await prisma.quote.findMany({
       where: { organizationId },
-      include: { customer: true, sale: true },
+      include: { customer: true, sale: true, priceList: true },
       orderBy: { createdAt: "desc" },
       take: 50,
     });
@@ -205,6 +269,8 @@ export async function GET(req: NextRequest) {
         total: quote.total?.toString() ?? null,
         status: quote.status,
         saleId: quote.sale?.id ?? null,
+        priceListId: quote.priceListId ?? null,
+        priceListName: quote.priceList?.name ?? null,
       }))
     );
   } catch {
@@ -220,7 +286,10 @@ export async function POST(req: NextRequest) {
 
     const customer = await prisma.customer.findFirst({
       where: { id: body.customerId, organizationId },
-      select: { id: true },
+      select: {
+        id: true,
+        defaultPriceListId: true,
+      },
     });
 
     if (!customer) {
@@ -245,6 +314,12 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const priceListId = await resolveQuotePriceListId({
+      organizationId,
+      requestedPriceListId: body.priceListId,
+      customerDefaultPriceListId: customer.defaultPriceListId,
+    });
 
     const { subtotal, taxes, extraAmount, total } = calculateTotals(
       body.items,
@@ -296,6 +371,7 @@ export async function POST(req: NextRequest) {
         data: {
           organizationId,
           customerId: body.customerId,
+          priceListId: priceListId ?? undefined,
           status,
           quoteNumber,
           validUntil,
@@ -323,7 +399,7 @@ export async function POST(req: NextRequest) {
             })),
           },
         },
-        include: { customer: true },
+        include: { customer: true, priceList: true },
       });
     });
 
@@ -340,6 +416,8 @@ export async function POST(req: NextRequest) {
       extraAmount: quote.extraAmount?.toString() ?? null,
       total: quote.total?.toString() ?? null,
       status: quote.status,
+      priceListId: quote.priceListId ?? null,
+      priceListName: quote.priceList?.name ?? null,
       saleId: null,
     });
   } catch (error) {
@@ -350,6 +428,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "No autorizado" },
         { status: authErrorStatus(error) }
+      );
+    }
+    if (error instanceof Error && error.message === "PRICE_LIST_INVALID") {
+      return NextResponse.json(
+        { error: "Lista de precios invalida" },
+        { status: 400 },
       );
     }
     logServerError("api.quotes.post", error);
@@ -384,7 +468,10 @@ export async function PATCH(req: NextRequest) {
 
     const customer = await prisma.customer.findFirst({
       where: { id: body.customerId, organizationId },
-      select: { id: true },
+      select: {
+        id: true,
+        defaultPriceListId: true,
+      },
     });
 
     if (!customer) {
@@ -409,6 +496,13 @@ export async function PATCH(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    const priceListId = await resolveQuotePriceListId({
+      organizationId,
+      requestedPriceListId: body.priceListId,
+      customerDefaultPriceListId: customer.defaultPriceListId,
+      existingPriceListId: existing.priceListId,
+    });
 
     const { subtotal, taxes, extraAmount, total } = calculateTotals(
       body.items,
@@ -445,6 +539,7 @@ export async function PATCH(req: NextRequest) {
         where: { id: body.id },
         data: {
           customerId: body.customerId,
+          priceListId: priceListId ?? undefined,
           status,
           quoteNumber: quoteNumberInput ?? existing.quoteNumber ?? undefined,
           validUntil,
@@ -472,7 +567,7 @@ export async function PATCH(req: NextRequest) {
             })),
           },
         },
-        include: { customer: true },
+        include: { customer: true, priceList: true },
       });
     });
 
@@ -489,6 +584,8 @@ export async function PATCH(req: NextRequest) {
       extraAmount: quote.extraAmount?.toString() ?? null,
       total: quote.total?.toString() ?? null,
       status: quote.status,
+      priceListId: quote.priceListId ?? null,
+      priceListName: quote.priceList?.name ?? null,
       saleId: null,
     });
   } catch (error) {
@@ -499,6 +596,12 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json(
         { error: "No autorizado" },
         { status: authErrorStatus(error) }
+      );
+    }
+    if (error instanceof Error && error.message === "PRICE_LIST_INVALID") {
+      return NextResponse.json(
+        { error: "Lista de precios invalida" },
+        { status: 400 },
       );
     }
     logServerError("api.quotes.patch", error);

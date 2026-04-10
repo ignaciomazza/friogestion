@@ -14,6 +14,20 @@ export async function POST(req: NextRequest) {
   try {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
+    const priceListForConsumerFinal = await prisma.priceList.findFirst({
+      where: {
+        organizationId,
+        isActive: true,
+      },
+      orderBy: [
+        { isConsumerFinal: "desc" },
+        { isDefault: "desc" },
+        { name: "asc" },
+      ],
+      select: {
+        id: true,
+      },
+    });
 
     const customer = await prisma.customer.upsert({
       where: {
@@ -27,9 +41,11 @@ export async function POST(req: NextRequest) {
         systemKey: CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON,
         displayName: CONSUMER_FINAL_DEFAULT_NAME,
         type: "CONSUMER_FINAL",
+        defaultPriceListId: priceListForConsumerFinal?.id ?? null,
       },
       update: {
         type: "CONSUMER_FINAL",
+        defaultPriceListId: priceListForConsumerFinal?.id ?? null,
       },
     });
 
