@@ -41,7 +41,7 @@ type StockProduct = {
 
 type RowDraft = {
   cost: string;
-  prices: Record<string, string>;
+  percentages: Record<string, string>;
   adjustmentQty: string;
   isSaving: boolean;
   warning: string | null;
@@ -50,6 +50,7 @@ type RowDraft = {
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
 
 const normalizeMoney = (value: string) => normalizeDecimalInput(value, 2);
+const normalizePercent = (value: string) => normalizeDecimalInput(value, 4);
 
 const normalizeSignedQuantity = (value: string) => {
   const trimmed = value.trim();
@@ -66,6 +67,17 @@ const parseNumber = (value: string | null | undefined) => {
   if (!value) return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizePriceNumber = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(2));
+};
+
+const formatPercentageValue = (value: number) => {
+  if (!Number.isFinite(value)) return "";
+  const normalized = value.toFixed(4).replace(/\.?0+$/, "");
+  return normalized === "-0" ? "0" : normalized;
 };
 
 const formatSignedQuantity = (value: number) => {
@@ -100,6 +112,58 @@ const getProductPriceForList = (
   return "";
 };
 
+const calculatePricesFromPercentages = (
+  cost: number | null,
+  percentages: Record<string, string>,
+  priceLists: PriceListOption[],
+) => {
+  const computedPrices: Record<string, number | null> = {};
+  let basePrice = cost;
+
+  for (const priceList of priceLists) {
+    const percentage = parseNumber(percentages[priceList.id]);
+    if (basePrice === null || percentage === null) {
+      computedPrices[priceList.id] = null;
+      continue;
+    }
+
+    const nextPrice = normalizePriceNumber(basePrice * (1 + percentage / 100));
+    computedPrices[priceList.id] = nextPrice;
+    basePrice = nextPrice;
+  }
+
+  return computedPrices;
+};
+
+const derivePercentagesFromPrices = (
+  product: StockProduct,
+  priceLists: PriceListOption[],
+) => {
+  const derived: Record<string, string> = {};
+  let basePrice = parseNumber(product.cost);
+
+  for (const priceList of priceLists) {
+    const listPrice = parseNumber(getProductPriceForList(product, priceList));
+
+    if (basePrice === null || listPrice === null) {
+      derived[priceList.id] = "";
+      continue;
+    }
+
+    if (basePrice === 0) {
+      derived[priceList.id] = listPrice === 0 ? "0" : "";
+      basePrice = listPrice;
+      continue;
+    }
+
+    const percentage = ((listPrice - basePrice) / basePrice) * 100;
+    derived[priceList.id] = formatPercentageValue(percentage);
+    basePrice = listPrice;
+  }
+
+  return derived;
+};
+
 export default function StockPage() {
   const [products, setProducts] = useState<StockProduct[]>([]);
   const [priceLists, setPriceLists] = useState<PriceListOption[]>([]);
@@ -126,17 +190,22 @@ export default function StockPage() {
 
     for (const product of nextProducts) {
       const previousDraft = previous[product.id];
-      const nextPrices: Record<string, string> = {};
+      const derivedPercentages = derivePercentagesFromPrices(
+        product,
+        nextPriceLists,
+      );
+      const nextPercentages: Record<string, string> = {};
 
       for (const priceList of nextPriceLists) {
-        nextPrices[priceList.id] =
-          previousDraft?.prices[priceList.id] ??
-          getProductPriceForList(product, priceList);
+        nextPercentages[priceList.id] =
+          previousDraft?.percentages[priceList.id] ??
+          derivedPercentages[priceList.id] ??
+          "";
       }
 
       nextRows[product.id] = {
         cost: previousDraft?.cost ?? product.cost ?? "",
-        prices: nextPrices,
+        percentages: nextPercentages,
         adjustmentQty: previousDraft?.adjustmentQty ?? "",
         isSaving: false,
         warning: previousDraft?.warning ?? null,
@@ -199,7 +268,7 @@ export default function StockPage() {
       [productId]: {
         ...(previous[productId] ?? {
           cost: "",
-          prices: {},
+          percentages: {},
           adjustmentQty: "",
           isSaving: false,
           warning: null,
@@ -209,11 +278,15 @@ export default function StockPage() {
     }));
   };
 
-  const updateRowPrice = (productId: string, priceListId: string, value: string) => {
+  const updateRowPercentage = (
+    productId: string,
+    priceListId: string,
+    value: string,
+  ) => {
     setRows((previous) => {
       const current = previous[productId] ?? {
         cost: "",
-        prices: {},
+        percentages: {},
         adjustmentQty: "",
         isSaving: false,
         warning: null,
@@ -222,8 +295,8 @@ export default function StockPage() {
         ...previous,
         [productId]: {
           ...current,
-          prices: {
-            ...current.prices,
+          percentages: {
+            ...current.percentages,
             [priceListId]: value,
           },
         },
@@ -235,7 +308,7 @@ export default function StockPage() {
     setRows((previous) => {
       const current = previous[productId] ?? {
         cost: "",
-        prices: {},
+        percentages: {},
         adjustmentQty: "",
         isSaving: false,
         warning: null,
@@ -264,24 +337,62 @@ export default function StockPage() {
 
     try {
       const costNumber = parseNumber(draft.cost);
-      const pricesPayload = priceLists.map((priceList) => ({
-        priceListId: priceList.id,
-        price: parseNumber(draft.prices[priceList.id]),
-      }));
-
-      const patchRes = await fetch("/api/stock", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId,
-          cost: costNumber,
-          prices: pricesPayload,
-        }),
-      });
-      const patchData = await patchRes.json();
-      if (!patchRes.ok) {
-        setStatus(patchData?.error ?? "No se pudo guardar");
+      const hasAnyPercentage = priceLists.some(
+        (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
+      );
+      if (hasAnyPercentage && costNumber === null) {
+        setStatus("Carga el costo para calcular precios por porcentaje");
         return;
+      }
+
+      const computedPrices = calculatePricesFromPercentages(
+        costNumber,
+        draft.percentages,
+        priceLists,
+      );
+
+      const currentCost = normalizePriceNumber(costNumber);
+      const originalCost = normalizePriceNumber(parseNumber(product.cost));
+      const costChanged = currentCost !== originalCost;
+
+      const pricesPayload =
+        costNumber === null
+          ? []
+          : priceLists.reduce<Array<{ priceListId: string; price: number | null }>>(
+              (updates, priceList) => {
+                const originalPrice = normalizePriceNumber(
+                  parseNumber(getProductPriceForList(product, priceList)),
+                );
+                const nextPrice = normalizePriceNumber(
+                  computedPrices[priceList.id],
+                );
+
+                if (originalPrice !== nextPrice) {
+                  updates.push({
+                    priceListId: priceList.id,
+                    price: nextPrice,
+                  });
+                }
+                return updates;
+              },
+              [],
+            );
+
+      if (costChanged || pricesPayload.length > 0) {
+        const patchRes = await fetch("/api/stock", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            productId,
+            ...(costChanged ? { cost: currentCost } : {}),
+            ...(pricesPayload.length > 0 ? { prices: pricesPayload } : {}),
+          }),
+        });
+        const patchData = await patchRes.json();
+        if (!patchRes.ok) {
+          setStatus(patchData?.error ?? "No se pudo guardar");
+          return;
+        }
       }
 
       const adjustmentNumber = Number(draft.adjustmentQty);
@@ -552,14 +663,13 @@ export default function StockPage() {
             </thead>
             <tbody>
               {filteredProducts.map((product) => {
+                const derivedPercentages = derivePercentagesFromPrices(
+                  product,
+                  priceLists,
+                );
                 const draft = rows[product.id] ?? {
                   cost: product.cost ?? "",
-                  prices: Object.fromEntries(
-                    priceLists.map((priceList) => [
-                      priceList.id,
-                      getProductPriceForList(product, priceList),
-                    ]),
-                  ),
+                  percentages: derivedPercentages,
                   adjustmentQty: "",
                   isSaving: false,
                   warning: null,
@@ -574,17 +684,36 @@ export default function StockPage() {
                 const originalCost = parseNumber(product.cost ?? null);
                 const currentCost = parseNumber(draft.cost);
                 const costChanged = originalCost !== currentCost;
-                const pricesChanged = priceLists.some((priceList) => {
-                  const originalPrice = parseNumber(
-                    getProductPriceForList(product, priceList),
+                const computedPrices = calculatePricesFromPercentages(
+                  currentCost,
+                  draft.percentages,
+                  priceLists,
+                );
+                const hasPercentagesWithoutCost =
+                  currentCost === null &&
+                  priceLists.some(
+                    (priceList) =>
+                      parseNumber(draft.percentages[priceList.id]) !== null,
                   );
-                  const currentPrice = parseNumber(draft.prices[priceList.id]);
-                  return originalPrice !== currentPrice;
-                });
+                const pricesChanged =
+                  currentCost === null
+                    ? false
+                    : priceLists.some((priceList) => {
+                        const originalPrice = normalizePriceNumber(
+                          parseNumber(getProductPriceForList(product, priceList)),
+                        );
+                        const currentPrice = normalizePriceNumber(
+                          computedPrices[priceList.id],
+                        );
+                        return originalPrice !== currentPrice;
+                      });
                 const adjustmentChanged =
                   Number.isFinite(adjustment) && adjustment !== 0;
                 const hasRowChanges =
-                  costChanged || pricesChanged || adjustmentChanged;
+                  costChanged ||
+                  pricesChanged ||
+                  adjustmentChanged ||
+                  hasPercentagesWithoutCost;
                 const adjustmentLabel =
                   Number.isFinite(adjustment) && adjustment !== 0
                     ? `${adjustment > 0 ? "+" : ""}${formatStock(adjustment)}`
@@ -613,12 +742,9 @@ export default function StockPage() {
                       </div>
                     </td>
                     <td className="py-3 pr-3">
-                      <div className="relative w-32">
-                        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-400/80">
-                          $
-                        </span>
+                      <div className="w-32">
                         <MoneyInput
-                          className="input no-spinner w-full pl-8 pr-2 text-right tabular-nums"
+                          className="input no-spinner w-full px-2 text-right tabular-nums"
                           value={draft.cost}
                           onValueChange={(nextValue) =>
                             updateRow(product.id, {
@@ -627,27 +753,26 @@ export default function StockPage() {
                           }
                           placeholder="0,00"
                           maxDecimals={2}
+                          prefix="$"
                         />
                       </div>
                     </td>
                     {priceLists.map((priceList) => (
                       <td key={`${product.id}-${priceList.id}`} className="py-3 pr-3">
-                        <div className="relative w-32">
-                          <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-400/80">
-                            $
-                          </span>
+                        <div className="w-32">
                           <MoneyInput
-                            className="input no-spinner w-full pl-8 pr-2 text-right tabular-nums"
-                            value={draft.prices[priceList.id] ?? ""}
+                            className="input no-spinner w-full px-2 text-right tabular-nums"
+                            value={draft.percentages[priceList.id] ?? ""}
                             onValueChange={(nextValue) =>
-                              updateRowPrice(
+                              updateRowPercentage(
                                 product.id,
                                 priceList.id,
-                                normalizeMoney(nextValue),
+                                normalizePercent(nextValue),
                               )
                             }
-                            placeholder="0,00"
-                            maxDecimals={2}
+                            placeholder="0"
+                            maxDecimals={4}
+                            suffix="%"
                           />
                         </div>
                       </td>

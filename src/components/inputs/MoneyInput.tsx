@@ -10,6 +10,8 @@ type MoneyInputProps = Omit<
   value: string;
   onValueChange: (value: string) => void;
   maxDecimals?: number;
+  prefix?: string;
+  suffix?: string;
 };
 
 const normalizeInteger = (value: string) => {
@@ -51,7 +53,7 @@ export const normalizeMoneyInput = (rawValue: string, maxDecimals = 2) => {
   return integerPart;
 };
 
-const formatMoneyDisplay = (value: string) => {
+const formatMoneyDisplay = (value: string, prefix?: string, suffix?: string) => {
   if (!value) return "";
 
   const hasTrailingDecimal = value.endsWith(".");
@@ -60,19 +62,19 @@ const formatMoneyDisplay = (value: string) => {
   const groupedInteger = integerPart.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
   if (decimalRaw) {
-    return `${groupedInteger},${decimalRaw}`;
+    return `${prefix ?? ""}${groupedInteger},${decimalRaw}${suffix ?? ""}`;
   }
 
   if (hasTrailingDecimal) {
-    return `${groupedInteger},`;
+    return `${prefix ?? ""}${groupedInteger},${suffix ?? ""}`;
   }
 
-  return groupedInteger;
+  return `${prefix ?? ""}${groupedInteger}${suffix ?? ""}`;
 };
 
 export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(
   function MoneyInput(
-    { value, onValueChange, maxDecimals = 2, ...props },
+    { value, onValueChange, maxDecimals = 2, prefix, suffix, ...props },
     ref
   ) {
     return (
@@ -81,7 +83,7 @@ export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(
         ref={ref}
         type="text"
         inputMode="decimal"
-        value={formatMoneyDisplay(value)}
+        value={formatMoneyDisplay(value, prefix, suffix)}
         onChange={(event) => {
           onValueChange(normalizeMoneyInput(event.target.value, maxDecimals));
         }}
