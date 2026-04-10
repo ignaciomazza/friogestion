@@ -90,8 +90,14 @@ export async function GET(req: NextRequest) {
           totals: [
             { label: "Subtotal", value: Number(quote.subtotal ?? 0) },
             { label: "Impuestos", value: Number(quote.taxes ?? 0) },
-            ...(Number(quote.extraAmount ?? 0) > 0
-              ? [{ label: "Recargos", value: Number(quote.extraAmount ?? 0) }]
+            ...(Number(quote.extraAmount ?? 0) !== 0
+              ? [{
+                  label:
+                    Number(quote.extraAmount ?? 0) > 0
+                      ? "Recargos"
+                      : "Descuentos",
+                  value: Number(quote.extraAmount ?? 0),
+                }]
               : []),
             { label: "Total", value: Number(quote.total ?? 0) },
           ],

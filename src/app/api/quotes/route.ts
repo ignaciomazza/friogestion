@@ -22,7 +22,9 @@ const quoteSchema = z.object({
   quoteNumber: z.string().min(1).optional(),
   validUntil: z.string().min(1).optional(),
   status: z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "EXPIRED"]).optional(),
-  extraType: z.enum(["PERCENT", "FIXED"]).optional(),
+  extraType: z
+    .enum(["PERCENT", "FIXED", "DISCOUNT_PERCENT", "DISCOUNT_FIXED"])
+    .optional(),
   extraValue: z.coerce.number().min(0).optional(),
   items: z.array(quoteItemSchema).min(1),
 });
@@ -85,7 +87,7 @@ const resolveQuotePriceListId = async ({
 
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
-  extraType?: "PERCENT" | "FIXED",
+  extraType?: "PERCENT" | "FIXED" | "DISCOUNT_PERCENT" | "DISCOUNT_FIXED",
   extraValue?: number
 ) => {
   const subtotal = items.reduce(
@@ -98,7 +100,15 @@ const calculateTotals = (
   }, 0);
   const extraBase = extraValue ?? 0;
   const extraAmount =
-    extraType === "PERCENT" ? subtotal * (extraBase / 100) : extraBase;
+    extraType === "PERCENT"
+      ? subtotal * (extraBase / 100)
+      : extraType === "FIXED"
+        ? extraBase
+        : extraType === "DISCOUNT_PERCENT"
+          ? -(subtotal * (extraBase / 100))
+          : extraType === "DISCOUNT_FIXED"
+            ? -extraBase
+            : 0;
   const total = subtotal + taxes + extraAmount;
 
   return { subtotal, taxes, extraAmount, total };
@@ -240,6 +250,8 @@ export async function GET(req: NextRequest) {
             brand: item.product.brand,
             model: item.product.model,
             unit: item.product.unit,
+            cost: item.product.cost?.toString() ?? null,
+            costUsd: item.product.costUsd?.toString() ?? null,
             price: item.product.price?.toString() ?? null,
             prices: item.product.priceItems.map((priceItem) => ({
               priceListId: priceItem.priceListId,

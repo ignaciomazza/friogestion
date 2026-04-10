@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
         model: product.model,
         unit: product.unit,
         cost: product.cost?.toString() ?? null,
+        costUsd: product.costUsd?.toString() ?? null,
         price: product.price?.toString() ?? null,
         isActive: product.isActive,
       }))
@@ -83,6 +84,7 @@ export async function POST(req: NextRequest) {
       model: product.model,
       unit: product.unit,
       cost: product.cost?.toString() ?? null,
+      costUsd: product.costUsd?.toString() ?? null,
       price: product.price?.toString() ?? null,
       isActive: product.isActive,
     });
@@ -152,6 +154,7 @@ export async function PATCH(req: NextRequest) {
       model: product.model,
       unit: product.unit,
       cost: product.cost?.toString() ?? null,
+      costUsd: product.costUsd?.toString() ?? null,
       price: product.price?.toString() ?? null,
       isActive: product.isActive,
     });

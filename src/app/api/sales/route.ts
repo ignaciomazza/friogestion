@@ -24,7 +24,9 @@ const saleSchema = z.object({
   saleNumber: z.string().min(1).optional(),
   saleDate: z.string().min(1).optional(),
   billingStatus: z.enum(["NOT_BILLED", "TO_BILL", "BILLED"]).optional(),
-  extraType: z.enum(["PERCENT", "FIXED"]).optional(),
+  extraType: z
+    .enum(["PERCENT", "FIXED", "DISCOUNT_PERCENT", "DISCOUNT_FIXED"])
+    .optional(),
   extraValue: z.coerce.number().min(0).optional(),
   adjustStock: z.boolean().optional(),
   items: z.array(saleItemSchema).min(1),
@@ -40,7 +42,7 @@ const saleUpdateSchema = z.object({
 
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
-  extraType?: "PERCENT" | "FIXED",
+  extraType?: "PERCENT" | "FIXED" | "DISCOUNT_PERCENT" | "DISCOUNT_FIXED",
   extraValue?: number
 ) => {
   const subtotal = items.reduce(
@@ -53,7 +55,15 @@ const calculateTotals = (
   }, 0);
   const extraBase = extraValue ?? 0;
   const extraAmount =
-    extraType === "PERCENT" ? subtotal * (extraBase / 100) : extraBase;
+    extraType === "PERCENT"
+      ? subtotal * (extraBase / 100)
+      : extraType === "FIXED"
+        ? extraBase
+        : extraType === "DISCOUNT_PERCENT"
+          ? -(subtotal * (extraBase / 100))
+          : extraType === "DISCOUNT_FIXED"
+            ? -extraBase
+            : 0;
   const total = subtotal + taxes + extraAmount;
 
   return { subtotal, taxes, extraAmount, total };

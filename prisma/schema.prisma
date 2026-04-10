@@ -65,6 +65,8 @@ enum PurchasePaymentStatus {
 enum ExtraChargeType {
   PERCENT
   FIXED
+  DISCOUNT_PERCENT
+  DISCOUNT_FIXED
 }
 
 enum SaleChargeType {
@@ -365,6 +367,7 @@ model Product {
   model          String?
   unit           String?
   cost           Decimal? @db.Decimal(12, 2)
+  costUsd        Decimal? @db.Decimal(12, 2)
   price          Decimal? @db.Decimal(12, 2)
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())

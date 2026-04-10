@@ -114,17 +114,20 @@ export default function CustomersPage() {
       }
       const taxpayer = data?.taxpayer;
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
+      const address = taxpayer?.address ?? "";
       if (target === "new") {
         setForm((prev) => ({
           ...prev,
           taxId,
           displayName: prev.displayName || displayName,
+          address: prev.address || address,
         }));
       } else {
         setEditForm((prev) => ({
           ...prev,
           taxId,
           displayName: prev.displayName || displayName,
+          address: prev.address || address,
         }));
       }
       setStatus(`Datos ARCA actualizados (${data.source}).`);

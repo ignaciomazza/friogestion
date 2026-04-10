@@ -30,6 +30,7 @@ type QuotesClientProps = {
   initialQuotes: QuoteRow[];
   initialPriceLists: PriceListOption[];
   initialAdjustStockOnConfirm: boolean;
+  initialLatestUsdRate: string | null;
 };
 
 type CustomerFormState = {
@@ -101,6 +102,7 @@ export default function QuotesClient({
   initialQuotes,
   initialPriceLists,
   initialAdjustStockOnConfirm,
+  initialLatestUsdRate,
 }: QuotesClientProps) {
   const [customers, setCustomers] =
     useState<CustomerOption[]>(initialCustomers);
@@ -184,6 +186,11 @@ export default function QuotesClient({
   const selectedCustomer =
     (customerId ? customerById.get(customerId) : null) ??
     (consumerFinalCustomer?.id === customerId ? consumerFinalCustomer : null);
+  const latestUsdRate = useMemo(() => {
+    if (!initialLatestUsdRate) return null;
+    const parsed = Number(initialLatestUsdRate);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [initialLatestUsdRate]);
   const defaultPriceListId =
     priceLists.find((priceList) => priceList.isDefault)?.id ?? null;
   const consumerFinalPriceListId =
@@ -359,10 +366,14 @@ export default function QuotesClient({
   const handleSelectProduct = (index: number, product: ProductOption) => {
     const suggestedPrice = resolveSuggestedProductPrice({
       prices: product.prices ?? [],
+      productCost: product.cost,
+      productCostUsd: product.costUsd,
       productPrice: product.price,
       preferredPriceListId: selectedPriceListId,
       customerPriceListId: selectedCustomer?.defaultPriceListId,
       defaultPriceListId,
+      usdRateArs: latestUsdRate,
+      priceListOrderIds: priceLists.map((priceList) => priceList.id),
     });
 
     setItems((prev) => {
@@ -391,10 +402,14 @@ export default function QuotesClient({
         if (!product) return item;
         const suggestedPrice = resolveSuggestedProductPrice({
           prices: product.prices ?? [],
+          productCost: product.cost,
+          productCostUsd: product.costUsd,
           productPrice: product.price,
           preferredPriceListId: nextPriceListId,
           customerPriceListId: selectedCustomer?.defaultPriceListId,
           defaultPriceListId,
+          usdRateArs: latestUsdRate,
+          priceListOrderIds: priceLists.map((priceList) => priceList.id),
         });
         if (!suggestedPrice) return item;
         return {
@@ -444,6 +459,10 @@ export default function QuotesClient({
       ? subtotal * (safeExtraValue / 100)
       : extraType === "FIXED"
         ? safeExtraValue
+        : extraType === "DISCOUNT_PERCENT"
+          ? -(subtotal * (safeExtraValue / 100))
+          : extraType === "DISCOUNT_FIXED"
+            ? -safeExtraValue
         : 0;
 
   const total = subtotal + taxesTotal + extraAmount;
@@ -1009,10 +1028,12 @@ export default function QuotesClient({
       }
       const taxpayer = data?.taxpayer;
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
+      const address = taxpayer?.address ?? "";
       setCustomerForm((prev) => ({
         ...prev,
         taxId,
         displayName: prev.displayName || displayName,
+        address: prev.address || address,
       }));
       setCustomerStatus(`Datos ARCA actualizados (${data.source}).`);
     } catch {

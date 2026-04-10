@@ -14,6 +14,7 @@ export type TaxpayerLookupData = {
   taxId: string;
   legalName: string | null;
   displayName: string;
+  address: string | null;
   personaType: string | null;
   taxStatus: string | null;
   state: string | null;
@@ -80,6 +81,122 @@ function asString(value: unknown) {
   return null;
 }
 
+function compactStrings(values: Array<string | null | undefined>) {
+  return values
+    .map((value) => value?.trim() ?? "")
+    .filter((value) => value.length > 0);
+}
+
+function formatAddressValue(value: unknown): string | null {
+  const direct = asString(value);
+  if (direct) return direct;
+  if (!value || typeof value !== "object") return null;
+
+  const street =
+    asString(
+      extractValueByKeys(value, [
+        "direccion",
+        "calle",
+        "nombreCalle",
+        "nombreVia",
+        "street",
+      ])
+    ) ?? null;
+  const number =
+    asString(
+      extractValueByKeys(value, [
+        "numero",
+        "nro",
+        "numeroPuerta",
+        "nroPuerta",
+        "altura",
+      ])
+    ) ?? null;
+  const floor = asString(extractValueByKeys(value, ["piso"])) ?? null;
+  const apartment =
+    asString(
+      extractValueByKeys(value, ["departamento", "depto", "unidad", "oficina"])
+    ) ?? null;
+  const locality =
+    asString(
+      extractValueByKeys(value, [
+        "localidad",
+        "descripcionLocalidad",
+        "ciudad",
+        "descripcionCiudad",
+      ])
+    ) ?? null;
+  const province =
+    asString(
+      extractValueByKeys(value, [
+        "provincia",
+        "descripcionProvincia",
+        "nombreProvincia",
+      ])
+    ) ?? null;
+  const postalCode =
+    asString(extractValueByKeys(value, ["codigoPostal", "codPostal", "cp"])) ??
+    null;
+
+  const streetLine = compactStrings([street, number]).join(" ");
+  const unitLine = compactStrings([
+    floor ? `Piso ${floor}` : null,
+    apartment ? `Dto ${apartment}` : null,
+  ]).join(" ");
+  const fullAddress = compactStrings([
+    streetLine || null,
+    unitLine || null,
+    locality,
+    province,
+    postalCode,
+  ]).join(", ");
+
+  return fullAddress || null;
+}
+
+function extractAddress(payload: unknown): string | null {
+  const primaryAddress = formatAddressValue(
+    extractValueByKeys(payload, [
+      "domicilioFiscal",
+      "domicilioFiscalAFIP",
+      "domicilio",
+      "domicilioLegal",
+    ])
+  );
+  if (primaryAddress) return primaryAddress;
+
+  const directAddress = formatAddressValue(
+    extractValueByKeys(payload, ["direccion", "direccionFiscal"])
+  );
+  if (directAddress) return directAddress;
+
+  const locality =
+    asString(
+      extractValueByKeys(payload, [
+        "localidad",
+        "descripcionLocalidad",
+        "ciudad",
+        "descripcionCiudad",
+      ])
+    ) ?? null;
+  const province =
+    asString(
+      extractValueByKeys(payload, [
+        "provincia",
+        "descripcionProvincia",
+        "nombreProvincia",
+      ])
+    ) ?? null;
+  const postalCode =
+    asString(extractValueByKeys(payload, ["codigoPostal", "codPostal", "cp"])) ??
+    null;
+  const fallbackAddress = compactStrings([locality, province, postalCode]).join(
+    ", "
+  );
+
+  return fallbackAddress || null;
+}
+
 function toIsoDate(value: unknown) {
   const text = asString(value);
   if (!text) return null;
@@ -108,6 +225,7 @@ export function normalizeTaxpayerPayload(
       taxId: fallbackTaxId,
       legalName: null,
       displayName: "No encontrado",
+      address: null,
       personaType: null,
       taxStatus: null,
       state: null,
@@ -181,12 +299,14 @@ export function normalizeTaxpayerPayload(
         "fechaActualizacion",
       ])
     ) ?? null;
+  const address = extractAddress(payload);
 
   return {
     status: "FOUND",
     taxId,
     legalName,
     displayName: buildDisplayName(legalName, firstName, lastName),
+    address,
     personaType,
     taxStatus,
     state,

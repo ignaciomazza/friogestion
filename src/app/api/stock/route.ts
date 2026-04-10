@@ -11,6 +11,7 @@ import { aggregateStockByProduct } from "@/lib/stock-balance";
 const stockPatchSchema = z.object({
   productId: z.string().min(1),
   cost: z.union([z.coerce.number().min(0), z.null()]).optional(),
+  costUsd: z.union([z.coerce.number().min(0), z.null()]).optional(),
   priceListId: z.string().min(1).optional(),
   price: z.union([z.coerce.number().min(0), z.null()]).optional(),
   prices: z
@@ -85,6 +86,7 @@ export async function GET(req: NextRequest) {
         model: product.model,
         unit: product.unit,
         cost: product.cost?.toString() ?? null,
+        costUsd: product.costUsd?.toString() ?? null,
         price: product.price?.toString() ?? null,
         stock: (stockByProduct.get(product.id) ?? 0).toFixed(3),
         prices: pricesByProduct.get(product.id) ?? [],
@@ -115,7 +117,11 @@ export async function PATCH(req: NextRequest) {
       normalizedPriceUpdates.set(priceUpdate.priceListId, priceUpdate.price);
     }
 
-    if (body.cost === undefined && normalizedPriceUpdates.size === 0) {
+    if (
+      body.cost === undefined &&
+      body.costUsd === undefined &&
+      normalizedPriceUpdates.size === 0
+    ) {
       return NextResponse.json(
         { error: "Nada para actualizar" },
         { status: 400 },
@@ -157,11 +163,16 @@ export async function PATCH(req: NextRequest) {
     );
 
     await prisma.$transaction(async (tx) => {
-      if (body.cost !== undefined) {
+      if (body.cost !== undefined || body.costUsd !== undefined) {
         await tx.product.update({
           where: { id: body.productId },
           data: {
-            cost: body.cost === null ? null : body.cost.toFixed(2),
+            ...(body.cost !== undefined
+              ? { cost: body.cost === null ? null : body.cost.toFixed(2) }
+              : {}),
+            ...(body.costUsd !== undefined
+              ? { costUsd: body.costUsd === null ? null : body.costUsd.toFixed(2) }
+              : {}),
           },
         });
       }

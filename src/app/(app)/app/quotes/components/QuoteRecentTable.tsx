@@ -135,6 +135,13 @@ export function QuoteRecentTable({
                 const taxes = detail?.taxes ?? quote.taxes;
                 const extraAmount = detail?.extraAmount ?? null;
                 const total = detail?.total ?? quote.total;
+                const extraAmountNumeric = toNumber(extraAmount);
+                const extraLabel =
+                  extraAmountNumeric === null || extraAmountNumeric === 0
+                    ? "Ajuste"
+                    : extraAmountNumeric > 0
+                      ? "Recargo"
+                      : "Descuento";
                 return (
                   <Fragment key={quote.id}>
                     <tr
@@ -284,7 +291,7 @@ export function QuoteRecentTable({
                                     </div>
                                     <div className="space-y-1">
                                       <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-                                        Recargo
+                                        {extraLabel}
                                       </p>
                                       <p className="text-sm font-semibold text-zinc-900">
                                         {formatCurrencyARS(extraAmount)}

@@ -34,6 +34,7 @@ type StockProduct = {
   model: string | null;
   unit: string | null;
   cost: string | null;
+  costUsd: string | null;
   price: string | null;
   stock: string;
   prices: StockPrice[];
@@ -41,6 +42,7 @@ type StockProduct = {
 
 type RowDraft = {
   cost: string;
+  costUsd: string;
   percentages: Record<string, string>;
   adjustmentQty: string;
   isSaving: boolean;
@@ -205,6 +207,7 @@ export default function StockPage() {
 
       nextRows[product.id] = {
         cost: previousDraft?.cost ?? product.cost ?? "",
+        costUsd: previousDraft?.costUsd ?? product.costUsd ?? "",
         percentages: nextPercentages,
         adjustmentQty: previousDraft?.adjustmentQty ?? "",
         isSaving: false,
@@ -268,6 +271,7 @@ export default function StockPage() {
       [productId]: {
         ...(previous[productId] ?? {
           cost: "",
+          costUsd: "",
           percentages: {},
           adjustmentQty: "",
           isSaving: false,
@@ -286,6 +290,7 @@ export default function StockPage() {
     setRows((previous) => {
       const current = previous[productId] ?? {
         cost: "",
+        costUsd: "",
         percentages: {},
         adjustmentQty: "",
         isSaving: false,
@@ -308,6 +313,7 @@ export default function StockPage() {
     setRows((previous) => {
       const current = previous[productId] ?? {
         cost: "",
+        costUsd: "",
         percentages: {},
         adjustmentQty: "",
         isSaving: false,
@@ -337,6 +343,7 @@ export default function StockPage() {
 
     try {
       const costNumber = parseNumber(draft.cost);
+      const costUsdNumber = parseNumber(draft.costUsd);
       const hasAnyPercentage = priceLists.some(
         (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
       );
@@ -354,6 +361,9 @@ export default function StockPage() {
       const currentCost = normalizePriceNumber(costNumber);
       const originalCost = normalizePriceNumber(parseNumber(product.cost));
       const costChanged = currentCost !== originalCost;
+      const currentCostUsd = normalizePriceNumber(costUsdNumber);
+      const originalCostUsd = normalizePriceNumber(parseNumber(product.costUsd));
+      const costUsdChanged = currentCostUsd !== originalCostUsd;
 
       const pricesPayload =
         costNumber === null
@@ -378,13 +388,14 @@ export default function StockPage() {
               [],
             );
 
-      if (costChanged || pricesPayload.length > 0) {
+      if (costChanged || costUsdChanged || pricesPayload.length > 0) {
         const patchRes = await fetch("/api/stock", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             productId,
             ...(costChanged ? { cost: currentCost } : {}),
+            ...(costUsdChanged ? { costUsd: currentCostUsd } : {}),
             ...(pricesPayload.length > 0 ? { prices: pricesPayload } : {}),
           }),
         });
@@ -473,7 +484,7 @@ export default function StockPage() {
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">Stock</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Ajusta costo, precios por lista y stock por producto en una sola grilla.
+          Ajusta costo ARS/USD, precios por lista y stock por producto en una sola grilla.
         </p>
       </div>
 
@@ -647,11 +658,12 @@ export default function StockPage() {
           />
         </div>
         <div className="table-scroll">
-          <table className="w-full min-w-[1180px] text-left text-xs">
+          <table className="w-full min-w-[1280px] text-left text-xs">
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="py-2 pr-3">Producto</th>
-                <th className="py-2 pr-3">Costo</th>
+                <th className="py-2 pr-3">Costo ARS</th>
+                <th className="py-2 pr-3">Costo USD</th>
                 {priceLists.map((priceList) => (
                   <th key={priceList.id} className="py-2 pr-3">
                     Precio {priceList.name}
@@ -669,6 +681,7 @@ export default function StockPage() {
                 );
                 const draft = rows[product.id] ?? {
                   cost: product.cost ?? "",
+                  costUsd: product.costUsd ?? "",
                   percentages: derivedPercentages,
                   adjustmentQty: "",
                   isSaving: false,
@@ -684,6 +697,9 @@ export default function StockPage() {
                 const originalCost = parseNumber(product.cost ?? null);
                 const currentCost = parseNumber(draft.cost);
                 const costChanged = originalCost !== currentCost;
+                const originalCostUsd = parseNumber(product.costUsd ?? null);
+                const currentCostUsd = parseNumber(draft.costUsd);
+                const costUsdChanged = originalCostUsd !== currentCostUsd;
                 const computedPrices = calculatePricesFromPercentages(
                   currentCost,
                   draft.percentages,
@@ -711,6 +727,7 @@ export default function StockPage() {
                   Number.isFinite(adjustment) && adjustment !== 0;
                 const hasRowChanges =
                   costChanged ||
+                  costUsdChanged ||
                   pricesChanged ||
                   adjustmentChanged ||
                   hasPercentagesWithoutCost;
@@ -754,6 +771,22 @@ export default function StockPage() {
                           placeholder="0,00"
                           maxDecimals={2}
                           prefix="$"
+                        />
+                      </div>
+                    </td>
+                    <td className="py-3 pr-3">
+                      <div className="w-32">
+                        <MoneyInput
+                          className="input no-spinner w-full px-2 text-right tabular-nums"
+                          value={draft.costUsd}
+                          onValueChange={(nextValue) =>
+                            updateRow(product.id, {
+                              costUsd: normalizeMoney(nextValue),
+                            })
+                          }
+                          placeholder="0,00"
+                          maxDecimals={2}
+                          prefix="USD "
                         />
                       </div>
                     </td>
@@ -849,7 +882,7 @@ export default function StockPage() {
                 <tr>
                   <td
                     className="py-4 text-sm text-zinc-500"
-                    colSpan={priceLists.length + 4}
+                    colSpan={priceLists.length + 5}
                   >
                     No hay productos para mostrar.
                   </td>

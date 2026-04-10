@@ -116,12 +116,14 @@ export default function SuppliersPage() {
       }
       const taxpayer = data?.taxpayer;
       const legalName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
+      const address = taxpayer?.address ?? "";
       if (target === "new") {
         setForm((prev) => ({
           ...prev,
           taxId,
           legalName: legalName || prev.legalName,
           displayName: prev.displayName || taxpayer?.displayName || prev.legalName,
+          address: prev.address || address,
         }));
       } else {
         setEditForm((prev) => ({
@@ -129,6 +131,7 @@ export default function SuppliersPage() {
           taxId,
           legalName: legalName || prev.legalName,
           displayName: prev.displayName || taxpayer?.displayName || prev.legalName,
+          address: prev.address || address,
         }));
       }
       setStatus(`Datos ARCA actualizados (${data.source}).`);

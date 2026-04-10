@@ -36,6 +36,8 @@ export type ProductOption = {
   brand: string | null;
   model: string | null;
   unit: string | null;
+  cost: string | null;
+  costUsd: string | null;
   price: string | null;
   prices?: Array<{
     priceListId: string;

@@ -48,3 +48,22 @@ test("resolveSuggestedProductPrice falls back to default list then product", () 
   });
   assert.equal(fromProduct, "110.00");
 });
+
+test("resolveSuggestedProductPrice recalculates from USD cost with internal FX", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: "130.00" },
+      { priceListId: "special", price: "150.00" },
+    ],
+    productCost: "100.00",
+    productCostUsd: "10.00",
+    productPrice: "150.00",
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+    usdRateArs: 12,
+    priceListOrderIds: ["general", "special"],
+  });
+
+  assert.equal(result, "180.00");
+});

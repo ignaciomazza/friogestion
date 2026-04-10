@@ -34,40 +34,49 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [customers, products, quotes, priceLists, organization] = await Promise.all([
-    prisma.customer.findMany({
-      where: { organizationId: membership.organizationId, systemKey: null },
-      orderBy: { createdAt: "desc" },
-      take: 120,
-    }),
-    prisma.product.findMany({
-      where: { organizationId: membership.organizationId },
-      include: {
-        priceItems: {
-          select: {
-            priceListId: true,
-            price: true,
+  const [customers, products, quotes, priceLists, organization, usdRate] =
+    await Promise.all([
+      prisma.customer.findMany({
+        where: { organizationId: membership.organizationId, systemKey: null },
+        orderBy: { createdAt: "desc" },
+        take: 120,
+      }),
+      prisma.product.findMany({
+        where: { organizationId: membership.organizationId },
+        include: {
+          priceItems: {
+            select: {
+              priceListId: true,
+              price: true,
+            },
           },
         },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 120,
-    }),
-    prisma.quote.findMany({
-      where: { organizationId: membership.organizationId },
-      include: { customer: true, sale: true, priceList: true },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    }),
-    prisma.priceList.findMany({
-      where: { organizationId: membership.organizationId, isActive: true },
-      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
-    }),
-    prisma.organization.findUnique({
-      where: { id: membership.organizationId },
-      select: { adjustStockOnQuoteConfirm: true },
-    }),
-  ]);
+        orderBy: { createdAt: "desc" },
+        take: 120,
+      }),
+      prisma.quote.findMany({
+        where: { organizationId: membership.organizationId },
+        include: { customer: true, sale: true, priceList: true },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      }),
+      prisma.priceList.findMany({
+        where: { organizationId: membership.organizationId, isActive: true },
+        orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      }),
+      prisma.organization.findUnique({
+        where: { id: membership.organizationId },
+        select: { adjustStockOnQuoteConfirm: true },
+      }),
+      prisma.exchangeRate.findFirst({
+        where: {
+          organizationId: membership.organizationId,
+          baseCode: "USD",
+          quoteCode: "ARS",
+        },
+        orderBy: { asOf: "desc" },
+      }),
+    ]);
 
   return (
     <QuotesClient
@@ -90,6 +99,8 @@ export default async function QuotesPage() {
         brand: product.brand,
         model: product.model,
         unit: product.unit,
+        cost: product.cost?.toString() ?? null,
+        costUsd: product.costUsd?.toString() ?? null,
         price: product.price?.toString() ?? null,
         prices: product.priceItems.map((priceItem) => ({
           priceListId: priceItem.priceListId,
@@ -121,6 +132,7 @@ export default async function QuotesPage() {
       initialAdjustStockOnConfirm={
         organization?.adjustStockOnQuoteConfirm ?? true
       }
+      initialLatestUsdRate={usdRate?.rate?.toString() ?? null}
     />
   );
 }

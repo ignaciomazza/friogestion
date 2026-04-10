@@ -134,6 +134,12 @@ export function NewQuoteForm({
   submitLabel,
 }: NewQuoteFormProps) {
   const isConsumerFinalToggleDisabled = isResolvingConsumerFinal || isSubmitting;
+  const isPercentExtra =
+    extraType === "PERCENT" || extraType === "DISCOUNT_PERCENT";
+  const isDiscountExtra =
+    extraType === "DISCOUNT_PERCENT" || extraType === "DISCOUNT_FIXED";
+  const extraSummaryLabel =
+    extraAmount < 0 ? "Descuento" : extraAmount > 0 ? "Recargo" : "Ajuste";
 
   return (
     <div className="card space-y-6 p-6 lg:p-7">
@@ -581,7 +587,7 @@ export function NewQuoteForm({
 
           <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
             <div className="space-y-3 text-sm">
-              <p className="section-title">Recargo extra</p>
+              <p className="section-title">Ajuste extra</p>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -591,7 +597,7 @@ export function NewQuoteForm({
                   onClick={() => onExtraTypeChange("NONE")}
                   aria-pressed={extraType === "NONE"}
                 >
-                  Sin recargo
+                  Sin ajuste
                 </button>
                 <button
                   type="button"
@@ -601,7 +607,7 @@ export function NewQuoteForm({
                   onClick={() => onExtraTypeChange("PERCENT")}
                   aria-pressed={extraType === "PERCENT"}
                 >
-                  Porcentaje
+                  Recargo %
                 </button>
                 <button
                   type="button"
@@ -611,25 +617,45 @@ export function NewQuoteForm({
                   onClick={() => onExtraTypeChange("FIXED")}
                   aria-pressed={extraType === "FIXED"}
                 >
-                  Monto fijo
+                  Recargo $
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-pill ${
+                    extraType === "DISCOUNT_PERCENT" ? "toggle-pill-active" : ""
+                  }`}
+                  onClick={() => onExtraTypeChange("DISCOUNT_PERCENT")}
+                  aria-pressed={extraType === "DISCOUNT_PERCENT"}
+                >
+                  Descuento %
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-pill ${
+                    extraType === "DISCOUNT_FIXED" ? "toggle-pill-active" : ""
+                  }`}
+                  onClick={() => onExtraTypeChange("DISCOUNT_FIXED")}
+                  aria-pressed={extraType === "DISCOUNT_FIXED"}
+                >
+                  Descuento $
                 </button>
               </div>
               <div className="field-stack max-w-sm">
                 <span className="input-label">
-                  {extraType === "PERCENT" ? "Valor (%)" : "Valor ($)"}
+                  {isPercentExtra ? "Valor (%)" : "Valor ($)"}
                 </span>
                 <div className="relative">
-                  {extraType === "PERCENT" ? null : (
+                  {isPercentExtra ? null : (
                     <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
                       $
                     </span>
                   )}
-                  {extraType === "PERCENT" ? (
+                  {isPercentExtra ? (
                     <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
                       %
                     </span>
                   ) : null}
-                  {extraType === "PERCENT" ? (
+                  {isPercentExtra ? (
                     <input
                       type="text"
                       inputMode="decimal"
@@ -657,7 +683,9 @@ export function NewQuoteForm({
                 </div>
               </div>
               <p className="section-subtitle">
-                El recargo se aplica sobre el subtotal.
+                {extraType === "NONE"
+                  ? "Sin recargo ni descuento aplicado."
+                  : `${isDiscountExtra ? "El descuento" : "El recargo"} se aplica sobre el subtotal.`}
               </p>
             </div>
 
@@ -677,7 +705,7 @@ export function NewQuoteForm({
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span>Recargo</span>
+                  <span>{extraSummaryLabel}</span>
                   <span className="font-semibold text-emerald-950/95">
                     {formatCurrencyARS(extraAmount)}
                   </span>

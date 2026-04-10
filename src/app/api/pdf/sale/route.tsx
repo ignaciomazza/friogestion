@@ -139,8 +139,14 @@ export async function GET(req: NextRequest) {
           totals: [
             { label: "Subtotal", value: Number(sale.subtotal ?? 0) },
             { label: "Impuestos", value: Number(sale.taxes ?? 0) },
-            ...(Number(sale.extraAmount ?? 0) > 0
-              ? [{ label: "Recargos", value: Number(sale.extraAmount ?? 0) }]
+            ...(Number(sale.extraAmount ?? 0) !== 0
+              ? [{
+                  label:
+                    Number(sale.extraAmount ?? 0) > 0
+                      ? "Recargos"
+                      : "Descuentos",
+                  value: Number(sale.extraAmount ?? 0),
+                }]
               : []),
             ...(interestTotal > 0
               ? [{ label: "Interes", value: interestTotal }]
