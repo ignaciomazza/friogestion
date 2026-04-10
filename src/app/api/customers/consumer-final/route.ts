@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
       address: customer.address,
       type: customer.type,
       systemKey: customer.systemKey,
+      defaultPriceListId: customer.defaultPriceListId,
     });
   } catch (error) {
     if (isAuthError(error)) {

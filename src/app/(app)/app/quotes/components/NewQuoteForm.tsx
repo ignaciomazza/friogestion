@@ -363,7 +363,7 @@ export function NewQuoteForm({
                               onKeyDown={(event) =>
                                 onProductKeyDown(event, index, productMatches)
                               }
-                              placeholder="Buscar producto"
+                              placeholder="Buscar por nombre o codigo"
                               autoComplete="off"
                               role="combobox"
                               aria-autocomplete="list"

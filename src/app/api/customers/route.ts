@@ -13,6 +13,7 @@ const customerSchema = z.object({
   type: z
     .enum(["CONSUMER_FINAL", "INSTALLER", "BUSINESS", "PUBLIC_ENTITY"])
     .optional(),
+  defaultPriceListId: z.string().min(1).optional(),
   email: z.string().email().optional(),
   phone: z.string().min(4).optional(),
   taxId: z.string().min(6).optional(),
@@ -25,11 +26,35 @@ const customerUpdateSchema = z.object({
   type: z
     .enum(["CONSUMER_FINAL", "INSTALLER", "BUSINESS", "PUBLIC_ENTITY"])
     .optional(),
+  defaultPriceListId: z.string().min(1).optional(),
   email: z.string().email().optional(),
   phone: z.string().min(4).optional(),
   taxId: z.string().min(6).optional(),
   address: z.string().min(3).optional(),
 });
+
+const normalizeDefaultPriceListId = (value?: string) => {
+  const trimmed = value?.trim();
+  return trimmed || null;
+};
+
+const ensureDefaultPriceList = async (
+  organizationId: string,
+  defaultPriceListId: string | null,
+) => {
+  if (!defaultPriceListId) return null;
+
+  const priceList = await prisma.priceList.findFirst({
+    where: { id: defaultPriceListId, organizationId, isActive: true },
+    select: { id: true },
+  });
+
+  if (!priceList) {
+    throw new Error("PRICE_LIST_INVALID");
+  }
+
+  return priceList.id;
+};
 
 export async function GET(req: NextRequest) {
   try {
@@ -51,6 +76,7 @@ export async function GET(req: NextRequest) {
         address: customer.address,
         type: customer.type,
         systemKey: customer.systemKey,
+        defaultPriceListId: customer.defaultPriceListId,
       }))
     );
   } catch {
@@ -63,12 +89,17 @@ export async function POST(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = customerSchema.parse(await req.json());
+    const defaultPriceListId = await ensureDefaultPriceList(
+      organizationId,
+      normalizeDefaultPriceListId(body.defaultPriceListId),
+    );
 
     const customer = await prisma.customer.create({
       data: {
         organizationId,
         displayName: body.displayName.trim(),
         type: body.type ?? "CONSUMER_FINAL",
+        defaultPriceListId: defaultPriceListId ?? undefined,
         email: body.email?.trim() || undefined,
         phone: body.phone?.trim() || undefined,
         taxId: body.taxId?.trim() || undefined,
@@ -86,10 +117,17 @@ export async function POST(req: NextRequest) {
       address: customer.address,
       type: customer.type,
       systemKey: customer.systemKey,
+      defaultPriceListId: customer.defaultPriceListId,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (error instanceof Error && error.message === "PRICE_LIST_INVALID") {
+      return NextResponse.json(
+        { error: "Lista de precios invalida" },
+        { status: 400 },
+      );
     }
     if (isAuthError(error)) {
       return NextResponse.json(
@@ -107,6 +145,13 @@ export async function PATCH(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = customerUpdateSchema.parse(await req.json());
+    let defaultPriceListId: string | null | undefined = undefined;
+    if (body.defaultPriceListId !== undefined) {
+      defaultPriceListId = await ensureDefaultPriceList(
+        organizationId,
+        normalizeDefaultPriceListId(body.defaultPriceListId),
+      );
+    }
 
     const existing = await prisma.customer.findFirst({
       where: { id: body.id, organizationId },
@@ -125,6 +170,9 @@ export async function PATCH(req: NextRequest) {
       data: {
         displayName: body.displayName.trim(),
         type: body.type ?? "CONSUMER_FINAL",
+        ...(defaultPriceListId !== undefined
+          ? { defaultPriceListId }
+          : {}),
         email: body.email?.trim() || undefined,
         phone: body.phone?.trim() || undefined,
         taxId: body.taxId?.trim() || undefined,
@@ -142,10 +190,17 @@ export async function PATCH(req: NextRequest) {
       address: customer.address,
       type: customer.type,
       systemKey: customer.systemKey,
+      defaultPriceListId: customer.defaultPriceListId,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (error instanceof Error && error.message === "PRICE_LIST_INVALID") {
+      return NextResponse.json(
+        { error: "Lista de precios invalida" },
+        { status: 400 },
+      );
     }
     if (isAuthError(error)) {
       return NextResponse.json(

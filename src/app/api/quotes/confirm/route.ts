@@ -11,6 +11,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
 const confirmSchema = z.object({
   id: z.string().min(1),
+  adjustStock: z.boolean().optional(),
 });
 
 const parseSequenceNumber = (value?: string | null) => {
@@ -168,18 +169,20 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const saleStock = buildSaleOutMovements({
-        organizationId,
-        occurredAt: created.saleDate ?? new Date(),
-        note: `Salida por venta ${created.saleNumber ?? created.id}`,
-        items: created.items.map((item) => ({
-          id: item.id,
-          productId: item.productId,
-          qty: Number(item.qty),
-        })),
-      });
-      if (saleStock.length) {
-        await tx.stockMovement.createMany({ data: saleStock });
+      if (body.adjustStock !== false) {
+        const saleStock = buildSaleOutMovements({
+          organizationId,
+          occurredAt: created.saleDate ?? new Date(),
+          note: `Salida por venta ${created.saleNumber ?? created.id}`,
+          items: created.items.map((item) => ({
+            id: item.id,
+            productId: item.productId,
+            qty: Number(item.qty),
+          })),
+        });
+        if (saleStock.length) {
+          await tx.stockMovement.createMany({ data: saleStock });
+        }
       }
 
       return created;

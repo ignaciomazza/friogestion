@@ -26,6 +26,7 @@ const saleSchema = z.object({
   billingStatus: z.enum(["NOT_BILLED", "TO_BILL", "BILLED"]).optional(),
   extraType: z.enum(["PERCENT", "FIXED"]).optional(),
   extraValue: z.coerce.number().min(0).optional(),
+  adjustStock: z.boolean().optional(),
   items: z.array(saleItemSchema).min(1),
 });
 
@@ -314,18 +315,20 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const stockMovements = buildSaleOutMovements({
-        organizationId,
-        occurredAt: created.saleDate ?? new Date(),
-        note: `Salida por venta ${created.saleNumber ?? created.id}`,
-        items: created.items.map((item) => ({
-          id: item.id,
-          productId: item.productId,
-          qty: Number(item.qty),
-        })),
-      });
-      if (stockMovements.length) {
-        await tx.stockMovement.createMany({ data: stockMovements });
+      if (body.adjustStock !== false) {
+        const stockMovements = buildSaleOutMovements({
+          organizationId,
+          occurredAt: created.saleDate ?? new Date(),
+          note: `Salida por venta ${created.saleNumber ?? created.id}`,
+          items: created.items.map((item) => ({
+            id: item.id,
+            productId: item.productId,
+            qty: Number(item.qty),
+          })),
+        });
+        if (stockMovements.length) {
+          await tx.stockMovement.createMany({ data: stockMovements });
+        }
       }
 
       return created;

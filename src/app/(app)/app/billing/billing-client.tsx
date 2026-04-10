@@ -24,6 +24,7 @@ type AfipStatus = {
 type BillingClientProps = {
   initialSales: SaleRow[];
   afipStatus: AfipStatus;
+  defaultPointOfSale: number | null;
 };
 
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
@@ -31,6 +32,7 @@ const CONSUMER_FINAL_THRESHOLD = 10_000_000;
 export default function BillingClient({
   initialSales,
   afipStatus,
+  defaultPointOfSale,
 }: BillingClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
   const [sortOrder, setSortOrder] = useState("newest");
@@ -44,7 +46,6 @@ export default function BillingClient({
   const [invoiceWarnings, setInvoiceWarnings] = useState<string[]>([]);
   const [invoiceForm, setInvoiceForm] = useState({
     type: "B" as "A" | "B",
-    pointOfSale: "",
     docType: "",
     docNumber: "",
     requiresIncomeTaxDeduction: false,
@@ -135,7 +136,6 @@ export default function BillingClient({
     setInvoiceStatus(null);
     setInvoiceForm({
       type: "B",
-      pointOfSale: "",
       docType: sale.customerTaxId ? "80" : "",
       docNumber: sale.customerTaxId?.replace(/\D/g, "") ?? "",
       requiresIncomeTaxDeduction: false,
@@ -177,9 +177,6 @@ export default function BillingClient({
         body: JSON.stringify({
           saleId: saleToInvoice.id,
           type: invoiceForm.type,
-          pointOfSale: invoiceForm.pointOfSale
-            ? Number(invoiceForm.pointOfSale)
-            : undefined,
           docType: invoiceForm.docType || undefined,
           docNumber: invoiceForm.docNumber || undefined,
           manualTotals: {
@@ -634,21 +631,9 @@ export default function BillingClient({
                   <option value="B">Factura B</option>
                 </select>
               </label>
-              <label className="field-stack">
-                <span className="input-label">Punto de venta (opc.)</span>
-                <input
-                  className="input no-spinner"
-                  inputMode="numeric"
-                  value={invoiceForm.pointOfSale}
-                  onChange={(event) =>
-                    setInvoiceForm((prev) => ({
-                      ...prev,
-                      pointOfSale: event.target.value.replace(/\D/g, ""),
-                    }))
-                  }
-                  placeholder="Auto"
-                />
-              </label>
+              <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-500">
+                Punto de venta: se usa el predeterminado definido en Admin.
+              </div>
               <label className="field-stack">
                 <span className="input-label">Doc tipo (opc.)</span>
                 <input
@@ -697,6 +682,10 @@ export default function BillingClient({
                 Se puede continuar, pero quedara aviso de cumplimiento.
               </p>
             ) : null}
+            <p className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800">
+              PV default empresa:{" "}
+              {defaultPointOfSale ? ` ${defaultPointOfSale}` : "sin configurar en Admin"}
+            </p>
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm text-zinc-600">
                 Total:{" "}

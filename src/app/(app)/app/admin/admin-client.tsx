@@ -1,7 +1,14 @@
 "use client";
 
 import type { FormEvent, MouseEvent, ReactElement, ReactNode } from "react";
-import { Children, cloneElement, isValidElement, useEffect, useState } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useCallback,
+  useEffect,
+  useState,
+} from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useRouter } from "next/navigation";
 import {
@@ -73,6 +80,14 @@ type CurrencyRow = {
   isDefault: boolean;
 };
 
+type PriceListRow = {
+  id: string;
+  name: string;
+  currencyCode: string;
+  isDefault: boolean;
+  isActive: boolean;
+};
+
 type AdminClientProps = {
   activeOrg: { id: string; name: string };
   users: UserRow[];
@@ -91,6 +106,7 @@ type AdminClientProps = {
       taxIdRepresentado: string;
       taxIdLogin: string;
       alias: string;
+      defaultPointOfSale?: number | null;
       authorizedServices: string[];
       lastError?: string | null;
       lastOkAt?: string | null;
@@ -114,6 +130,7 @@ type AdminClientProps = {
   paymentMethods: PaymentMethodRow[];
   accounts: AccountRow[];
   currencies: CurrencyRow[];
+  priceLists: PriceListRow[];
 };
 
 const ARCA_CONFIG_LABELS: Record<string, string> = {
@@ -172,6 +189,10 @@ function normalizeArcaServices(services: string[] | null | undefined) {
   ).filter(isAllowedService);
 
   return normalized.length ? normalized : ["wsfe"];
+}
+
+function normalizeArcaMessage(value: string) {
+  return value.replace(/AFIP/gi, "ARCA");
 }
 
 const PAYMENT_METHOD_TYPE_LABELS: Record<PaymentMethodRow["type"], string> = {
@@ -290,6 +311,7 @@ export default function AdminClient({
   paymentMethods: initialPaymentMethods,
   accounts: initialAccounts,
   currencies,
+  priceLists: initialPriceLists,
 }: AdminClientProps) {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState("");
@@ -308,6 +330,12 @@ export default function AdminClient({
   const [afipVoucherType, setAfipVoucherType] = useState("6");
   const [afipResult, setAfipResult] = useState<string | null>(null);
   const [isAfipChecking, setIsAfipChecking] = useState(false);
+  const [afipSalesPoints, setAfipSalesPoints] = useState<number[]>([]);
+  const [afipSalesPointsStatus, setAfipSalesPointsStatus] = useState<string | null>(
+    null,
+  );
+  const [isAfipSalesPointsLoading, setIsAfipSalesPointsLoading] = useState(false);
+  const [isAfipDefaultPosSaving, setIsAfipDefaultPosSaving] = useState(false);
   const [arcaConfig, setArcaConfig] = useState(arcaStatus.config);
   const [arcaJob, setArcaJob] = useState(arcaStatus.job);
   const [arcaJobInfo, setArcaJobInfo] = useState(arcaStatus.jobInfo ?? null);
@@ -348,6 +376,9 @@ export default function AdminClient({
     initialPaymentMethods
   );
   const [accounts, setAccounts] = useState<AccountRow[]>(initialAccounts);
+  const [priceLists, setPriceLists] = useState<PriceListRow[]>(
+    initialPriceLists,
+  );
   const defaultCurrencyCode =
     currencies.find((currency) => currency.isDefault)?.code ??
     currencies[0]?.code ??
@@ -368,8 +399,24 @@ export default function AdminClient({
   const [accountsStatus, setAccountsStatus] = useState<string | null>(null);
   const [isMethodsSubmitting, setIsMethodsSubmitting] = useState(false);
   const [isAccountsSubmitting, setIsAccountsSubmitting] = useState(false);
+  const [isPriceListSubmitting, setIsPriceListSubmitting] = useState(false);
   const [methodBusyId, setMethodBusyId] = useState<string | null>(null);
   const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
+  const [priceListsStatus, setPriceListsStatus] = useState<string | null>(null);
+  const [priceListBusyId, setPriceListBusyId] = useState<string | null>(null);
+  const [editingPriceListId, setEditingPriceListId] = useState<string | null>(
+    null,
+  );
+  const [editingPriceList, setEditingPriceList] = useState({
+    name: "",
+    currencyCode: defaultCurrencyCode,
+    isDefault: false,
+  });
+  const [newPriceList, setNewPriceList] = useState({
+    name: "",
+    currencyCode: defaultCurrencyCode,
+    isDefault: false,
+  });
   const afipReady = Boolean(afipStatus.ok && afipStatus.clientReady);
   const afipMissingItems = getAfipMissingItems(afipStatus.missing);
   const afipOptionalItems = getAfipMissingItems(afipStatus.missingOptional);
@@ -430,11 +477,25 @@ export default function AdminClient({
   const afipStatusClass = afipReady
     ? "bg-white text-emerald-800 border border-emerald-200"
     : "bg-white text-rose-800 border border-rose-200";
+  const defaultPointOfSale =
+    typeof arcaConfig?.defaultPointOfSale === "number" &&
+    Number.isFinite(arcaConfig.defaultPointOfSale) &&
+    arcaConfig.defaultPointOfSale > 0
+      ? Math.trunc(arcaConfig.defaultPointOfSale)
+      : null;
+  const selectedPointRaw = Number(afipPointOfSale);
+  const selectedPoint =
+    Number.isFinite(selectedPointRaw) && selectedPointRaw > 0
+      ? Math.trunc(selectedPointRaw)
+      : null;
+  const selectedPointAvailable =
+    selectedPoint !== null && afipSalesPoints.includes(selectedPoint);
+  const defaultPointAvailable =
+    defaultPointOfSale !== null && afipSalesPoints.includes(defaultPointOfSale);
+  const suggestedPoint = afipSalesPoints[0] ?? null;
 
   const formatDate = (value?: string | null) =>
     value ? new Date(value).toLocaleString("es-AR") : "-";
-  const normalizeArcaMessage = (value: string) =>
-    value.replace(/AFIP/gi, "ARCA");
   const helpLinkClass = (label: string) => {
     const normalized = label.toLowerCase();
     if (normalized.includes("token")) return "btn-sky";
@@ -493,10 +554,109 @@ export default function AdminClient({
     }
   };
 
+  const loadPriceLists = async () => {
+    const res = await fetch("/api/price-lists", { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as PriceListRow[];
+      setPriceLists(data.filter((priceList) => priceList.isActive !== false));
+    }
+  };
+
+  const loadAfipSalesPoints = useCallback(async () => {
+    setIsAfipSalesPointsLoading(true);
+    setAfipSalesPointsStatus(null);
+    try {
+      const res = await fetch("/api/afip/sales-points", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) {
+        setAfipSalesPoints([]);
+        setAfipSalesPointsStatus(
+          normalizeArcaMessage(
+            data?.error ?? "No se pudieron cargar puntos de venta",
+          ),
+        );
+        return;
+      }
+
+      const salesPoints = Array.isArray(data?.salesPoints)
+        ? data.salesPoints
+            .map((item: unknown) => Number(item))
+            .filter(
+              (item: number): item is number =>
+                Number.isFinite(item) && item > 0
+            )
+            .map((item: number) => Math.trunc(item))
+            .sort((a: number, b: number) => a - b)
+        : [];
+
+      setAfipSalesPoints(salesPoints);
+
+      if (!salesPoints.length) {
+        setAfipSalesPointsStatus(
+          "ARCA no devolvio puntos de venta habilitados para este CUIT.",
+        );
+        return;
+      }
+
+      const preferredPoint =
+        defaultPointOfSale !== null && salesPoints.includes(defaultPointOfSale)
+          ? defaultPointOfSale
+          : salesPoints[0];
+      const fallbackPoint = String(preferredPoint);
+      setAfipPointOfSale((prev) => {
+        const prevNumber = Number(prev);
+        if (!Number.isFinite(prevNumber) || prevNumber <= 0) return fallbackPoint;
+        const normalizedPrev = Math.trunc(prevNumber);
+        if (!salesPoints.includes(normalizedPrev)) return fallbackPoint;
+        return String(normalizedPrev);
+      });
+    } catch {
+      setAfipSalesPoints([]);
+      setAfipSalesPointsStatus("No se pudieron cargar puntos de venta");
+    } finally {
+      setIsAfipSalesPointsLoading(false);
+    }
+  }, [defaultPointOfSale]);
+
+  const saveDefaultPointOfSale = async (pointOfSale: number) => {
+    setIsAfipDefaultPosSaving(true);
+    setAfipSalesPointsStatus(null);
+    try {
+      const res = await fetch("/api/arca", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultPointOfSale: pointOfSale }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAfipSalesPointsStatus(
+          normalizeArcaMessage(
+            data?.error ?? "No se pudo guardar punto de venta por defecto",
+          ),
+        );
+        return;
+      }
+      if (data?.config) {
+        setArcaConfig(data.config);
+      }
+      setAfipPointOfSale(String(pointOfSale));
+      setAfipSalesPointsStatus(`PV ${pointOfSale} guardado como predeterminado.`);
+    } catch {
+      setAfipSalesPointsStatus("No se pudo guardar punto de venta por defecto");
+    } finally {
+      setIsAfipDefaultPosSaving(false);
+    }
+  };
+
   useEffect(() => {
     loadRateHistory().catch(() => undefined);
     loadMarketRates().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (arcaConfigStatus !== "CONNECTED") return;
+    loadAfipSalesPoints().catch(() => undefined);
+  }, [arcaConfigStatus, loadAfipSalesPoints]);
 
   useEffect(() => {
     const services = normalizeArcaServices(
@@ -972,6 +1132,115 @@ export default function AdminClient({
     }
   };
 
+  const handleCreatePriceList = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPriceListsStatus(null);
+    setIsPriceListSubmitting(true);
+    try {
+      const res = await fetch("/api/price-lists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newPriceList.name.trim(),
+          currencyCode: newPriceList.currencyCode.trim().toUpperCase(),
+          isDefault: newPriceList.isDefault,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setPriceListsStatus(data?.error ?? "No se pudo crear la lista");
+        return;
+      }
+
+      setNewPriceList({
+        name: "",
+        currencyCode: defaultCurrencyCode,
+        isDefault: false,
+      });
+      setPriceListsStatus("Lista de precios creada");
+      await loadPriceLists();
+    } catch {
+      setPriceListsStatus("No se pudo crear la lista");
+    } finally {
+      setIsPriceListSubmitting(false);
+    }
+  };
+
+  const handleStartEditPriceList = (priceList: PriceListRow) => {
+    setEditingPriceListId(priceList.id);
+    setEditingPriceList({
+      name: priceList.name,
+      currencyCode: priceList.currencyCode,
+      isDefault: priceList.isDefault,
+    });
+    setPriceListsStatus(null);
+  };
+
+  const handleCancelEditPriceList = () => {
+    setEditingPriceListId(null);
+    setEditingPriceList({
+      name: "",
+      currencyCode: defaultCurrencyCode,
+      isDefault: false,
+    });
+  };
+
+  const handleSaveEditPriceList = async (id: string) => {
+    setPriceListsStatus(null);
+    setPriceListBusyId(id);
+    try {
+      const res = await fetch("/api/price-lists", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          name: editingPriceList.name.trim(),
+          currencyCode: editingPriceList.currencyCode.trim().toUpperCase(),
+          isDefault: editingPriceList.isDefault,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setPriceListsStatus(data?.error ?? "No se pudo actualizar la lista");
+        return;
+      }
+
+      setPriceListsStatus("Lista actualizada");
+      handleCancelEditPriceList();
+      await loadPriceLists();
+    } catch {
+      setPriceListsStatus("No se pudo actualizar la lista");
+    } finally {
+      setPriceListBusyId(null);
+    }
+  };
+
+  const handleDeletePriceList = async (id: string) => {
+    if (!window.confirm("Eliminar lista de precios?")) return;
+    setPriceListsStatus(null);
+    setPriceListBusyId(id);
+    try {
+      const res = await fetch(`/api/price-lists?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setPriceListsStatus(data?.error ?? "No se pudo eliminar la lista");
+        return;
+      }
+
+      if (editingPriceListId === id) {
+        handleCancelEditPriceList();
+      }
+      setPriceListsStatus("Lista eliminada");
+      await loadPriceLists();
+    } catch {
+      setPriceListsStatus("No se pudo eliminar la lista");
+    } finally {
+      setPriceListBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <div>
@@ -1196,6 +1465,221 @@ export default function AdminClient({
               </div>
             </div>
           </Details>
+        </div>
+      </Section>
+
+      <Section
+        title="Listas de precios"
+        subtitle="Administra listas para clientes y stock."
+        icon={<DocumentTextIcon className="size-4" />}
+      >
+        <div className="space-y-5">
+          <form
+            onSubmit={handleCreatePriceList}
+            className="flex flex-wrap items-end gap-3"
+          >
+            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-72">
+              Nombre
+              <input
+                className="input text-sm"
+                value={newPriceList.name}
+                onChange={(event) =>
+                  setNewPriceList((prev) => ({
+                    ...prev,
+                    name: event.target.value,
+                  }))
+                }
+                placeholder="Ej: Responsable inscripto"
+                required
+              />
+            </label>
+            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-36">
+              Moneda
+              <select
+                className="input cursor-pointer text-sm"
+                value={newPriceList.currencyCode}
+                onChange={(event) =>
+                  setNewPriceList((prev) => ({
+                    ...prev,
+                    currencyCode: event.target.value,
+                  }))
+                }
+              >
+                {currencies.map((currency) => (
+                  <option key={currency.id} value={currency.code}>
+                    {currency.code}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 pb-2 text-xs text-zinc-600">
+              <input
+                type="checkbox"
+                checked={newPriceList.isDefault}
+                onChange={(event) =>
+                  setNewPriceList((prev) => ({
+                    ...prev,
+                    isDefault: event.target.checked,
+                  }))
+                }
+              />
+              Marcar como Default
+            </label>
+            <button
+              type="submit"
+              className="btn btn-emerald"
+              disabled={isPriceListSubmitting}
+            >
+              {isPriceListSubmitting ? "Guardando..." : "Crear lista"}
+            </button>
+          </form>
+
+          {priceListsStatus ? (
+            <p className="text-xs text-zinc-500">{priceListsStatus}</p>
+          ) : null}
+
+          <div className="table-scroll">
+            <table className="w-full text-left text-sm">
+              <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                <tr>
+                  <th className="py-2 pr-4">Lista</th>
+                  <th className="py-2 pr-4">Moneda</th>
+                  <th className="py-2 pr-4">Estado</th>
+                  <th className="py-2 pr-4 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {priceLists.length ? (
+                  priceLists.map((priceList) => {
+                    const isEditing = editingPriceListId === priceList.id;
+                    const isBusy = priceListBusyId === priceList.id;
+                    return (
+                      <tr
+                        key={priceList.id}
+                        className="border-t border-zinc-200/60"
+                      >
+                        <td className="py-2 pr-4 text-zinc-900">
+                          {isEditing ? (
+                            <input
+                              className="input h-9 text-sm"
+                              value={editingPriceList.name}
+                              onChange={(event) =>
+                                setEditingPriceList((prev) => ({
+                                  ...prev,
+                                  name: event.target.value,
+                                }))
+                              }
+                              placeholder="Nombre de lista"
+                            />
+                          ) : (
+                            priceList.name
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-zinc-700">
+                          {isEditing ? (
+                            <select
+                              className="input h-9 cursor-pointer text-sm"
+                              value={editingPriceList.currencyCode}
+                              onChange={(event) =>
+                                setEditingPriceList((prev) => ({
+                                  ...prev,
+                                  currencyCode: event.target.value,
+                                }))
+                              }
+                            >
+                              {currencies.map((currency) => (
+                                <option key={currency.id} value={currency.code}>
+                                  {currency.code}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            priceList.currencyCode
+                          )}
+                        </td>
+                        <td className="py-2 pr-4">
+                          {isEditing ? (
+                            <label className="inline-flex items-center gap-2 text-xs text-zinc-600">
+                              <input
+                                type="checkbox"
+                                checked={editingPriceList.isDefault}
+                                onChange={(event) =>
+                                  setEditingPriceList((prev) => ({
+                                    ...prev,
+                                    isDefault: event.target.checked,
+                                  }))
+                                }
+                              />
+                              Default
+                            </label>
+                          ) : (
+                            <span
+                              className={`pill border px-2 py-1 text-[10px] font-semibold uppercase ${
+                                priceList.isDefault
+                                  ? "border-emerald-200 bg-white text-emerald-800"
+                                  : "border-zinc-200 bg-white text-zinc-700"
+                              }`}
+                            >
+                              {priceList.isDefault ? "Default" : "Activa"}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-right">
+                          <div className="inline-flex items-center gap-2">
+                            {isEditing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn btn-emerald text-xs"
+                                  onClick={() => handleSaveEditPriceList(priceList.id)}
+                                  disabled={isBusy || !editingPriceList.name.trim()}
+                                >
+                                  {isBusy ? "Guardando..." : "Guardar"}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn text-xs"
+                                  onClick={handleCancelEditPriceList}
+                                  disabled={isBusy}
+                                >
+                                  Cancelar
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn text-xs"
+                                  onClick={() => handleStartEditPriceList(priceList)}
+                                  disabled={Boolean(priceListBusyId)}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-rose text-xs"
+                                  onClick={() => handleDeletePriceList(priceList.id)}
+                                  disabled={Boolean(priceListBusyId)}
+                                >
+                                  {isBusy ? "Eliminando..." : "Eliminar"}
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td className="py-3 text-sm text-zinc-500" colSpan={4}>
+                      Sin listas por ahora.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </Section>
 
@@ -1528,6 +2012,106 @@ export default function AdminClient({
             </span>
           </div>
 
+          <div className="rounded-2xl border border-zinc-200/70 bg-white/40 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Puntos de venta ARCA
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Disponibles para el CUIT representado.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={() => loadAfipSalesPoints().catch(() => undefined)}
+                disabled={
+                  isAfipSalesPointsLoading || isAfipDefaultPosSaving || !afipReady
+                }
+              >
+                {isAfipSalesPointsLoading ? (
+                  <>
+                    <Spinner />
+                    Cargando...
+                  </>
+                ) : (
+                  "Actualizar puntos"
+                )}
+              </button>
+            </div>
+
+            {afipSalesPointsStatus ? (
+              <p className="mt-2 text-xs text-zinc-500">{afipSalesPointsStatus}</p>
+            ) : null}
+
+            {afipSalesPoints.length ? (
+              <>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {afipSalesPoints.map((point) => {
+                    const selected = selectedPoint === point;
+                    const isDefault = defaultPointOfSale === point;
+                    return (
+                      <button
+                        key={point}
+                        type="button"
+                        onClick={() => setAfipPointOfSale(String(point))}
+                        className={`pill text-xs ${
+                          isDefault
+                            ? "bg-white text-emerald-800 border border-emerald-200"
+                            : selected
+                            ? "bg-white text-sky-800 border border-sky-200"
+                            : "bg-zinc-100/25 text-zinc-700 border border-zinc-200/70"
+                        }`}
+                      >
+                        PV {point}
+                        {isDefault ? " · default" : ""}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="mt-2 text-xs text-zinc-500">
+                  Predeterminado para facturar:{" "}
+                  {defaultPointOfSale !== null ? `PV ${defaultPointOfSale}` : "-"}
+                  {defaultPointOfSale !== null
+                    ? defaultPointAvailable
+                      ? " (habilitado)"
+                      : " (fuera de la lista actual)"
+                    : ""}
+                  {suggestedPoint !== null ? ` · Sugerido por ARCA: PV ${suggestedPoint}` : ""}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Seleccionado para consulta:{" "}
+                  {selectedPoint !== null ? `PV ${selectedPoint}` : "-"}
+                  {selectedPoint !== null
+                    ? selectedPointAvailable
+                      ? " (habilitado)"
+                      : " (fuera de la lista actual)"
+                    : ""}
+                </p>
+                {selectedPointAvailable && selectedPoint !== defaultPointOfSale ? (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="btn btn-emerald text-xs"
+                      onClick={() => saveDefaultPointOfSale(selectedPoint)}
+                      disabled={isAfipDefaultPosSaving || !afipReady}
+                    >
+                      {isAfipDefaultPosSaving ? (
+                        <>
+                          <Spinner />
+                          Guardando...
+                        </>
+                      ) : (
+                        `Usar PV ${selectedPoint} por defecto`
+                      )}
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+
           {afipMissingItems.length ||
           afipOptionalItems.length ||
           afipStatus.helpLinks?.length ? (
@@ -1783,6 +2367,14 @@ export default function AdminClient({
             <p className="mt-3 text-xs text-zinc-600">
               {arcaMainMessage}
             </p>
+            <div className="mt-2">
+              <span className="pill inline-flex min-h-7 items-center leading-none text-xs bg-white text-emerald-800 border border-emerald-200">
+                PV default facturacion:{" "}
+                {defaultPointOfSale !== null
+                  ? ` ${defaultPointOfSale}`
+                  : " sin definir"}
+              </span>
+            </div>
             <p className="mt-2 text-xs text-zinc-500">
               Servicios seleccionados:{" "}
               {normalizeArcaServices(arcaServices).join(", ")}

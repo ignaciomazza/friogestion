@@ -34,7 +34,7 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [customers, products, quotes] = await Promise.all([
+  const [customers, products, quotes, priceLists] = await Promise.all([
     prisma.customer.findMany({
       where: { organizationId: membership.organizationId, systemKey: null },
       orderBy: { createdAt: "desc" },
@@ -42,6 +42,14 @@ export default async function QuotesPage() {
     }),
     prisma.product.findMany({
       where: { organizationId: membership.organizationId },
+      include: {
+        priceItems: {
+          select: {
+            priceListId: true,
+            price: true,
+          },
+        },
+      },
       orderBy: { createdAt: "desc" },
       take: 120,
     }),
@@ -50,6 +58,10 @@ export default async function QuotesPage() {
       include: { customer: true, sale: true },
       orderBy: { createdAt: "desc" },
       take: 50,
+    }),
+    prisma.priceList.findMany({
+      where: { organizationId: membership.organizationId, isActive: true },
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
     }),
   ]);
 
@@ -65,6 +77,7 @@ export default async function QuotesPage() {
         address: customer.address,
         type: customer.type,
         systemKey: customer.systemKey,
+        defaultPriceListId: customer.defaultPriceListId,
       }))}
       initialProducts={products.map((product) => ({
         id: product.id,
@@ -74,6 +87,10 @@ export default async function QuotesPage() {
         model: product.model,
         unit: product.unit,
         price: product.price?.toString() ?? null,
+        prices: product.priceItems.map((priceItem) => ({
+          priceListId: priceItem.priceListId,
+          price: priceItem.price.toString(),
+        })),
       }))}
       initialQuotes={quotes.map((quote) => ({
         id: quote.id,
@@ -86,6 +103,13 @@ export default async function QuotesPage() {
         total: quote.total?.toString() ?? null,
         status: quote.status,
         saleId: quote.sale?.id ?? null,
+      }))}
+      initialPriceLists={priceLists.map((priceList) => ({
+        id: priceList.id,
+        name: priceList.name,
+        currencyCode: priceList.currencyCode,
+        isDefault: priceList.isDefault,
+        isActive: priceList.isActive,
       }))}
     />
   );

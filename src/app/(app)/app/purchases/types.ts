@@ -25,12 +25,18 @@ export type PurchaseRow = {
   invoiceNumber: string | null;
   invoiceDate: string | null;
   createdAt: string;
+  subtotal?: string | null;
+  taxes?: string | null;
   total: string | null;
   paidTotal?: string | null;
   balance?: string | null;
   paymentStatus?: string | null;
   itemsCount: number;
   status: string;
+  hasInvoice?: boolean;
+  impactsAccount?: boolean;
+  adjustedStock?: boolean;
+  cashOutRegistered?: boolean;
   arcaValidationStatus?: string | null;
   arcaValidationMessage?: string | null;
   arcaValidationCheckedAt?: string | null;

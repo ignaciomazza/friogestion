@@ -24,6 +24,7 @@ export type CustomerOption = {
   address: string | null;
   type: string;
   systemKey: string | null;
+  defaultPriceListId?: string | null;
 };
 
 export type ProductOption = {
@@ -34,6 +35,18 @@ export type ProductOption = {
   model: string | null;
   unit: string | null;
   price: string | null;
+  prices?: Array<{
+    priceListId: string;
+    price: string;
+  }>;
+};
+
+export type PriceListOption = {
+  id: string;
+  name: string;
+  currencyCode: string;
+  isDefault: boolean;
+  isActive: boolean;
 };
 
 export type QuoteItemForm = {

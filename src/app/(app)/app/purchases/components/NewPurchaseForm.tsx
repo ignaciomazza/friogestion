@@ -118,7 +118,7 @@ export function NewPurchaseForm({
                   onFocus={onSupplierFocus}
                   onBlur={onSupplierBlur}
                   onKeyDown={onSupplierKeyDown}
-                  placeholder="Buscar proveedor"
+                  placeholder="Buscar proveedor por nombre o CUIT"
                   autoComplete="off"
                   role="combobox"
                   aria-autocomplete="list"
@@ -285,7 +285,7 @@ export function NewPurchaseForm({
                               onKeyDown={(event) =>
                                 onProductKeyDown(event, index, productMatches)
                               }
-                              placeholder="Buscar producto"
+                              placeholder="Buscar por nombre o codigo"
                               autoComplete="off"
                               role="combobox"
                               aria-autocomplete="list"

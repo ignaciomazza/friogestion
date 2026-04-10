@@ -1,10 +1,12 @@
 "use client";
 
-import type { FormEvent } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { formatCurrencyARS, formatCurrencyUSD } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
 import type { PurchaseRow, SupplierOption } from "../types";
+import { formatSupplierLabel, normalizeQuery } from "../utils";
 
 type PaymentMethodOption = {
   id: string;
@@ -146,6 +148,9 @@ export function SupplierPaymentsPanel({
   onPaymentCreated,
 }: SupplierPaymentsPanelProps) {
   const [supplierId, setSupplierId] = useState("");
+  const [supplierSearch, setSupplierSearch] = useState("");
+  const [isSupplierOpen, setIsSupplierOpen] = useState(false);
+  const [supplierActiveIndex, setSupplierActiveIndex] = useState(0);
   const [paidAt, setPaidAt] = useState(
     new Date().toISOString().slice(0, 10),
   );
@@ -165,11 +170,24 @@ export function SupplierPaymentsPanel({
     [paymentMethods],
   );
 
+  const supplierMatches = useMemo(() => {
+    const query = normalizeQuery(supplierSearch);
+    const list = query
+      ? suppliers.filter((supplier) =>
+          `${supplier.displayName} ${supplier.taxId ?? ""}`
+            .toLowerCase()
+            .includes(query),
+        )
+      : suppliers;
+    return list.slice(0, 8);
+  }, [supplierSearch, suppliers]);
+
   const openPurchases = useMemo(() => {
     if (!supplierId) return [];
     return purchases.filter((purchase) => {
       if (purchase.supplierId !== supplierId) return false;
       if (purchase.status === "CANCELLED") return false;
+      if (purchase.impactsAccount === false) return false;
       const total = Number(purchase.total ?? 0);
       const paid = Number(purchase.paidTotal ?? 0);
       const storedBalance = Number(purchase.balance ?? 0);
@@ -205,10 +223,62 @@ export function SupplierPaymentsPanel({
       setRetentions([]);
       return;
     }
+    const selected = suppliers.find((supplier) => supplier.id === supplierId);
+    if (selected) {
+      setSupplierSearch(formatSupplierLabel(selected));
+    }
     loadPayments(supplierId).catch(() => undefined);
     setAllocations({});
     setRetentions([]);
-  }, [supplierId, loadPayments]);
+  }, [supplierId, suppliers, loadPayments]);
+
+  const handleSupplierSearchChange = (value: string) => {
+    setSupplierSearch(value);
+    setSupplierId("");
+    setIsSupplierOpen(true);
+    setSupplierActiveIndex(0);
+  };
+
+  const handleSupplierSelect = (supplier: SupplierOption) => {
+    setSupplierId(supplier.id);
+    setSupplierSearch(formatSupplierLabel(supplier));
+    setIsSupplierOpen(false);
+  };
+
+  const handleSupplierKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!supplierMatches.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!isSupplierOpen) {
+        setIsSupplierOpen(true);
+        setSupplierActiveIndex(0);
+        return;
+      }
+      setSupplierActiveIndex((prev) =>
+        Math.min(prev + 1, supplierMatches.length - 1),
+      );
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!isSupplierOpen) {
+        setIsSupplierOpen(true);
+        setSupplierActiveIndex(supplierMatches.length - 1);
+        return;
+      }
+      setSupplierActiveIndex((prev) => Math.max(prev - 1, 0));
+    }
+    if (event.key === "Enter") {
+      if (!isSupplierOpen) return;
+      event.preventDefault();
+      const candidate = supplierMatches[supplierActiveIndex];
+      if (candidate) {
+        handleSupplierSelect(candidate);
+      }
+    }
+    if (event.key === "Escape") {
+      setIsSupplierOpen(false);
+    }
+  };
 
   const addLine = () => {
     setLines((prev) => [...prev, buildLine(paymentMethods, currencies, latestUsdRate)]);
@@ -467,18 +537,92 @@ export function SupplierPaymentsPanel({
 
       <label className="flex flex-col gap-2 text-xs text-zinc-500">
         Proveedor
-        <select
-          className="input text-xs"
-          value={supplierId}
-          onChange={(event) => setSupplierId(event.target.value)}
-        >
-          <option value="">Selecciona proveedor</option>
-          {suppliers.map((supplier) => (
-            <option key={supplier.id} value={supplier.id}>
-              {supplier.displayName}
-            </option>
-          ))}
-        </select>
+        <div className="relative">
+          <input
+            className="input text-xs"
+            value={supplierSearch}
+            onChange={(event) => handleSupplierSearchChange(event.target.value)}
+            onFocus={() => {
+              setIsSupplierOpen(true);
+              setSupplierActiveIndex(0);
+            }}
+            onBlur={() => {
+              window.setTimeout(() => setIsSupplierOpen(false), 120);
+            }}
+            onKeyDown={handleSupplierKeyDown}
+            placeholder="Buscar proveedor por nombre o CUIT"
+            autoComplete="off"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-haspopup="listbox"
+            aria-expanded={isSupplierOpen}
+            aria-controls="supplier-payments-options"
+            aria-activedescendant={
+              isSupplierOpen && supplierMatches[supplierActiveIndex]
+                ? `supplier-payments-option-${supplierMatches[supplierActiveIndex].id}`
+                : undefined
+            }
+          />
+          <AnimatePresence>
+            {isSupplierOpen ? (
+              <motion.div
+                key="supplier-payments-options"
+                id="supplier-payments-options"
+                role="listbox"
+                aria-label="Proveedores"
+                initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
+              >
+                {suppliers.length ? (
+                  supplierMatches.length ? (
+                    supplierMatches.map((supplier, matchIndex) => {
+                      const isSelected = supplier.id === supplierId;
+                      const isActive = matchIndex === supplierActiveIndex;
+                      return (
+                        <button
+                          key={supplier.id}
+                          type="button"
+                          id={`supplier-payments-option-${supplier.id}`}
+                          role="option"
+                          aria-selected={isSelected}
+                          className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                            isActive
+                              ? "bg-white text-sky-900"
+                              : isSelected
+                                ? "bg-white text-sky-900"
+                                : "hover:bg-white/70"
+                          }`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleSupplierSelect(supplier);
+                          }}
+                        >
+                          <span className="font-medium text-zinc-900">
+                            {supplier.displayName}
+                          </span>
+                          <span className="text-xs text-zinc-500">
+                            {supplier.taxId ?? "Sin CUIT"}
+                          </span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="px-3 py-2 text-xs text-zinc-500">
+                      Sin resultados.
+                    </div>
+                  )
+                ) : (
+                  <div className="px-3 py-2 text-xs text-zinc-500">
+                    No hay proveedores cargados.
+                  </div>
+                )}
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
+        </div>
       </label>
 
       {status ? <p className="text-xs text-zinc-500">{status}</p> : null}

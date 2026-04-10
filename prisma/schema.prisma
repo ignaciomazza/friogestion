@@ -981,6 +981,7 @@ model OrganizationFiscalConfig {
   taxIdRepresentado  String
   taxIdLogin         String
   alias              String
+  defaultPointOfSale Int?
   certEncrypted      String?
   keyEncrypted       String?
   authorizedServices String[]

@@ -21,6 +21,15 @@ type CustomerRow = {
   email: string | null;
   phone: string | null;
   type: string;
+  defaultPriceListId?: string | null;
+};
+
+type PriceListOption = {
+  id: string;
+  name: string;
+  currencyCode: string;
+  isDefault: boolean;
+  isActive: boolean;
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -35,6 +44,7 @@ const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
 
 export default function CustomersPage() {
   const [items, setItems] = useState<CustomerRow[]>([]);
+  const [priceLists, setPriceLists] = useState<PriceListOption[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
@@ -47,6 +57,7 @@ export default function CustomersPage() {
     phone: "",
     taxId: "",
     address: "",
+    defaultPriceListId: "",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
@@ -56,6 +67,7 @@ export default function CustomersPage() {
     phone: "",
     taxId: "",
     address: "",
+    defaultPriceListId: "",
   });
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -70,8 +82,17 @@ export default function CustomersPage() {
     }
   };
 
+  const loadPriceLists = async () => {
+    const res = await fetch("/api/price-lists", { cache: "no-store" });
+    if (res.ok) {
+      const data = (await res.json()) as PriceListOption[];
+      setPriceLists(data.filter((priceList) => priceList.isActive !== false));
+    }
+  };
+
   useEffect(() => {
     loadCustomers().catch(() => undefined);
+    loadPriceLists().catch(() => undefined);
   }, []);
 
   const handleLookupByTaxId = async (target: "new" | "edit") => {
@@ -142,6 +163,7 @@ export default function CustomersPage() {
           phone: form.phone || undefined,
           taxId: form.taxId || undefined,
           address: form.address || undefined,
+          defaultPriceListId: form.defaultPriceListId || undefined,
         }),
       });
 
@@ -158,6 +180,7 @@ export default function CustomersPage() {
         phone: "",
         taxId: "",
         address: "",
+        defaultPriceListId: "",
       });
       setStatus("Cliente creado");
       await loadCustomers();
@@ -177,6 +200,7 @@ export default function CustomersPage() {
       phone: item.phone ?? "",
       taxId: item.taxId ?? "",
       address: item.address ?? "",
+      defaultPriceListId: item.defaultPriceListId ?? "",
     });
   };
 
@@ -189,6 +213,7 @@ export default function CustomersPage() {
       phone: "",
       taxId: "",
       address: "",
+      defaultPriceListId: "",
     });
   };
 
@@ -209,6 +234,7 @@ export default function CustomersPage() {
           phone: editForm.phone || undefined,
           taxId: editForm.taxId || undefined,
           address: editForm.address || undefined,
+          defaultPriceListId: editForm.defaultPriceListId || undefined,
         }),
       });
 
@@ -383,6 +409,29 @@ export default function CustomersPage() {
                 ))}
               </select>
             </label>
+            <label className="flex flex-col gap-3">
+              <span className="input-label">Lista de precios</span>
+              <select
+                className="input cursor-pointer"
+                value={form.defaultPriceListId}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    defaultPriceListId: event.target.value,
+                  }))
+                }
+              >
+                <option value="">Sin lista por defecto</option>
+                {priceLists.map((priceList) => (
+                  <option key={priceList.id} value={priceList.id}>
+                    {priceList.name}
+                    {priceList.isDefault ? " (Default)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
               <span className="input-label">CUIT</span>
               <input
@@ -585,7 +634,7 @@ export default function CustomersPage() {
                         >
                           <td className="py-3" colSpan={5}>
                             <form onSubmit={handleUpdate} className="space-y-4">
-                              <div className="grid gap-3 sm:grid-cols-3">
+                              <div className="grid gap-3 sm:grid-cols-4">
                               <input
                                 className="input sm:col-span-2"
                                 value={editForm.displayName}
@@ -611,6 +660,24 @@ export default function CustomersPage() {
                                 {Object.keys(TYPE_LABELS).map((key) => (
                                   <option key={key} value={key}>
                                     {TYPE_LABELS[key]}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                className="input cursor-pointer"
+                                value={editForm.defaultPriceListId}
+                                onChange={(event) =>
+                                  setEditForm((prev) => ({
+                                    ...prev,
+                                    defaultPriceListId: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">Sin lista por defecto</option>
+                                {priceLists.map((priceList) => (
+                                  <option key={priceList.id} value={priceList.id}>
+                                    {priceList.name}
+                                    {priceList.isDefault ? " (Default)" : ""}
                                   </option>
                                 ))}
                               </select>

@@ -109,14 +109,14 @@ export async function ensureOrganizationDefaults(
   }
 
   const priceList = await tx.priceList.findFirst({
-    where: { organizationId, name: "Lista General" },
+    where: { organizationId, isDefault: true },
   });
 
   if (!priceList) {
     await tx.priceList.create({
       data: {
         organizationId,
-        name: "Lista General",
+        name: "Lista Default",
         currencyCode: "ARS",
         isDefault: true,
         isActive: true,

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon, PlusIcon } from "@/components/icons";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
+import { resolveSuggestedProductPrice } from "@/lib/pricing";
 import { InlineCustomerForm } from "./components/InlineCustomerForm";
 import { NewQuoteForm } from "./components/NewQuoteForm";
 import { QuoteRecentTable } from "./components/QuoteRecentTable";
@@ -12,6 +13,7 @@ import { QuoteStats } from "./components/QuoteStats";
 import { EMPTY_ITEM } from "./constants";
 import type {
   CustomerOption,
+  PriceListOption,
   ProductOption,
   QuoteItemForm,
   QuoteRow,
@@ -26,11 +28,13 @@ type QuotesClientProps = {
   initialCustomers: CustomerOption[];
   initialProducts: ProductOption[];
   initialQuotes: QuoteRow[];
+  initialPriceLists: PriceListOption[];
 };
 
 type CustomerFormState = {
   displayName: string;
   type: string;
+  defaultPriceListId: string;
   email: string;
   phone: string;
   taxId: string;
@@ -88,10 +92,12 @@ export default function QuotesClient({
   initialCustomers,
   initialProducts,
   initialQuotes,
+  initialPriceLists,
 }: QuotesClientProps) {
   const [customers, setCustomers] =
     useState<CustomerOption[]>(initialCustomers);
   const [products] = useState<ProductOption[]>(initialProducts);
+  const [priceLists] = useState<PriceListOption[]>(initialPriceLists);
   const [quotes, setQuotes] = useState<QuoteRow[]>(initialQuotes);
 
   const [customerId, setCustomerId] = useState("");
@@ -128,6 +134,8 @@ export default function QuotesClient({
   const [customerForm, setCustomerForm] = useState<CustomerFormState>({
     displayName: "",
     type: "CONSUMER_FINAL",
+    defaultPriceListId:
+      initialPriceLists.find((priceList) => priceList.isDefault)?.id ?? "",
     email: "",
     phone: "",
     taxId: "",
@@ -138,6 +146,7 @@ export default function QuotesClient({
   const [isCustomerLookupLoading, setIsCustomerLookupLoading] = useState(false);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [quoteView, setQuoteView] = useState<"list" | "new">("new");
+  const [adjustStockOnConfirm, setAdjustStockOnConfirm] = useState(true);
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNoteRow[]>([]);
   const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
   const [deliveryBusyId, setDeliveryBusyId] = useState<string | null>(null);
@@ -161,6 +170,8 @@ export default function QuotesClient({
   const selectedCustomer =
     (customerId ? customerById.get(customerId) : null) ??
     (consumerFinalCustomer?.id === customerId ? consumerFinalCustomer : null);
+  const defaultPriceListId =
+    priceLists.find((priceList) => priceList.isDefault)?.id ?? null;
   const isSelectedAnonymousConsumerFinal = Boolean(
     selectedCustomer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON
   );
@@ -295,13 +306,20 @@ export default function QuotesClient({
   };
 
   const handleSelectProduct = (index: number, product: ProductOption) => {
+    const suggestedPrice = resolveSuggestedProductPrice({
+      prices: product.prices ?? [],
+      productPrice: product.price,
+      customerPriceListId: selectedCustomer?.defaultPriceListId,
+      defaultPriceListId,
+    });
+
     setItems((prev) => {
       const next = [...prev];
       next[index] = {
         ...next[index],
         productId: product.id,
         productSearch: formatProductLabel(product),
-        unitPrice: product.price ?? next[index].unitPrice,
+        unitPrice: suggestedPrice ?? next[index].unitPrice,
       };
       return next;
     });
@@ -652,7 +670,10 @@ export default function QuotesClient({
         const confirmRes = await fetch("/api/quotes/confirm", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: quoteId }),
+          body: JSON.stringify({
+            id: quoteId,
+            adjustStock: adjustStockOnConfirm,
+          }),
         });
         const confirmData = await confirmRes.json();
         if (!confirmRes.ok) {
@@ -749,14 +770,20 @@ export default function QuotesClient({
   };
 
   const handleConfirmSale = async (quote: QuoteRow) => {
-    if (!window.confirm("Confirmar y crear venta?")) return;
+    const confirmationMessage = adjustStockOnConfirm
+      ? "Confirmar y crear venta?"
+      : "Confirmar y crear venta sin ajustar stock?";
+    if (!window.confirm(confirmationMessage)) return;
     setTableStatus(null);
     setBusyId(quote.id);
     try {
       const res = await fetch("/api/quotes/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: quote.id }),
+        body: JSON.stringify({
+          id: quote.id,
+          adjustStock: adjustStockOnConfirm,
+        }),
       });
 
       if (!res.ok) {
@@ -919,6 +946,7 @@ export default function QuotesClient({
         body: JSON.stringify({
           displayName: customerForm.displayName,
           type: customerForm.type,
+          defaultPriceListId: customerForm.defaultPriceListId || undefined,
           email: customerForm.email || undefined,
           phone: customerForm.phone || undefined,
           taxId: customerForm.taxId || undefined,
@@ -934,6 +962,7 @@ export default function QuotesClient({
       setCustomerForm({
         displayName: "",
         type: "CONSUMER_FINAL",
+        defaultPriceListId: defaultPriceListId ?? "",
         email: "",
         phone: "",
         taxId: "",
@@ -1045,10 +1074,34 @@ export default function QuotesClient({
         totalEstimated={totalEstimated}
       />
 
+      <div className="inline-flex items-center gap-2 rounded-xl border border-zinc-200/80 bg-white px-3 py-2 text-xs text-zinc-700">
+        <button
+          type="button"
+          role="switch"
+          aria-label="Ajustar stock al confirmar venta"
+          aria-checked={adjustStockOnConfirm}
+          onClick={() => setAdjustStockOnConfirm((prev) => !prev)}
+          className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+            adjustStockOnConfirm
+              ? "border-sky-300 bg-sky-100"
+              : "border-zinc-300 bg-zinc-100"
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+              adjustStockOnConfirm ? "translate-x-4" : "translate-x-0.5"
+            }`}
+          />
+        </button>
+        <span>Ajustar stock al confirmar venta</span>
+      </div>
+
       {quoteView === "new" ? (
         <div className="space-y-6">
           <InlineCustomerForm
             form={customerForm}
+            priceLists={priceLists}
+            defaultPriceListId={defaultPriceListId}
             status={customerStatus}
             isSubmitting={isCreatingCustomer}
             isLookupLoading={isCustomerLookupLoading}
@@ -1276,6 +1329,7 @@ export default function QuotesClient({
             onEdit={handleEdit}
             onDelete={handleDelete}
             onConfirmSale={handleConfirmSale}
+            confirmAdjustsStock={adjustStockOnConfirm}
             isBusyId={busyId}
           />
           <div className="card space-y-4 p-6">

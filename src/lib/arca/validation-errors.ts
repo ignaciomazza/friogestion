@@ -12,6 +12,16 @@ type MappedArcaError = {
 const MESSAGES: Record<string, string> = {
   CUIT_INVALID: "CUIT invalido.",
   ARCA_ISSUER_CUIT_INVALID: "CUIT emisor invalido para validar comprobante.",
+  PURCHASE_VALIDATION_ISSUER_TAX_ID_REQUIRED:
+    "Falta CUIT emisor del comprobante.",
+  PURCHASE_VALIDATION_POINT_OF_SALE_REQUIRED:
+    "Falta punto de venta del comprobante.",
+  PURCHASE_VALIDATION_VOUCHER_TYPE_REQUIRED:
+    "Falta tipo de comprobante para validar en ARCA.",
+  PURCHASE_VALIDATION_VOUCHER_NUMBER_REQUIRED:
+    "Falta numero de comprobante para validar en ARCA.",
+  PURCHASE_VALIDATION_DATE_INVALID:
+    "La fecha del comprobante no es valida.",
   ARCA_CONFIG_MISSING: "No hay configuracion ARCA para esta organizacion.",
   ARCA_CONFIG_NOT_CONNECTED: "La conexion ARCA no esta activa.",
   ARCA_SERVICE_NOT_AUTHORIZED:

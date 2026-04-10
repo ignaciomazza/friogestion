@@ -43,6 +43,7 @@ type QuoteRecentTableProps = {
   onEdit: (quote: QuoteRow) => void;
   onDelete: (quote: QuoteRow) => void;
   onConfirmSale: (quote: QuoteRow) => void;
+  confirmAdjustsStock: boolean;
   isBusyId: string | null;
 };
 
@@ -53,6 +54,7 @@ export function QuoteRecentTable({
   onEdit,
   onDelete,
   onConfirmSale,
+  confirmAdjustsStock,
   isBusyId,
 }: QuoteRecentTableProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -192,7 +194,11 @@ export function QuoteRecentTable({
                             disabled={isLocked || isBusy}
                           >
                             <CheckIcon className="size-4" />
-                            {isLocked ? "Confirmada" : "Confirmar venta"}
+                            {isLocked
+                              ? "Confirmada"
+                              : confirmAdjustsStock
+                                ? "Confirmar venta"
+                                : "Confirmar venta (sin stock)"}
                           </button>
                           <button
                             type="button"

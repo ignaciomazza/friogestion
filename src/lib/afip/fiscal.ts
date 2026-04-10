@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAfipClient } from "@/lib/afip/client";
+import { getSalesPoints } from "@/lib/afip/electronic-billing";
 import { buildQrDataUrl, type QrPayload } from "@/lib/afip/qr";
 import {
   buildTotalsFromManual,
@@ -67,6 +68,7 @@ async function resolveCurrency(organizationId: string, input?: string | null) {
 }
 
 async function resolvePointOfSale(
+  organizationId: string,
   afip: Awaited<ReturnType<typeof getAfipClient>>,
   explicit?: number | null
 ) {
@@ -76,13 +78,23 @@ async function resolvePointOfSale(
     }
     return explicit;
   }
-  const points = await afip.ElectronicBilling.getSalesPoints();
-  if (Array.isArray(points) && points.length > 0) {
-    const first = points[0];
-    if (typeof first === "number") return first;
-    if (typeof first?.Nro === "number") return first.Nro;
-    if (typeof first?.Nro === "string") return Number(first.Nro);
+
+  const [config, salesPoints] = await Promise.all([
+    prisma.organizationFiscalConfig.findUnique({
+      where: { organizationId },
+      select: { defaultPointOfSale: true },
+    }),
+    getSalesPoints(organizationId),
+  ]);
+
+  if (config?.defaultPointOfSale && salesPoints.includes(config.defaultPointOfSale)) {
+    return config.defaultPointOfSale;
   }
+
+  if (salesPoints.length > 0) {
+    return salesPoints[0];
+  }
+
   throw new Error("SALES_POINT_MISSING");
 }
 
@@ -229,7 +241,11 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   const condicionIva = input.type === "A" ? 1 : 5;
   const issueDate = input.issueDate ?? sale.saleDate ?? new Date();
   ensureNotFuture(issueDate);
-  const pointOfSale = await resolvePointOfSale(afip, input.pointOfSale);
+  const pointOfSale = await resolvePointOfSale(
+    input.organizationId,
+    afip,
+    input.pointOfSale
+  );
 
   const items = sale.items.map((item) => ({
     id: item.id,

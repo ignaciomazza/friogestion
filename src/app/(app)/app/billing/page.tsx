@@ -42,6 +42,10 @@ export default async function BillingPage() {
     orderBy: { createdAt: "desc" },
     take: 80,
   });
+  const fiscalConfig = await prisma.organizationFiscalConfig.findUnique({
+    where: { organizationId: membership.organizationId },
+    select: { defaultPointOfSale: true },
+  });
 
   const afipStatus = await getAfipStatus(membership.organizationId);
   let clientReady = false;
@@ -58,6 +62,7 @@ export default async function BillingPage() {
   return (
     <BillingClient
       afipStatus={{ ...afipStatus, clientReady }}
+      defaultPointOfSale={fiscalConfig?.defaultPointOfSale ?? null}
       initialSales={sales.map((sale) => ({
         id: sale.id,
         customerName: sale.customer.displayName,

@@ -120,7 +120,13 @@ export async function GET(req: NextRequest) {
         where: { id, organizationId },
         include: {
           customer: true,
-          items: { include: { product: true } },
+          items: {
+            include: {
+              product: {
+                include: { priceItems: true },
+              },
+            },
+          },
           sale: true,
         },
       });
@@ -156,6 +162,7 @@ export async function GET(req: NextRequest) {
           address: quote.customer.address,
           type: quote.customer.type,
           systemKey: quote.customer.systemKey,
+          defaultPriceListId: quote.customer.defaultPriceListId,
         },
         items: quote.items.map((item) => ({
           productId: item.productId,
@@ -170,6 +177,10 @@ export async function GET(req: NextRequest) {
             model: item.product.model,
             unit: item.product.unit,
             price: item.product.price?.toString() ?? null,
+            prices: item.product.priceItems.map((priceItem) => ({
+              priceListId: priceItem.priceListId,
+              price: priceItem.price.toString(),
+            })),
           },
         })),
       });

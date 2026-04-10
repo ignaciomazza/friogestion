@@ -211,7 +211,16 @@ export async function POST(req: NextRequest) {
             supplierId: body.supplierId,
             id: { in: purchaseIds },
           },
-          select: { id: true, total: true, paidTotal: true },
+          select: {
+            id: true,
+            total: true,
+            paidTotal: true,
+            currentAccountEntries: {
+              where: { sourceType: "PURCHASE" },
+              select: { id: true },
+              take: 1,
+            },
+          },
         })
       : [];
     if (purchases.length !== purchaseIds.length) {
@@ -228,6 +237,12 @@ export async function POST(req: NextRequest) {
       if (!purchase) {
         return NextResponse.json(
           { error: "Compra invalida" },
+          { status: 400 }
+        );
+      }
+      if (!purchase.currentAccountEntries.length) {
+        return NextResponse.json(
+          { error: "Factura sin impacto en cuenta corriente" },
           { status: 400 }
         );
       }

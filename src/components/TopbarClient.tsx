@@ -94,7 +94,8 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Operacion",
     items: [
       { href: "/app/purchases", label: "Compras", Icon: ShoppingBagIcon },
-      { href: "/app/products", label: "Productos", Icon: CubeIcon },
+      { href: "/app/stock", label: "Stock", Icon: CubeIcon },
+      { href: "/app/products", label: "Productos", Icon: DocumentTextIcon },
       { href: "/app/customers", label: "Clientes", Icon: UsersIcon },
       {
         href: "/app/suppliers",

@@ -24,6 +24,22 @@ async function fetchToDataUrl(url: string) {
   return `data:${contentType};base64,${buffer.toString("base64")}`;
 }
 
+function resolvePublicAssetPath(value: string) {
+  const normalized = value
+    .trim()
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .replace(/^public\//i, "");
+  if (!normalized) return null;
+
+  const publicDir = path.resolve(process.cwd(), "public");
+  const candidate = path.resolve(publicDir, normalized);
+  const relative = path.relative(publicDir, candidate);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return null;
+
+  return candidate;
+}
+
 export async function resolveLogoSource(options: {
   logoUrl?: string | null;
   logoFilename?: string | null;
@@ -34,19 +50,24 @@ export async function resolveLogoSource(options: {
   }
 
   if (options.logoFilename) {
-    const safeName = path.basename(options.logoFilename);
-    const filePath = path.join(process.cwd(), "public", safeName);
+    const filePath = resolvePublicAssetPath(options.logoFilename);
+    if (filePath) {
+      try {
+        return await fileToDataUrl(filePath);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  for (const fallbackName of ["logo.png", "logo.jpg"]) {
+    const fallbackPath = path.join(process.cwd(), "public", fallbackName);
     try {
-      return await fileToDataUrl(filePath);
+      return await fileToDataUrl(fallbackPath);
     } catch {
       // ignore
     }
   }
 
-  const fallbackPath = path.join(process.cwd(), "public", "logo.jpg");
-  try {
-    return await fileToDataUrl(fallbackPath);
-  } catch {
-    return null;
-  }
+  return null;
 }

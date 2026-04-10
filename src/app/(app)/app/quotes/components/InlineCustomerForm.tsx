@@ -8,16 +8,26 @@ import { CUSTOMER_TYPE_LABELS, CUSTOMER_TYPE_OPTIONS } from "../constants";
 type CustomerFormData = {
   displayName: string;
   type: string;
+  defaultPriceListId: string;
   email: string;
   phone: string;
   taxId: string;
   address: string;
 };
 
+type PriceListOption = {
+  id: string;
+  name: string;
+  currencyCode: string;
+  isDefault: boolean;
+};
+
 type InlineCustomerFormProps = {
   show: boolean;
   onToggle: () => void;
   form: CustomerFormData;
+  priceLists: PriceListOption[];
+  defaultPriceListId: string | null;
   onFormChange: (field: keyof CustomerFormData, value: string) => void;
   onLookupByTaxId: () => void;
   isLookupLoading: boolean;
@@ -30,6 +40,8 @@ export function InlineCustomerForm({
   show,
   onToggle,
   form,
+  priceLists,
+  defaultPriceListId,
   onFormChange,
   onLookupByTaxId,
   isLookupLoading,
@@ -106,6 +118,31 @@ export function InlineCustomerForm({
                     ))}
                   </select>
                 </label>
+                <label className="flex flex-col gap-2">
+                  <span className="input-label">Lista de precios</span>
+                  <select
+                    className="input cursor-pointer"
+                    value={form.defaultPriceListId}
+                    onChange={(event) =>
+                      onFormChange("defaultPriceListId", event.target.value)
+                    }
+                  >
+                    <option value="">Sin lista por defecto</option>
+                    {priceLists.map((priceList) => (
+                      <option key={priceList.id} value={priceList.id}>
+                        {priceList.name}
+                        {priceList.isDefault ? " (Default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {defaultPriceListId ? (
+                    <p className="text-[11px] text-zinc-500">
+                      Si no elegis una, se usa la lista Default.
+                    </p>
+                  ) : null}
+                </label>
+              </div>
+              <div className="grid gap-x-3 gap-y-2 sm:grid-cols-2">
                 <label className="flex flex-col gap-2">
                   <span className="input-label">CUIT</span>
                   <input

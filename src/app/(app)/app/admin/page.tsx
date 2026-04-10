@@ -59,6 +59,7 @@ export default async function AdminPage() {
     paymentMethods,
     accounts,
     currencies,
+    priceLists,
   ] = await Promise.all([
     prisma.membership.findMany({
       where: { organizationId: activeMembership.organizationId },
@@ -83,6 +84,13 @@ export default async function AdminPage() {
     prisma.financeCurrency.findMany({
       where: { organizationId: activeMembership.organizationId, isActive: true },
       orderBy: [{ isDefault: "desc" }, { code: "asc" }],
+    }),
+    prisma.priceList.findMany({
+      where: {
+        organizationId: activeMembership.organizationId,
+        isActive: true,
+      },
+      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
     }),
   ]);
 
@@ -123,6 +131,7 @@ export default async function AdminPage() {
               taxIdRepresentado: arcaConfig.taxIdRepresentado,
               taxIdLogin: arcaConfig.taxIdLogin,
               alias: arcaConfig.alias,
+              defaultPointOfSale: arcaConfig.defaultPointOfSale,
               authorizedServices: arcaConfig.authorizedServices,
               lastError: arcaConfig.lastError,
               lastOkAt: arcaConfig.lastOkAt?.toISOString() ?? null,
@@ -165,6 +174,13 @@ export default async function AdminPage() {
         name: currency.name,
         symbol: currency.symbol,
         isDefault: currency.isDefault,
+      }))}
+      priceLists={priceLists.map((priceList) => ({
+        id: priceList.id,
+        name: priceList.name,
+        currencyCode: priceList.currencyCode,
+        isDefault: priceList.isDefault,
+        isActive: priceList.isActive,
       }))}
     />
   );
