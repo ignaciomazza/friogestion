@@ -9,8 +9,6 @@ const methodSchema = z.object({
   name: z.string().min(2),
   type: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "OTHER"]),
   requiresAccount: z.boolean(),
-  requiresApproval: z.boolean(),
-  requiresDoubleCheck: z.boolean().optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -21,6 +19,19 @@ const methodUpdateSchema = methodSchema.extend({
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
+    await prisma.paymentMethod.updateMany({
+      where: {
+        organizationId,
+        OR: [
+          { requiresApproval: true },
+          { requiresDoubleCheck: false },
+        ],
+      },
+      data: {
+        requiresApproval: false,
+        requiresDoubleCheck: true,
+      },
+    });
     const methods = await prisma.paymentMethod.findMany({
       where: { organizationId },
       orderBy: { createdAt: "asc" },
@@ -53,8 +64,8 @@ export async function POST(req: NextRequest) {
         name: body.name.trim(),
         type: body.type,
         requiresAccount: body.requiresAccount,
-        requiresApproval: body.requiresApproval,
-        requiresDoubleCheck: body.requiresDoubleCheck ?? false,
+        requiresApproval: false,
+        requiresDoubleCheck: true,
         isActive: body.isActive ?? true,
       },
     });
@@ -99,8 +110,8 @@ export async function PATCH(req: NextRequest) {
         name: body.name.trim(),
         type: body.type,
         requiresAccount: body.requiresAccount,
-        requiresApproval: body.requiresApproval,
-        requiresDoubleCheck: body.requiresDoubleCheck ?? false,
+        requiresApproval: false,
+        requiresDoubleCheck: true,
         isActive: body.isActive ?? true,
       },
     });

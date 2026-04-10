@@ -8,15 +8,17 @@ import {
   BuildingOffice2Icon,
   ChevronDownIcon,
   Cog6ToothIcon,
-  CubeIcon,
   CurrencyDollarIcon,
   DocumentTextIcon,
   InformationCircleIcon,
-  ShoppingCartIcon,
   UsersIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
-import { ROLE_LABELS, ROLE_OPTIONS, roleLabel } from "@/lib/labels";
+import {
+  ROLE_LABELS,
+  USER_MANAGEMENT_ROLE_OPTIONS,
+  roleLabel,
+} from "@/lib/labels";
 import { getAfipMissingItems, summarizeAfipMissing } from "@/lib/afip/messages";
 import { formatCurrencyARS } from "@/lib/format";
 import {
@@ -60,10 +62,6 @@ type AccountRow = {
   name: string;
   type: "CASH" | "BANK" | "VIRTUAL";
   currencyCode: string;
-  bankName?: string | null;
-  accountNumber?: string | null;
-  cbu?: string | null;
-  alias?: string | null;
   isActive: boolean;
 };
 
@@ -78,12 +76,6 @@ type CurrencyRow = {
 type AdminClientProps = {
   activeOrg: { id: string; name: string };
   users: UserRow[];
-  stats: {
-    products: number;
-    customers: number;
-    suppliers: number;
-    sales: number;
-  };
   afipStatus: {
     ok: boolean;
     env: string;
@@ -122,9 +114,6 @@ type AdminClientProps = {
   paymentMethods: PaymentMethodRow[];
   accounts: AccountRow[];
   currencies: CurrencyRow[];
-  receiptApprovalRoles: string[];
-  receiptDoubleCheckRoles: string[];
-  defaultDeliveryNotePointOfSale: number;
 };
 
 const ARCA_CONFIG_LABELS: Record<string, string> = {
@@ -296,20 +285,18 @@ const Spinner = ({ className = "h-3.5 w-3.5" }: { className?: string }) => (
 export default function AdminClient({
   activeOrg,
   users,
-  stats,
   afipStatus,
   arcaStatus,
   paymentMethods: initialPaymentMethods,
   accounts: initialAccounts,
   currencies,
-  receiptApprovalRoles: initialReceiptApprovalRoles,
-  receiptDoubleCheckRoles: initialReceiptDoubleCheckRoles,
-  defaultDeliveryNotePointOfSale,
 }: AdminClientProps) {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
-  const [userRole, setUserRole] = useState("SALES");
+  const [userRole, setUserRole] = useState<
+    (typeof USER_MANAGEMENT_ROLE_OPTIONS)[number]
+  >("SALES");
   const [userPassword, setUserPassword] = useState("");
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [isUserSubmitting, setIsUserSubmitting] = useState(false);
@@ -369,41 +356,18 @@ export default function AdminClient({
     name: "",
     type: "CASH" as PaymentMethodRow["type"],
     requiresAccount: false,
-    requiresApproval: false,
-    requiresDoubleCheck: false,
     isActive: true,
   });
   const [newAccount, setNewAccount] = useState({
     name: "",
     type: "CASH" as AccountRow["type"],
     currencyCode: defaultCurrencyCode,
-    bankName: "",
-    accountNumber: "",
-    cbu: "",
-    alias: "",
     isActive: true,
   });
   const [methodsStatus, setMethodsStatus] = useState<string | null>(null);
   const [accountsStatus, setAccountsStatus] = useState<string | null>(null);
-  const [approvalStatus, setApprovalStatus] = useState<string | null>(null);
-  const [approvalRoles, setApprovalRoles] = useState<string[]>(
-    initialReceiptApprovalRoles
-  );
-  const [doubleCheckStatus, setDoubleCheckStatus] = useState<string | null>(null);
-  const [doubleCheckRoles, setDoubleCheckRoles] = useState<string[]>(
-    initialReceiptDoubleCheckRoles
-  );
-  const [deliveryNotePointOfSale, setDeliveryNotePointOfSale] = useState(
-    String(defaultDeliveryNotePointOfSale || 1)
-  );
-  const [deliveryNoteStatus, setDeliveryNoteStatus] = useState<string | null>(
-    null
-  );
   const [isMethodsSubmitting, setIsMethodsSubmitting] = useState(false);
   const [isAccountsSubmitting, setIsAccountsSubmitting] = useState(false);
-  const [isApprovalSubmitting, setIsApprovalSubmitting] = useState(false);
-  const [isDoubleCheckSubmitting, setIsDoubleCheckSubmitting] = useState(false);
-  const [isDeliveryNoteSubmitting, setIsDeliveryNoteSubmitting] = useState(false);
   const [methodBusyId, setMethodBusyId] = useState<string | null>(null);
   const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
   const afipReady = Boolean(afipStatus.ok && afipStatus.clientReady);
@@ -853,8 +817,6 @@ export default function AdminClient({
         name: "",
         type: "CASH",
         requiresAccount: false,
-        requiresApproval: false,
-        requiresDoubleCheck: false,
         isActive: true,
       });
       setMethodsStatus("Metodo creado");
@@ -883,8 +845,6 @@ export default function AdminClient({
           name: formData.get("name")?.toString() ?? "",
           type: formData.get("type")?.toString() ?? "OTHER",
           requiresAccount: formData.get("requiresAccount") === "on",
-          requiresApproval: formData.get("requiresApproval") === "on",
-          requiresDoubleCheck: formData.get("requiresDoubleCheck") === "on",
           isActive: formData.get("isActive") === "on",
         }),
       });
@@ -944,10 +904,6 @@ export default function AdminClient({
         name: "",
         type: "CASH",
         currencyCode: defaultCurrencyCode,
-        bankName: "",
-        accountNumber: "",
-        cbu: "",
-        alias: "",
         isActive: true,
       });
       setAccountsStatus("Cuenta creada");
@@ -976,10 +932,6 @@ export default function AdminClient({
           name: formData.get("name")?.toString() ?? "",
           type: formData.get("type")?.toString() ?? "CASH",
           currencyCode: formData.get("currencyCode")?.toString() ?? "ARS",
-          bankName: formData.get("bankName")?.toString() || undefined,
-          accountNumber: formData.get("accountNumber")?.toString() || undefined,
-          cbu: formData.get("cbu")?.toString() || undefined,
-          alias: formData.get("alias")?.toString() || undefined,
           isActive: formData.get("isActive") === "on",
         }),
       });
@@ -1020,106 +972,6 @@ export default function AdminClient({
     }
   };
 
-  const handleApprovalSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setApprovalStatus(null);
-    setIsApprovalSubmitting(true);
-    if (!approvalRoles.length) {
-      setApprovalStatus("Selecciona al menos un rol");
-      setIsApprovalSubmitting(false);
-      return;
-    }
-    try {
-      const res = await fetch("/api/config/receipt-approval", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roles: approvalRoles }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        setApprovalStatus(data?.error ?? "No se pudo guardar");
-        return;
-      }
-      setApprovalStatus("Aprobaciones actualizadas");
-    } catch {
-      setApprovalStatus("No se pudo guardar");
-    } finally {
-      setIsApprovalSubmitting(false);
-    }
-  };
-
-  const toggleApprovalRole = (role: string) => {
-    setApprovalRoles((prev) =>
-      prev.includes(role) ? prev.filter((item) => item !== role) : [...prev, role]
-    );
-  };
-
-  const handleDoubleCheckSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setDoubleCheckStatus(null);
-    setIsDoubleCheckSubmitting(true);
-    if (!doubleCheckRoles.length) {
-      setDoubleCheckStatus("Selecciona al menos un rol");
-      setIsDoubleCheckSubmitting(false);
-      return;
-    }
-    try {
-      const res = await fetch("/api/config/receipt-double-check", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roles: doubleCheckRoles }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        setDoubleCheckStatus(data?.error ?? "No se pudo guardar");
-        return;
-      }
-      setDoubleCheckStatus("Doble control actualizado");
-    } catch {
-      setDoubleCheckStatus("No se pudo guardar");
-    } finally {
-      setIsDoubleCheckSubmitting(false);
-    }
-  };
-
-  const toggleDoubleCheckRole = (role: string) => {
-    setDoubleCheckRoles((prev) =>
-      prev.includes(role) ? prev.filter((item) => item !== role) : [...prev, role]
-    );
-  };
-
-  const handleDeliveryNoteConfigSubmit = async (
-    event: FormEvent<HTMLFormElement>
-  ) => {
-    event.preventDefault();
-    setDeliveryNoteStatus(null);
-    setIsDeliveryNoteSubmitting(true);
-    const parsed = Number(deliveryNotePointOfSale);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-      setDeliveryNoteStatus("Ingresa un punto de venta valido");
-      setIsDeliveryNoteSubmitting(false);
-      return;
-    }
-    try {
-      const res = await fetch("/api/config/delivery-notes", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ defaultPointOfSale: parsed }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setDeliveryNoteStatus(data?.error ?? "No se pudo guardar");
-        return;
-      }
-      setDeliveryNotePointOfSale(String(data.defaultPointOfSale ?? parsed));
-      setDeliveryNoteStatus("Configuracion de remitos actualizada");
-    } catch {
-      setDeliveryNoteStatus("No se pudo guardar");
-    } finally {
-      setIsDeliveryNoteSubmitting(false);
-    }
-  };
-
   return (
     <div className="space-y-8">
       <div>
@@ -1130,15 +982,6 @@ export default function AdminClient({
           Configura moneda, integra ARCA y gestiona usuarios.
         </p>
         <div className="mt-4 flex items-center gap-2">
-          <a
-            href="/api/pdf/demo"
-            target="_blank"
-            rel="noreferrer"
-            className="btn btn-sky text-xs flex"
-          >
-            <DocumentTextIcon className="size-4" />
-            PDF de prueba
-          </a>
           <div className="flex justify-end items-center gap-2 flex-auto">
             <span
               className={`text-xs ${
@@ -1155,64 +998,9 @@ export default function AdminClient({
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        {[
-          {
-            label: "Productos",
-            value: stats.products,
-            icon: <CubeIcon className="size-4" />,
-            shell:
-              "border-emerald-200 bg-white text-emerald-900",
-            accent: "text-emerald-700",
-          },
-          {
-            label: "Clientes",
-            value: stats.customers,
-            icon: <UsersIcon className="size-4" />,
-            shell:
-              "border-sky-200 bg-white text-sky-900",
-            accent: "text-sky-700",
-          },
-          {
-            label: "Proveedores",
-            value: stats.suppliers,
-            icon: <BuildingOffice2Icon className="size-4" />,
-            shell:
-              "border-indigo-200 bg-white text-indigo-900",
-            accent: "text-indigo-700",
-          },
-          {
-            label: "Ventas",
-            value: stats.sales,
-            icon: <ShoppingCartIcon className="size-4" />,
-            shell:
-              "border-amber-200 bg-white text-amber-900",
-            accent: "text-amber-700",
-          },
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            className={`pill glass  text-sm flex items-center gap-2 ${stat.shell}`}
-          >
-            <span
-              className={`inline-flex size-6 items-center justify-center rounded-full bg-white/70 ${stat.accent}`}
-            >
-              {stat.icon}
-            </span>
-            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-600">
-              {stat.label}
-            </span>
-            <span className="font-semibold text-zinc-900">
-              {stat.value}
-            </span>
-          </div>
-        ))}
-      </div>
-
       <Section
         title="Cotizacion y moneda"
         subtitle="Actualiza la cotizacion interna y revisa Dolar blue y oficial (compra/venta)."
-        defaultOpen
         icon={<CurrencyDollarIcon className="size-4" />}
       >
         <div className="grid gap-5 lg:grid-cols-[1.1fr_1fr]">
@@ -1413,7 +1201,7 @@ export default function AdminClient({
 
       <Section
         title="Metodos de pago"
-        subtitle="Configura medios de cobro y si requieren aprobacion."
+        subtitle="Configura medios de cobro y su estado."
         icon={<CurrencyDollarIcon className="size-4" />}
       >
         <div className="space-y-5">
@@ -1463,32 +1251,6 @@ export default function AdminClient({
                 }
               />
               Requiere cuenta
-            </label>
-            <label className="flex items-center gap-2 text-xs text-zinc-500">
-              <input
-                type="checkbox"
-                checked={newMethod.requiresApproval}
-                onChange={(event) =>
-                  setNewMethod((prev) => ({
-                    ...prev,
-                    requiresApproval: event.target.checked,
-                  }))
-                }
-              />
-              Requiere aprobacion
-            </label>
-            <label className="flex items-center gap-2 text-xs text-zinc-500">
-              <input
-                type="checkbox"
-                checked={newMethod.requiresDoubleCheck}
-                onChange={(event) =>
-                  setNewMethod((prev) => ({
-                    ...prev,
-                    requiresDoubleCheck: event.target.checked,
-                  }))
-                }
-              />
-              Requiere doble control
             </label>
             <label className="flex items-center gap-2 text-xs text-zinc-500">
               <input
@@ -1555,22 +1317,6 @@ export default function AdminClient({
                   <label className="flex items-center gap-2 text-xs text-zinc-500">
                     <input
                       type="checkbox"
-                      name="requiresApproval"
-                      defaultChecked={method.requiresApproval}
-                    />
-                    Requiere aprobacion
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-zinc-500">
-                    <input
-                      type="checkbox"
-                      name="requiresDoubleCheck"
-                      defaultChecked={method.requiresDoubleCheck}
-                    />
-                    Requiere doble control
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-zinc-500">
-                    <input
-                      type="checkbox"
                       name="isActive"
                       defaultChecked={method.isActive}
                     />
@@ -1604,7 +1350,7 @@ export default function AdminClient({
 
       <Section
         title="Cuentas"
-        subtitle="Cajas y bancos en ARS/USD."
+        subtitle="Cuentas operativas en ARS/USD."
         icon={<BuildingOffice2Icon className="size-4" />}
       >
         <div className="space-y-5">
@@ -1658,59 +1404,6 @@ export default function AdminClient({
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-              Banco
-              <input
-                className="input"
-                value={newAccount.bankName}
-                onChange={(event) =>
-                  setNewAccount((prev) => ({
-                    ...prev,
-                    bankName: event.target.value,
-                  }))
-                }
-                placeholder="Opcional"
-              />
-            </label>
-            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-              Numero
-              <input
-                className="input"
-                value={newAccount.accountNumber}
-                onChange={(event) =>
-                  setNewAccount((prev) => ({
-                    ...prev,
-                    accountNumber: event.target.value,
-                  }))
-                }
-                placeholder="Opcional"
-              />
-            </label>
-            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-44">
-              CBU
-              <input
-                className="input"
-                value={newAccount.cbu}
-                onChange={(event) =>
-                  setNewAccount((prev) => ({ ...prev, cbu: event.target.value }))
-                }
-                placeholder="Opcional"
-              />
-            </label>
-            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-              Alias
-              <input
-                className="input"
-                value={newAccount.alias}
-                onChange={(event) =>
-                  setNewAccount((prev) => ({
-                    ...prev,
-                    alias: event.target.value,
-                  }))
-                }
-                placeholder="Opcional"
-              />
             </label>
             <label className="flex items-center gap-2 text-xs text-zinc-500">
               <input
@@ -1778,30 +1471,6 @@ export default function AdminClient({
                       ))}
                     </select>
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-                    Banco
-                    <input
-                      name="bankName"
-                      className="input"
-                      defaultValue={account.bankName ?? ""}
-                    />
-                  </label>
-                  <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-                    Numero
-                    <input
-                      name="accountNumber"
-                      className="input"
-                      defaultValue={account.accountNumber ?? ""}
-                    />
-                  </label>
-                  <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-44">
-                    CBU
-                    <input name="cbu" className="input" defaultValue={account.cbu ?? ""} />
-                  </label>
-                  <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-40">
-                    Alias
-                    <input name="alias" className="input" defaultValue={account.alias ?? ""} />
-                  </label>
                   <label className="flex items-center gap-2 text-xs text-zinc-500">
                     <input
                       type="checkbox"
@@ -1834,106 +1503,6 @@ export default function AdminClient({
             )}
           </div>
         </div>
-      </Section>
-
-      <Section
-        title="Aprobaciones de cobro"
-        subtitle="Define quien puede aprobar cobros pendientes."
-        icon={<Cog6ToothIcon className="size-4" />}
-      >
-        <form onSubmit={handleApprovalSubmit} className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {ROLE_OPTIONS.map((role) => (
-              <label
-                key={role}
-                className="flex items-center gap-2 rounded-full border border-zinc-200/70 px-3 py-1 text-xs text-zinc-600"
-              >
-                <input
-                  type="checkbox"
-                  checked={approvalRoles.includes(role)}
-                  onChange={() => toggleApprovalRole(role)}
-                />
-                {ROLE_LABELS[role]}
-              </label>
-            ))}
-          </div>
-          <button type="submit" className="btn btn-sky" disabled={isApprovalSubmitting}>
-            {isApprovalSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {approvalStatus ? (
-            <p className="text-xs text-zinc-500">{approvalStatus}</p>
-          ) : null}
-        </form>
-      </Section>
-
-      <Section
-        title="Doble control de ingresos"
-        subtitle="Define quien puede confirmar ingresos ya registrados."
-        icon={<Cog6ToothIcon className="size-4" />}
-      >
-        <form onSubmit={handleDoubleCheckSubmit} className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            {ROLE_OPTIONS.map((role) => (
-              <label
-                key={role}
-                className="flex items-center gap-2 rounded-full border border-zinc-200/70 px-3 py-1 text-xs text-zinc-600"
-              >
-                <input
-                  type="checkbox"
-                  checked={doubleCheckRoles.includes(role)}
-                  onChange={() => toggleDoubleCheckRole(role)}
-                />
-                {ROLE_LABELS[role]}
-              </label>
-            ))}
-          </div>
-          <button
-            type="submit"
-            className="btn btn-sky"
-            disabled={isDoubleCheckSubmitting}
-          >
-            {isDoubleCheckSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {doubleCheckStatus ? (
-            <p className="text-xs text-zinc-500">{doubleCheckStatus}</p>
-          ) : null}
-        </form>
-      </Section>
-
-      <Section
-        title="Remitos"
-        subtitle="Configura valores por defecto para emision interna."
-        icon={<DocumentTextIcon className="size-4" />}
-      >
-        <form onSubmit={handleDeliveryNoteConfigSubmit} className="space-y-4">
-          <label className="field-stack max-w-xs">
-            <span className="input-label">Pto. de venta por defecto</span>
-            <input
-              className="input no-spinner"
-              inputMode="numeric"
-              value={deliveryNotePointOfSale}
-              onChange={(event) =>
-                setDeliveryNotePointOfSale(
-                  normalizeIntegerInput(event.target.value)
-                )
-              }
-              required
-            />
-            <span className="text-[11px] text-zinc-500">
-              Se aplica automaticamente al crear remitos.
-            </span>
-          </label>
-          <button
-            type="submit"
-            className="btn btn-sky"
-            disabled={isDeliveryNoteSubmitting}
-          >
-            {isDeliveryNoteSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {deliveryNoteStatus ? (
-            <p className="text-xs text-zinc-500">{deliveryNoteStatus}</p>
-          ) : null}
-        </form>
       </Section>
 
       <Section
@@ -2653,7 +2222,7 @@ export default function AdminClient({
                             className="input"
                             defaultValue={user.role}
                           >
-                            {ROLE_OPTIONS.map((role) => (
+                            {USER_MANAGEMENT_ROLE_OPTIONS.map((role) => (
                               <option key={role} value={role}>
                                 {ROLE_LABELS[role]}
                               </option>
@@ -2666,7 +2235,7 @@ export default function AdminClient({
                             name="password"
                             type="password"
                             className="input"
-                            placeholder="Opcional"
+                            placeholder="Contraseña"
                             autoComplete="new-password"
                           />
                         </label>
@@ -2749,9 +2318,13 @@ export default function AdminClient({
                       <select
                         className="input"
                         value={userRole}
-                        onChange={(event) => setUserRole(event.target.value)}
+                        onChange={(event) =>
+                          setUserRole(
+                            event.target.value as (typeof USER_MANAGEMENT_ROLE_OPTIONS)[number]
+                          )
+                        }
                       >
-                        {ROLE_OPTIONS.map((role) => (
+                        {USER_MANAGEMENT_ROLE_OPTIONS.map((role) => (
                           <option key={role} value={role}>
                             {ROLE_LABELS[role]}
                           </option>
@@ -2766,7 +2339,7 @@ export default function AdminClient({
                       type="password"
                       value={userPassword}
                       onChange={(event) => setUserPassword(event.target.value)}
-                      placeholder="Opcional si ya existe"
+                      placeholder="Contraseña"
                       autoComplete="new-password"
                     />
                   </label>

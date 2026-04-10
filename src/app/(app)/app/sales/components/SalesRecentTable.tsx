@@ -77,7 +77,6 @@ type SalesRecentTableProps = {
   paymentMethods: PaymentMethodOption[];
   accounts: AccountOption[];
   currencies: CurrencyOption[];
-  canApproveReceipts: boolean;
   latestUsdRate: string | null;
   onReceiptsUpdated: () => void;
 };
@@ -89,7 +88,6 @@ export function SalesRecentTable({
   paymentMethods,
   accounts,
   currencies,
-  canApproveReceipts,
   latestUsdRate,
   onReceiptsUpdated,
 }: SalesRecentTableProps) {
@@ -99,9 +97,6 @@ export function SalesRecentTable({
   >({});
   const [loadingReceiptId, setLoadingReceiptId] = useState<string | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<Record<string, string>>({});
-  const [confirmingReceiptId, setConfirmingReceiptId] = useState<string | null>(
-    null,
-  );
 
   const loadReceipts = async (saleId: string) => {
     setLoadingReceiptId(saleId);
@@ -123,39 +118,6 @@ export function SalesRecentTable({
       }));
     } finally {
       setLoadingReceiptId(null);
-    }
-  };
-
-  const handleConfirmReceipt = async (saleId: string, receiptId: string) => {
-    setConfirmingReceiptId(receiptId);
-    setReceiptStatus((prev) => ({ ...prev, [saleId]: "" }));
-    try {
-      const res = await fetch("/api/receipts/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: receiptId }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setReceiptStatus((prev) => ({
-          ...prev,
-          [saleId]: data?.error ?? "No se pudo confirmar",
-        }));
-        return;
-      }
-      setReceiptStatus((prev) => ({
-        ...prev,
-        [saleId]: "Cobro confirmado",
-      }));
-      await loadReceipts(saleId);
-      onReceiptsUpdated();
-    } catch {
-      setReceiptStatus((prev) => ({
-        ...prev,
-        [saleId]: "No se pudo confirmar",
-      }));
-    } finally {
-      setConfirmingReceiptId(null);
     }
   };
 
@@ -400,21 +362,6 @@ export function SalesRecentTable({
                                             <ArrowDownTrayIcon className="size-4" />
                                             Recibo
                                           </a>
-                                          {receipt.status === "PENDING" &&
-                                          canApproveReceipts ? (
-                                            <button
-                                              type="button"
-                                              className="btn btn-emerald text-xs"
-                                              disabled={confirmingReceiptId === receipt.id}
-                                              onClick={() =>
-                                                handleConfirmReceipt(sale.id, receipt.id)
-                                              }
-                                            >
-                                              {confirmingReceiptId === receipt.id
-                                                ? "Confirmando..."
-                                                : "Confirmar"}
-                                            </button>
-                                          ) : null}
                                         </div>
                                       </div>
                                       {receipt.lines.length ? (

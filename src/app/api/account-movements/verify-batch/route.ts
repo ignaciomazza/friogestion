@@ -4,8 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import {
-  DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES,
-  resolveConfiguredRoles,
+  resolveReceiptDoubleCheckRoles,
 } from "@/lib/auth/receipt-controls";
 
 const batchSchema = z.object({
@@ -19,9 +18,8 @@ export async function POST(req: NextRequest) {
       where: { id: organizationId },
       select: { receiptDoubleCheckRoles: true },
     });
-    const allowedRoles = resolveConfiguredRoles(
-      org?.receiptDoubleCheckRoles,
-      DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES
+    const allowedRoles = resolveReceiptDoubleCheckRoles(
+      org?.receiptDoubleCheckRoles
     );
     const { payload } = await requireRole(req, allowedRoles);
     const body = batchSchema.parse(await req.json());
@@ -30,7 +28,8 @@ export async function POST(req: NextRequest) {
       where: {
         organizationId,
         id: { in: body.ids },
-        requiresVerification: true,
+        direction: "IN",
+        receiptLineId: { not: null },
         verifiedAt: null,
       },
       select: { id: true },
@@ -44,6 +43,7 @@ export async function POST(req: NextRequest) {
     const result = await prisma.accountMovement.updateMany({
       where: { id: { in: pending.map((item) => item.id) } },
       data: {
+        requiresVerification: true,
         verifiedAt: now,
         verifiedByUserId: payload.userId,
       },

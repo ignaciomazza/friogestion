@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { payload } = await requireRole(req, ["OWNER"]);
+    const { payload } = await requireRole(req, ["DEVELOPER"]);
     const body = orgSchema.parse(await req.json());
 
     const organization = await prisma.$transaction(
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
           data: {
             organizationId: created.id,
             userId: payload.userId,
-            role: "OWNER",
+            role: "DEVELOPER",
           },
         });
 

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
 import DeveloperClient from "./developer-client";
 
-const ALLOWED_ROLES = ["OWNER", "ADMIN"];
+const ALLOWED_ROLES = ["DEVELOPER"];
 
 type MembershipWithOrg = {
   role: string;
@@ -134,10 +134,8 @@ export default async function DeveloperPage() {
 
   return (
     <DeveloperClient
-      currentUserEmail={user.email}
       activeOrgId={activeMembership.organization.id}
-      activeRole={activeMembership.role}
-      canCreateOrganizations={activeMembership.role === "OWNER"}
+      canCreateOrganizations={activeMembership.role === "DEVELOPER"}
       organizations={organizations}
     />
   );

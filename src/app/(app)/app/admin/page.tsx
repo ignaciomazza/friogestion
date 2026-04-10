@@ -7,11 +7,6 @@ import { getAfipStatus } from "@/lib/afip/status";
 import { getAfipClient } from "@/lib/afip/client";
 import { describeArcaJob } from "@/lib/arca/errors";
 import { hasValidSecretsKey } from "@/lib/crypto/secrets";
-import {
-  DEFAULT_RECEIPT_APPROVAL_ROLES,
-  DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES,
-  resolveConfiguredRoles,
-} from "@/lib/auth/receipt-controls";
 
 const ALLOWED_ROLES = ["OWNER", "ADMIN"];
 
@@ -59,33 +54,17 @@ export default async function AdminPage() {
 
   const [
     orgUsers,
-    stats,
     arcaConfig,
     arcaJob,
     paymentMethods,
     accounts,
     currencies,
-    orgSettings,
   ] = await Promise.all([
     prisma.membership.findMany({
       where: { organizationId: activeMembership.organizationId },
       include: { user: true },
       orderBy: { createdAt: "asc" },
     }),
-    prisma.$transaction([
-      prisma.product.count({
-        where: { organizationId: activeMembership.organizationId },
-      }),
-      prisma.customer.count({
-        where: { organizationId: activeMembership.organizationId },
-      }),
-      prisma.supplier.count({
-        where: { organizationId: activeMembership.organizationId },
-      }),
-      prisma.sale.count({
-        where: { organizationId: activeMembership.organizationId },
-      }),
-    ]),
     prisma.organizationFiscalConfig.findUnique({
       where: { organizationId: activeMembership.organizationId },
     }),
@@ -104,14 +83,6 @@ export default async function AdminPage() {
     prisma.financeCurrency.findMany({
       where: { organizationId: activeMembership.organizationId, isActive: true },
       orderBy: [{ isDefault: "desc" }, { code: "asc" }],
-    }),
-    prisma.organization.findUnique({
-      where: { id: activeMembership.organizationId },
-      select: {
-        receiptApprovalRoles: true,
-        receiptDoubleCheckRoles: true,
-        defaultDeliveryNotePointOfSale: true,
-      },
     }),
   ]);
 
@@ -143,12 +114,6 @@ export default async function AdminPage() {
         role: membership.role,
         isActive: membership.user.isActive,
       }))}
-      stats={{
-        products: stats[0],
-        customers: stats[1],
-        suppliers: stats[2],
-        sales: stats[3],
-      }}
       afipStatus={afipWithClient}
       arcaStatus={{
         secretsKeyValid: hasValidSecretsKey(),
@@ -192,10 +157,6 @@ export default async function AdminPage() {
         name: account.name,
         type: account.type,
         currencyCode: account.currencyCode,
-        bankName: account.bankName,
-        accountNumber: account.accountNumber,
-        cbu: account.cbu,
-        alias: account.alias,
         isActive: account.isActive,
       }))}
       currencies={currencies.map((currency) => ({
@@ -205,17 +166,6 @@ export default async function AdminPage() {
         symbol: currency.symbol,
         isDefault: currency.isDefault,
       }))}
-      receiptApprovalRoles={resolveConfiguredRoles(
-        orgSettings?.receiptApprovalRoles,
-        DEFAULT_RECEIPT_APPROVAL_ROLES
-      )}
-      receiptDoubleCheckRoles={resolveConfiguredRoles(
-        orgSettings?.receiptDoubleCheckRoles,
-        DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES
-      )}
-      defaultDeliveryNotePointOfSale={
-        orgSettings?.defaultDeliveryNotePointOfSale ?? 1
-      }
     />
   );
 }

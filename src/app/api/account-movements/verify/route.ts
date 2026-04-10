@@ -4,8 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import {
-  DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES,
-  resolveConfiguredRoles,
+  resolveReceiptDoubleCheckRoles,
 } from "@/lib/auth/receipt-controls";
 
 const verifySchema = z.object({
@@ -19,29 +18,26 @@ export async function POST(req: NextRequest) {
       where: { id: organizationId },
       select: { receiptDoubleCheckRoles: true },
     });
-    const allowedRoles = resolveConfiguredRoles(
-      org?.receiptDoubleCheckRoles,
-      DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES
+    const allowedRoles = resolveReceiptDoubleCheckRoles(
+      org?.receiptDoubleCheckRoles
     );
     const { payload } = await requireRole(req, allowedRoles);
     const body = verifySchema.parse(await req.json());
 
     const movement = await prisma.accountMovement.findFirst({
-      where: { id: body.id, organizationId },
-      select: { id: true, requiresVerification: true, verifiedAt: true },
+      where: {
+        id: body.id,
+        organizationId,
+        direction: "IN",
+        receiptLineId: { not: null },
+      },
+      select: { id: true, verifiedAt: true },
     });
 
     if (!movement) {
       return NextResponse.json(
         { error: "Movimiento no encontrado" },
         { status: 404 }
-      );
-    }
-
-    if (!movement.requiresVerification) {
-      return NextResponse.json(
-        { error: "El movimiento no requiere verificacion" },
-        { status: 409 }
       );
     }
 
@@ -55,6 +51,7 @@ export async function POST(req: NextRequest) {
     const updated = await prisma.accountMovement.update({
       where: { id: movement.id },
       data: {
+        requiresVerification: true,
         verifiedAt: new Date(),
         verifiedByUserId: payload.userId,
       },

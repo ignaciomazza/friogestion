@@ -101,6 +101,7 @@ export async function ensureOrganizationDefaults(
           type: method.type,
           requiresAccount: method.requiresAccount,
           requiresApproval: false,
+          requiresDoubleCheck: true,
           isActive: true,
         },
       });

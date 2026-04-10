@@ -67,11 +67,7 @@ export async function POST(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = createSchema.parse(await req.json());
-    const organizationSettings = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { defaultDeliveryNotePointOfSale: true },
-    });
-    const pointOfSale = organizationSettings?.defaultDeliveryNotePointOfSale ?? 1;
+    const pointOfSale = 1;
 
     if (body.customerId) {
       const customer = await prisma.customer.findFirst({

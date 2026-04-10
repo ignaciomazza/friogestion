@@ -1,11 +1,25 @@
-export const ROLE_OPTIONS = ["OWNER", "ADMIN", "SALES", "CASHIER", "VIEWER"] as const;
+export const ROLE_OPTIONS = [
+  "OWNER",
+  "ADMIN",
+  "SALES",
+  "CASHIER",
+  "VIEWER",
+  "DEVELOPER",
+] as const;
+
+export const USER_MANAGEMENT_ROLE_OPTIONS = [
+  "OWNER",
+  "ADMIN",
+  "SALES",
+] as const;
 
 export const ROLE_LABELS: Record<(typeof ROLE_OPTIONS)[number], string> = {
   OWNER: "Dueño",
-  ADMIN: "Administrador",
+  ADMIN: "Administración",
   SALES: "Ventas",
   CASHIER: "Caja",
   VIEWER: "Consulta",
+  DEVELOPER: "Developer",
 };
 
 export function roleLabel(role?: string | null) {

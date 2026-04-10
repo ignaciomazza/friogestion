@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { parseOptionalDate } from "@/lib/validation";
 import { applyReceiptToInstallments } from "@/lib/installments";
+import { backfillPendingReceipts, recalcSaleTotals } from "@/lib/receipts/backfill";
 
 const lineSchema = z.object({
   paymentMethodId: z.string().min(1),
@@ -21,40 +21,12 @@ const receiptSchema = z.object({
   lines: z.array(lineSchema).min(1),
 });
 
-const ALLOWED_ROLES = ["OWNER", "ADMIN", "SALES", "CASHIER"];
-
-const recalcSaleTotals = async (
-  tx: Prisma.TransactionClient,
-  saleId: string
-) => {
-  const sale = await tx.sale.findUnique({
-    where: { id: saleId },
-    select: { id: true, total: true },
-  });
-  if (!sale) return;
-  const summary = await tx.receiptLine.aggregate({
-    where: { receipt: { saleId, status: "CONFIRMED" } },
-    _sum: { amountBase: true },
-  });
-  const paidTotal = Number(summary._sum.amountBase ?? 0);
-  const total = Number(sale.total ?? 0);
-  const balance = Math.max(total - paidTotal, 0);
-  const paymentStatus =
-    paidTotal <= 0 ? "UNPAID" : balance <= 0.005 ? "PAID" : "PARTIAL";
-
-  await tx.sale.update({
-    where: { id: saleId },
-    data: {
-      paidTotal: paidTotal.toFixed(2),
-      balance: balance.toFixed(2),
-      paymentStatus,
-    },
-  });
-};
+const ALLOWED_ROLES = ["OWNER", "ADMIN", "SALES"];
 
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
+    await backfillPendingReceipts(organizationId);
     const saleId = req.nextUrl.searchParams.get("saleId") || undefined;
 
     const receipts = await prisma.receipt.findMany({
@@ -80,10 +52,7 @@ export async function GET(req: NextRequest) {
         confirmedAt: receipt.confirmedAt?.toISOString() ?? null,
         lines: receipt.lines.map((line) => {
           const requiresVerification =
-            line.accountId
-              ? line.accountMovement?.requiresVerification ??
-                line.paymentMethod.requiresDoubleCheck
-              : false;
+            receipt.status === "CONFIRMED" && Boolean(line.accountId);
           return {
             id: line.id,
             paymentMethodName: line.paymentMethod.name,
@@ -106,6 +75,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const { membership, payload } = await requireRole(req, ALLOWED_ROLES);
+    await backfillPendingReceipts(membership.organizationId, payload.userId);
     const body = receiptSchema.parse(await req.json());
 
     const sale = await prisma.sale.findFirst({
@@ -162,7 +132,7 @@ export async function POST(req: NextRequest) {
       if (!method) {
         throw new Error("INVALID_METHOD");
       }
-      if ((method.requiresAccount || method.requiresDoubleCheck) && !line.accountId) {
+      if (method.requiresAccount && !line.accountId) {
         throw new Error("ACCOUNT_REQUIRED");
       }
       if (line.accountId) {
@@ -193,22 +163,17 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    const needsApproval = body.lines.some((line) => {
-      const method = methodById.get(line.paymentMethodId);
-      return method?.requiresApproval ?? false;
-    });
-    const status = needsApproval ? "PENDING" : "CONFIRMED";
-
     const receipt = await prisma.$transaction(async (tx) => {
+      const confirmedAt = new Date();
       const created = await tx.receipt.create({
         data: {
           organizationId: membership.organizationId,
           customerId: sale.customerId,
           saleId: sale.id,
-          status,
+          status: "CONFIRMED",
           createdByUserId: payload.userId,
-          confirmedByUserId: status === "CONFIRMED" ? payload.userId : undefined,
-          confirmedAt: status === "CONFIRMED" ? new Date() : undefined,
+          confirmedByUserId: payload.userId,
+          confirmedAt,
           receivedAt,
           total: totalBase.toFixed(2),
           lines: {
@@ -227,46 +192,43 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (status === "CONFIRMED") {
-        for (const line of created.lines) {
-          if (!line.accountId) continue;
-          const requiresVerification = line.paymentMethod.requiresDoubleCheck;
-          await tx.accountMovement.create({
-            data: {
-              organizationId: membership.organizationId,
-              accountId: line.accountId,
-              occurredAt: receivedAt,
-              direction: "IN",
-              amount: line.amount,
-              currencyCode: line.currencyCode,
-              requiresVerification,
-              note: `Cobro venta ${sale.id}`,
-              receiptLineId: line.id,
-            },
-          });
-        }
-        await tx.currentAccountEntry.create({
+      for (const line of created.lines) {
+        if (!line.accountId) continue;
+        await tx.accountMovement.create({
           data: {
             organizationId: membership.organizationId,
-            counterpartyType: "CUSTOMER",
-            customerId: sale.customerId,
-            direction: "CREDIT",
-            sourceType: "RECEIPT",
-            saleId: sale.id,
-            receiptId: created.id,
-            amount: totalBase.toFixed(2),
+            accountId: line.accountId,
             occurredAt: receivedAt,
+            direction: "IN",
+            amount: line.amount,
+            currencyCode: line.currencyCode,
+            requiresVerification: true,
             note: `Cobro venta ${sale.id}`,
+            receiptLineId: line.id,
           },
         });
-        await applyReceiptToInstallments(
-          tx,
-          sale.id,
-          created.id,
-          totalBase
-        );
-        await recalcSaleTotals(tx, sale.id);
       }
+      await tx.currentAccountEntry.create({
+        data: {
+          organizationId: membership.organizationId,
+          counterpartyType: "CUSTOMER",
+          customerId: sale.customerId,
+          direction: "CREDIT",
+          sourceType: "RECEIPT",
+          saleId: sale.id,
+          receiptId: created.id,
+          amount: totalBase.toFixed(2),
+          occurredAt: receivedAt,
+          note: `Cobro venta ${sale.id}`,
+        },
+      });
+      await applyReceiptToInstallments(
+        tx,
+        sale.id,
+        created.id,
+        totalBase
+      );
+      await recalcSaleTotals(tx, sale.id);
 
       return created;
     });

@@ -7,11 +7,12 @@ import {
   canWrite,
 } from "../src/lib/auth/rbac";
 
-test("canWrite allows operational roles and blocks VIEWER", () => {
+test("canWrite allows operational roles and blocks deprecated roles", () => {
   assert.equal(canWrite("OWNER"), true);
   assert.equal(canWrite("ADMIN"), true);
   assert.equal(canWrite("SALES"), true);
-  assert.equal(canWrite("CASHIER"), true);
+  assert.equal(canWrite("CASHIER"), false);
+  assert.equal(canWrite("DEVELOPER"), false);
   assert.equal(canWrite("VIEWER"), false);
   assert.equal(canWrite(null), false);
 });

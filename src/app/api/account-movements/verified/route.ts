@@ -4,8 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { parseOptionalDate } from "@/lib/validation";
 import {
-  DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES,
-  resolveConfiguredRoles,
+  resolveReceiptDoubleCheckRoles,
 } from "@/lib/auth/receipt-controls";
 
 const parseDateRange = (value?: string | null, endOfDay = false) => {
@@ -28,9 +27,8 @@ export async function GET(req: NextRequest) {
       where: { id: organizationId },
       select: { receiptDoubleCheckRoles: true },
     });
-    const allowedRoles = resolveConfiguredRoles(
-      org?.receiptDoubleCheckRoles,
-      DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES
+    const allowedRoles = resolveReceiptDoubleCheckRoles(
+      org?.receiptDoubleCheckRoles
     );
     await requireRole(req, allowedRoles);
 
@@ -53,7 +51,7 @@ export async function GET(req: NextRequest) {
       where: {
         organizationId,
         direction: "IN",
-        requiresVerification: true,
+        receiptLineId: { not: null },
         verifiedAt: { not: null },
         ...(verifierId ? { verifiedByUserId: verifierId } : {}),
         ...(occurredAtFilter ? { occurredAt: occurredAtFilter } : {}),

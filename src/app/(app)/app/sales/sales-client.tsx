@@ -55,7 +55,6 @@ type SalesClientProps = {
     symbol?: string | null;
     isDefault: boolean;
   }>;
-  approvalRoles: string[];
   latestUsdRate: string | null;
 };
 
@@ -66,7 +65,6 @@ export default function SalesClient({
   paymentMethods,
   accounts,
   currencies,
-  approvalRoles,
   latestUsdRate,
 }: SalesClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
@@ -82,10 +80,6 @@ export default function SalesClient({
   const canManage = useMemo(
     () => role === "OWNER" || role === "ADMIN",
     [role]
-  );
-  const canApproveReceipts = useMemo(
-    () => (role ? approvalRoles.includes(role) : false),
-    [approvalRoles, role]
   );
 
   const loadSales = async () => {
@@ -343,7 +337,6 @@ export default function SalesClient({
         paymentMethods={paymentMethods}
         accounts={accounts}
         currencies={currencies}
-        canApproveReceipts={canApproveReceipts}
         latestUsdRate={latestUsdRate}
         onReceiptsUpdated={loadSales}
       />

@@ -1,5 +1,5 @@
 export const ADMIN_ROLES = ["OWNER", "ADMIN"] as const;
-export const WRITE_ROLES = ["OWNER", "ADMIN", "SALES", "CASHIER"] as const;
+export const WRITE_ROLES = ["OWNER", "ADMIN", "SALES"] as const;
 export const CASH_RECONCILIATION_ROLES = ADMIN_ROLES;
 
 export function hasAnyRole(role: string | null | undefined, roles: readonly string[]) {

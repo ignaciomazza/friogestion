@@ -9,10 +9,6 @@ const accountSchema = z.object({
   name: z.string().min(2),
   type: z.enum(["CASH", "BANK", "VIRTUAL"]),
   currencyCode: z.string().min(1),
-  bankName: z.string().min(2).optional(),
-  accountNumber: z.string().min(2).optional(),
-  cbu: z.string().min(6).optional(),
-  alias: z.string().min(2).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -23,6 +19,23 @@ const accountUpdateSchema = accountSchema.extend({
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
+    await prisma.financeAccount.updateMany({
+      where: {
+        organizationId,
+        OR: [
+          { bankName: { not: null } },
+          { accountNumber: { not: null } },
+          { cbu: { not: null } },
+          { alias: { not: null } },
+        ],
+      },
+      data: {
+        bankName: null,
+        accountNumber: null,
+        cbu: null,
+        alias: null,
+      },
+    });
     const accounts = await prisma.financeAccount.findMany({
       where: { organizationId },
       orderBy: { createdAt: "asc" },
@@ -57,10 +70,10 @@ export async function POST(req: NextRequest) {
         name: body.name.trim(),
         type: body.type,
         currencyCode: body.currencyCode.trim().toUpperCase(),
-        bankName: body.bankName?.trim() || undefined,
-        accountNumber: body.accountNumber?.trim() || undefined,
-        cbu: body.cbu?.trim() || undefined,
-        alias: body.alias?.trim() || undefined,
+        bankName: null,
+        accountNumber: null,
+        cbu: null,
+        alias: null,
         isActive: body.isActive ?? true,
       },
     });
@@ -107,10 +120,10 @@ export async function PATCH(req: NextRequest) {
         name: body.name.trim(),
         type: body.type,
         currencyCode: body.currencyCode.trim().toUpperCase(),
-        bankName: body.bankName?.trim() || undefined,
-        accountNumber: body.accountNumber?.trim() || undefined,
-        cbu: body.cbu?.trim() || undefined,
-        alias: body.alias?.trim() || undefined,
+        bankName: null,
+        accountNumber: null,
+        cbu: null,
+        alias: null,
         isActive: body.isActive ?? true,
       },
     });

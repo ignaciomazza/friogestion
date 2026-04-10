@@ -59,13 +59,10 @@ export async function GET(req: NextRequest) {
       ? `Recibo ${receipt.receiptNumber}`
       : "Recibo";
 
-    const verificationLines = receipt.lines.filter((line) => {
-      if (!line.accountId) return false;
-      return (
-        line.accountMovement?.requiresVerification ??
-        line.paymentMethod.requiresDoubleCheck
-      );
-    });
+    const verificationLines =
+      receipt.status === "CONFIRMED"
+        ? receipt.lines.filter((line) => Boolean(line.accountId))
+        : [];
 
     const doubleCheckStatus = verificationLines.length
       ? verificationLines.some((line) => !line.accountMovement?.verifiedAt)

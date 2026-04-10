@@ -125,7 +125,7 @@ export function ReceiptForm({
 
   const fallbackFinancingMethodId = useMemo(() => {
     const methodWithoutAccount = paymentMethods.find(
-      (method) => !method.requiresAccount && !method.requiresDoubleCheck,
+      (method) => !method.requiresAccount,
     );
     return methodWithoutAccount?.id ?? paymentMethods[0]?.id ?? "";
   }, [paymentMethods]);
@@ -239,8 +239,7 @@ export function ReceiptForm({
         updated.mode === "SIMPLE" &&
         updates.paymentMethodId &&
         method &&
-        !method.requiresAccount &&
-        !method.requiresDoubleCheck
+        !method.requiresAccount
       ) {
         updated.accountId = "";
       }
@@ -334,8 +333,7 @@ export function ReceiptForm({
         const fallbackMethod = methodsById.get(fallbackFinancingMethodId);
         if (
           !fallbackMethod ||
-          fallbackMethod.requiresAccount ||
-          fallbackMethod.requiresDoubleCheck
+          fallbackMethod.requiresAccount
         ) {
           setStatus(
             "Para cuotas hace falta un metodo disponible sin cuenta obligatoria",
@@ -370,7 +368,7 @@ export function ReceiptForm({
       const hasInvalidSimple = simpleLines.some((line) => {
         const method = methodsById.get(line.paymentMethodId);
         if (!line.paymentMethodId) return true;
-        if ((method?.requiresAccount || method?.requiresDoubleCheck) && !line.accountId) {
+        if (method?.requiresAccount && !line.accountId) {
           return true;
         }
         if (line.currencyCode !== "ARS" && !line.fxRateUsed) return true;
@@ -430,10 +428,7 @@ export function ReceiptForm({
         }
 
         setLines([buildLine(paymentMethods, currencies, latestUsdRate)]);
-        const receiptMessage =
-          data?.status === "PENDING"
-            ? "Cobro registrado: pendiente de aprobacion"
-            : "Cobro confirmado";
+        const receiptMessage = "Cobro confirmado";
         setStatus(
           financingSaved
             ? `${receiptMessage}. Plan de cuotas guardado`
@@ -474,7 +469,7 @@ export function ReceiptForm({
 
           const method = methodsById.get(line.paymentMethodId);
           const requiresAccount = Boolean(
-            method?.requiresAccount || method?.requiresDoubleCheck,
+            method?.requiresAccount,
           );
           const currencyAccounts = accounts.filter(
             (account) => account.currencyCode === line.currencyCode,
@@ -547,9 +542,7 @@ export function ReceiptForm({
 
               {!isInstallmentLine && requiresAccount ? (
                 <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
-                  {method?.requiresDoubleCheck && !method?.requiresAccount
-                    ? "Cuenta (doble control)"
-                    : "Cuenta"}
+                  Cuenta
                   <select
                     className="input text-xs"
                     value={line.accountId}

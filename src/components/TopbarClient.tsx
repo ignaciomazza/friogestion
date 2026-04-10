@@ -34,6 +34,7 @@ type TopbarClientProps = {
   blueRate: DolarBlueRate | null;
   officialRate: DolarOfficialRate | null;
   role: string | null;
+  sessionUserName: string;
 };
 
 type NavItem = {
@@ -85,6 +86,7 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/app/income-check",
         label: "Control ingresos",
         Icon: ArrowDownTrayIcon,
+        roles: [...ADMIN_ROLES],
       },
     ],
   },
@@ -130,7 +132,7 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/app/developer",
         label: "Developer",
         Icon: InformationCircleIcon,
-        roles: [...ADMIN_ROLES],
+        roles: ["DEVELOPER"],
       },
     ],
   },
@@ -141,6 +143,7 @@ export default function TopbarClient({
   blueRate,
   officialRate,
   role,
+  sessionUserName,
 }: TopbarClientProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -450,10 +453,22 @@ export default function TopbarClient({
       >
         <div
           className={cn(
-            "flex items-center",
-            isSidebarCompact ? "justify-center" : "justify-end"
+            "flex items-center gap-2",
+            isSidebarCompact ? "justify-center" : "justify-between"
           )}
         >
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate text-xs font-semibold text-zinc-600 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+              isSidebarExpanded
+                ? "delay-100 translate-x-0 opacity-100"
+                : "delay-0 -translate-x-1 opacity-0",
+              isSidebarCompact && !isSidebarExpanded && "pointer-events-none absolute"
+            )}
+            title={isSidebarExpanded ? sessionUserName : undefined}
+          >
+            {sessionUserName}
+          </span>
           <button
             type="button"
             onClick={toggleCollapse}

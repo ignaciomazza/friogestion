@@ -131,7 +131,7 @@ export async function GET(req: NextRequest) {
             lines: {
               select: {
                 accountMovement: {
-                  select: { requiresVerification: true, verifiedAt: true },
+                  select: { verifiedAt: true },
                 },
               },
             },
@@ -147,8 +147,7 @@ export async function GET(req: NextRequest) {
         hasPendingDoubleCheck: sale.receipts.some((receipt) =>
           receipt.lines.some(
             (line) =>
-              line.accountMovement?.requiresVerification &&
-              !line.accountMovement.verifiedAt
+              line.accountMovement ? !line.accountMovement.verifiedAt : false
           )
         ),
         id: sale.id,

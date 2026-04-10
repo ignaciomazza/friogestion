@@ -28,7 +28,7 @@ function generatePassword() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { payload } = await requireRole(req, ["OWNER"]);
+    const { payload } = await requireRole(req, ["DEVELOPER"]);
     const body = bootstrapSchema.parse(await req.json());
 
     const normalizedEmail = body.email.trim().toLowerCase();
@@ -116,11 +116,11 @@ export async function POST(req: NextRequest) {
               userId: user.id,
             },
           },
-          update: { role: "OWNER" },
+          update: { role: "DEVELOPER" },
           create: {
             organizationId: organization.id,
             userId: user.id,
-            role: "OWNER",
+            role: "DEVELOPER",
           },
         });
 
@@ -132,11 +132,11 @@ export async function POST(req: NextRequest) {
                 userId: payload.userId,
               },
             },
-            update: { role: "OWNER" },
+            update: { role: "DEVELOPER" },
             create: {
               organizationId: organization.id,
               userId: payload.userId,
-              role: "OWNER",
+              role: "DEVELOPER",
             },
           });
         }

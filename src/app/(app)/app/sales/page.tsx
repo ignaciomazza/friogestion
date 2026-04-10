@@ -2,11 +2,8 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
-import {
-  DEFAULT_RECEIPT_APPROVAL_ROLES,
-  resolveConfiguredRoles,
-} from "@/lib/auth/receipt-controls";
 import SalesClient from "./sales-client";
+import { backfillPendingReceipts } from "@/lib/receipts/backfill";
 
 const MANAGE_ROLES = ["OWNER", "ADMIN"];
 
@@ -41,8 +38,9 @@ export default async function SalesPage() {
   }
 
   const canManage = MANAGE_ROLES.includes(membership.role);
+  await backfillPendingReceipts(membership.organizationId, payload.userId);
 
-  const [sales, events, paymentMethods, accounts, currencies, orgSettings, rate] =
+  const [sales, events, paymentMethods, accounts, currencies, rate] =
     await Promise.all([
     prisma.sale.findMany({
       where: { organizationId: membership.organizationId },
@@ -55,7 +53,7 @@ export default async function SalesPage() {
             lines: {
               select: {
                 accountMovement: {
-                  select: { requiresVerification: true, verifiedAt: true },
+                  select: { verifiedAt: true },
                 },
               },
             },
@@ -88,10 +86,6 @@ export default async function SalesPage() {
       where: { organizationId: membership.organizationId, isActive: true },
       orderBy: [{ isDefault: "desc" }, { code: "asc" }],
     }),
-    prisma.organization.findUnique({
-      where: { id: membership.organizationId },
-      select: { receiptApprovalRoles: true },
-    }),
     prisma.exchangeRate.findFirst({
       where: {
         organizationId: membership.organizationId,
@@ -109,8 +103,7 @@ export default async function SalesPage() {
         hasPendingDoubleCheck: sale.receipts.some((receipt) =>
           receipt.lines.some(
             (line) =>
-              line.accountMovement?.requiresVerification &&
-              !line.accountMovement.verifiedAt
+              line.accountMovement ? !line.accountMovement.verifiedAt : false
           )
         ),
         id: sale.id,
@@ -175,10 +168,6 @@ export default async function SalesPage() {
         symbol: currency.symbol,
         isDefault: currency.isDefault,
       }))}
-      approvalRoles={resolveConfiguredRoles(
-        orgSettings?.receiptApprovalRoles,
-        DEFAULT_RECEIPT_APPROVAL_ROLES
-      )}
       latestUsdRate={rate?.rate?.toString() ?? null}
     />
   );

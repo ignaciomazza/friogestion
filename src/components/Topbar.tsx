@@ -23,11 +23,17 @@ export default async function Topbar() {
     return null;
   }
 
-  const memberships = await prisma.membership.findMany({
-    where: { userId: payload.userId },
-    include: { organization: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const [user, memberships] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: payload.userId },
+      select: { name: true, email: true },
+    }),
+    prisma.membership.findMany({
+      where: { userId: payload.userId },
+      include: { organization: true },
+      orderBy: { createdAt: "asc" },
+    }),
+  ]);
 
   if (!memberships.length) {
     return null;
@@ -63,6 +69,8 @@ export default async function Topbar() {
     fetchDolarBlue(),
     fetchDolarOfficial(),
   ]);
+  const sessionUserName =
+    user?.name?.trim() || user?.email?.trim().split("@")[0] || "Usuario";
 
   return (
     <TopbarClient
@@ -70,6 +78,7 @@ export default async function Topbar() {
       blueRate={blueRate}
       officialRate={officialRate}
       role={activeMembership?.role ?? null}
+      sessionUserName={sessionUserName}
     />
   );
 }

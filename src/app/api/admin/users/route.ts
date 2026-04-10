@@ -5,26 +5,27 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { hashPassword } from "@/lib/auth/password";
 import { requireRole } from "@/lib/auth/tenant";
+import { USER_MANAGEMENT_ROLE_OPTIONS } from "@/lib/labels";
 
 export const runtime = "nodejs";
 
 const userSchema = z.object({
   email: z.string().email(),
   name: z.string().min(2).optional(),
-  role: z.enum(["OWNER", "ADMIN", "SALES", "CASHIER", "VIEWER"]),
+  role: z.enum(USER_MANAGEMENT_ROLE_OPTIONS),
   password: z.string().min(8).optional(),
 });
 
 const updateSchema = z.object({
   userId: z.string().min(1),
-  role: z.enum(["OWNER", "ADMIN", "SALES", "CASHIER", "VIEWER"]).optional(),
+  role: z.enum(USER_MANAGEMENT_ROLE_OPTIONS).optional(),
   password: z.string().min(8).optional(),
   isActive: z.boolean().optional(),
 });
 
 export async function GET(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, ["OWNER", "ADMIN"]);
+    const { membership } = await requireRole(req, ["OWNER", "ADMIN", "DEVELOPER"]);
     const memberships = await prisma.membership.findMany({
       where: { organizationId: membership.organizationId },
       include: { user: true },
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
     const { membership: requester } = await requireRole(req, [
       "OWNER",
       "ADMIN",
+      "DEVELOPER",
     ]);
     const body = userSchema.parse(await req.json());
     if (body.role === "OWNER" && requester.role !== "OWNER") {
@@ -120,6 +122,7 @@ export async function PATCH(req: NextRequest) {
     const { membership: requester } = await requireRole(req, [
       "OWNER",
       "ADMIN",
+      "DEVELOPER",
     ]);
     const body = updateSchema.parse(await req.json());
 

@@ -13,6 +13,6 @@ export function verificationWhereClause(includeUnverified: boolean) {
   }
 
   return {
-    OR: [{ requiresVerification: false }, { verifiedAt: { not: null } }],
+    OR: [{ receiptLineId: null }, { verifiedAt: { not: null } }],
   };
 }

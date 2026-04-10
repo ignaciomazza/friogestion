@@ -102,9 +102,7 @@ export async function GET(req: NextRequest) {
     const verificationLines = sale.receipts
       .filter((receipt) => receipt.status === "CONFIRMED")
       .flatMap((receipt) =>
-        receipt.lines.filter(
-          (line) => line.accountId && line.paymentMethod.requiresDoubleCheck
-        )
+        receipt.lines.filter((line) => Boolean(line.accountId))
       );
     if (verificationLines.length) {
       const doubleCheckStatus = verificationLines.some(

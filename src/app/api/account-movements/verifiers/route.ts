@@ -3,8 +3,7 @@ import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import {
-  DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES,
-  resolveConfiguredRoles,
+  resolveReceiptDoubleCheckRoles,
 } from "@/lib/auth/receipt-controls";
 
 export async function GET(req: NextRequest) {
@@ -14,9 +13,8 @@ export async function GET(req: NextRequest) {
       where: { id: organizationId },
       select: { receiptDoubleCheckRoles: true },
     });
-    const allowedRoles = resolveConfiguredRoles(
-      org?.receiptDoubleCheckRoles,
-      DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES
+    const allowedRoles = resolveReceiptDoubleCheckRoles(
+      org?.receiptDoubleCheckRoles
     );
     await requireRole(req, allowedRoles);
 

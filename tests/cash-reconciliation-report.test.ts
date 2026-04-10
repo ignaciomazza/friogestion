@@ -15,7 +15,7 @@ test("parseIncludeUnverified understands common truthy values", () => {
 
 test("verificationWhereClause excludes pending verifications by default", () => {
   assert.deepEqual(verificationWhereClause(false), {
-    OR: [{ requiresVerification: false }, { verifiedAt: { not: null } }],
+    OR: [{ receiptLineId: null }, { verifiedAt: { not: null } }],
   });
   assert.deepEqual(verificationWhereClause(true), {});
 });
