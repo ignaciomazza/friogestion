@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatCurrencyARS, formatCurrencyUSD } from "@/lib/format";
+import { ArrowPathIcon, ChevronDownIcon } from "@/components/icons";
 
 type PendingMovement = {
   id: string;
@@ -44,6 +45,40 @@ type VerifierOption = {
   role: string;
 };
 
+function MiniToggle({
+  checked,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+        checked
+          ? "border-sky-300 bg-sky-100"
+          : "border-zinc-300 bg-zinc-100"
+      } ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+    >
+      <span
+        className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+          checked ? "translate-x-4" : "translate-x-0.5"
+        }`}
+      />
+    </button>
+  );
+}
+
 export default function IncomeCheckPage() {
   const [items, setItems] = useState<PendingMovement[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -61,6 +96,8 @@ export default function IncomeCheckPage() {
   const [filterFrom, setFilterFrom] = useState("");
   const [filterTo, setFilterTo] = useState("");
   const [filterVerifierId, setFilterVerifierId] = useState("");
+  const [isRefreshingAll, setIsRefreshingAll] = useState(false);
+  const [showHistoryFilters, setShowHistoryFilters] = useState(false);
 
   const loadPending = useCallback(async () => {
     setIsLoading(true);
@@ -162,6 +199,16 @@ export default function IncomeCheckPage() {
       setIsVerifiedLoading(false);
     }
   }, [filterFrom, filterTo, filterVerifierId]);
+
+  const refreshAll = useCallback(async () => {
+    setIsRefreshingAll(true);
+    await Promise.all([
+      loadPending().catch(() => undefined),
+      loadVerified().catch(() => undefined),
+      loadReport().catch(() => undefined),
+    ]);
+    setIsRefreshingAll(false);
+  }, [loadPending, loadReport, loadVerified]);
 
   useEffect(() => {
     loadVerifiers().catch(() => undefined);
@@ -331,13 +378,25 @@ export default function IncomeCheckPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-zinc-900">
-          Doble control de ingresos
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600">
-          Confirma los ingresos registrados antes de cerrar la jornada.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-900">
+            Doble control de ingresos
+          </h1>
+          <p className="mt-2 text-sm text-zinc-600">
+            Confirma los ingresos registrados antes de cerrar la jornada.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => refreshAll().catch(() => undefined)}
+          disabled={isRefreshingAll}
+          aria-label="Actualizar datos"
+          title="Actualizar datos"
+        >
+          <ArrowPathIcon className={`size-4 ${isRefreshingAll ? "animate-spin" : ""}`} />
+        </button>
       </div>
 
       <div className="card space-y-4 p-6">
@@ -360,14 +419,6 @@ export default function IncomeCheckPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="btn text-xs"
-              onClick={() => loadPending()}
-              disabled={isLoading}
-            >
-              {isLoading ? "Actualizando..." : "Actualizar"}
-            </button>
-            <button
-              type="button"
               className="btn btn-sky text-xs"
               onClick={handleVerifyBatch}
               disabled={!selectedIds.size || verifyingId === "BATCH"}
@@ -380,14 +431,14 @@ export default function IncomeCheckPage() {
         </div>
 
         {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
+        {isLoading ? <p className="text-xs text-zinc-500">Cargando...</p> : null}
 
         <div className="table-scroll">
           <table className="w-full text-left text-xs">
             <thead className="text-[10px] uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="py-2 pr-3">
-                  <input
-                    type="checkbox"
+                  <MiniToggle
                     checked={allSelected}
                     onChange={() => {
                       if (allSelected) {
@@ -396,7 +447,7 @@ export default function IncomeCheckPage() {
                         setSelectedIds(new Set(items.map((item) => item.id)));
                       }
                     }}
-                    aria-label="Seleccionar todos"
+                    label="Seleccionar todos"
                   />
                 </th>
                 <th className="py-2 pr-3">Fecha</th>
@@ -416,8 +467,7 @@ export default function IncomeCheckPage() {
                     className="border-t border-zinc-200/60 text-zinc-600"
                   >
                     <td className="py-2 pr-3">
-                      <input
-                        type="checkbox"
+                      <MiniToggle
                         checked={selectedIds.has(item.id)}
                         onChange={() =>
                           setSelectedIds((prev) => {
@@ -430,7 +480,7 @@ export default function IncomeCheckPage() {
                             return next;
                           })
                         }
-                        aria-label="Seleccionar ingreso"
+                        label="Seleccionar ingreso"
                       />
                     </td>
                     <td className="py-2 pr-3">
@@ -484,14 +534,6 @@ export default function IncomeCheckPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="btn text-xs"
-              onClick={loadVerified}
-              disabled={isVerifiedLoading}
-            >
-              {isVerifiedLoading ? "Actualizando..." : "Actualizar"}
-            </button>
-            <button
-              type="button"
               className="btn btn-sky text-xs"
               onClick={handleExportVerifiedCsv}
               disabled={!verifiedItems.length}
@@ -501,51 +543,69 @@ export default function IncomeCheckPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-3 text-[11px] text-zinc-500">
-            Desde
-            <input
-              type="date"
-              className="input cursor-pointer text-xs"
-              value={filterFrom}
-              onChange={(event) => setFilterFrom(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-3 text-[11px] text-zinc-500">
-            Hasta
-            <input
-              type="date"
-              className="input cursor-pointer text-xs"
-              value={filterTo}
-              onChange={(event) => setFilterTo(event.target.value)}
-            />
-          </label>
-          <label className="flex flex-col gap-3 text-[11px] text-zinc-500 sm:w-52">
-            Verificador
-            <select
-              className="input cursor-pointer text-xs"
-              value={filterVerifierId}
-              onChange={(event) => setFilterVerifierId(event.target.value)}
-            >
-              <option value="">Todos</option>
-              {verifiers.map((verifier) => (
-                <option key={verifier.id} value={verifier.id}>
-                  {verifier.name ?? verifier.email}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="space-y-3">
           <button
             type="button"
             className="btn text-xs"
-            onClick={() => {
-              setFilterFrom("");
-              setFilterTo("");
-              setFilterVerifierId("");
-            }}
+            onClick={() => setShowHistoryFilters((prev) => !prev)}
+            aria-expanded={showHistoryFilters}
+            aria-controls="history-filters"
           >
-            Limpiar
+            <ChevronDownIcon
+              className={`size-4 transition-transform ${
+                showHistoryFilters ? "rotate-180" : ""
+              }`}
+            />
+            Filtros
           </button>
+          {showHistoryFilters ? (
+            <div id="history-filters" className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-3 text-[11px] text-zinc-500">
+                Desde
+                <input
+                  type="date"
+                  className="input cursor-pointer text-xs"
+                  value={filterFrom}
+                  onChange={(event) => setFilterFrom(event.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-3 text-[11px] text-zinc-500">
+                Hasta
+                <input
+                  type="date"
+                  className="input cursor-pointer text-xs"
+                  value={filterTo}
+                  onChange={(event) => setFilterTo(event.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-3 text-[11px] text-zinc-500 sm:w-52">
+                Verificador
+                <select
+                  className="input cursor-pointer text-xs"
+                  value={filterVerifierId}
+                  onChange={(event) => setFilterVerifierId(event.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {verifiers.map((verifier) => (
+                    <option key={verifier.id} value={verifier.id}>
+                      {verifier.name ?? verifier.email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={() => {
+                  setFilterFrom("");
+                  setFilterTo("");
+                  setFilterVerifierId("");
+                }}
+              >
+                Limpiar
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {verifiedStatus ? (
@@ -627,9 +687,6 @@ export default function IncomeCheckPage() {
               <option value={14}>Ultimos 14 dias</option>
               <option value={30}>Ultimos 30 dias</option>
             </select>
-            <button type="button" className="btn text-xs" onClick={loadReport}>
-              Actualizar
-            </button>
             <button
               type="button"
               className="btn btn-sky text-xs"

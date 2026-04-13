@@ -373,67 +373,67 @@ export default function CustomersPage() {
           <p className="section-subtitle">Alta rapida para operar en ventas.</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-5">
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Nombre o razon social</span>
-            <input
-              className="input w-full"
-              value={form.displayName}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  displayName: event.target.value,
-                }))
-              }
-              placeholder="Nombre o razon social"
-              required
-            />
-          </label>
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Lista de precios</span>
-            <select
-              className="input cursor-pointer"
-              value={form.defaultPriceListId}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  defaultPriceListId: event.target.value,
-                }))
-              }
-            >
-              <option value="">Sin lista por defecto</option>
-              {priceLists.map((priceList) => (
-                <option key={priceList.id} value={priceList.id}>
-                  {priceList.name}
-                  {priceList.isDefault ? " (Default)" : ""}
-                  {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
-              <span className="input-label">CUIT</span>
+              <span className="input-label">Nombre o razon social</span>
               <input
-                className="input"
-                value={form.taxId}
+                className="input w-full"
+                value={form.displayName}
                 onChange={(event) =>
                   setForm((prev) => ({
                     ...prev,
-                    taxId: normalizeTaxId(event.target.value),
+                    displayName: event.target.value,
                   }))
                 }
-                placeholder="CUIT"
+                placeholder="Nombre o razon social"
+                required
               />
-              <button
-                type="button"
-                className="btn text-xs"
-                onClick={() => handleLookupByTaxId("new")}
-                disabled={isLookupLoading}
+            </label>
+            <label className="flex flex-col gap-3">
+              <span className="input-label">Lista de precios</span>
+              <select
+                className="input cursor-pointer"
+                value={form.defaultPriceListId}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    defaultPriceListId: event.target.value,
+                  }))
+                }
               >
-                {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
-              </button>
+                <option value="">Sin lista por defecto</option>
+                {priceLists.map((priceList) => (
+                  <option key={priceList.id} value={priceList.id}>
+                    {priceList.name}
+                    {priceList.isDefault ? " (Default)" : ""}
+                    {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
+          <label className="flex flex-col gap-3">
+            <span className="input-label">CUIT</span>
+            <input
+              className="input w-full"
+              value={form.taxId}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  taxId: normalizeTaxId(event.target.value),
+                }))
+              }
+              placeholder="CUIT"
+            />
+            <button
+              type="button"
+              className="btn text-xs w-fit"
+              onClick={() => handleLookupByTaxId("new")}
+              disabled={isLookupLoading}
+            >
+              {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
+            </button>
+          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
               <span className="input-label">Correo</span>
@@ -549,6 +549,16 @@ export default function CustomersPage() {
         </div>
         <div className="table-scroll">
           <table className="w-full text-left text-xs">
+            <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="py-2 pr-4">Cliente</th>
+                <th className="py-2 pr-4">Lista</th>
+                <th className="py-2 pr-4">Correo</th>
+                <th className="py-2 pr-4">Telefono</th>
+                <th className="py-2 pr-4">Direccion</th>
+                <th className="py-2 pr-4 text-right">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
               {filteredItems.length ? (
                 filteredItems.map((item) => (
@@ -572,6 +582,9 @@ export default function CustomersPage() {
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.phone ?? "-"}
+                      </td>
+                      <td className="py-3 pr-4 text-zinc-600">
+                        {item.address ?? "-"}
                       </td>
                       <td className="py-3 pr-4">
                         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -605,42 +618,43 @@ export default function CustomersPage() {
                           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                           className="border-t border-zinc-200/60"
                         >
-                          <td className="py-3" colSpan={5}>
+                          <td className="py-3" colSpan={6}>
                             <form onSubmit={handleUpdate} className="space-y-4">
-                            <div className="grid gap-3 sm:grid-cols-4">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  className="input"
+                                  value={editForm.displayName}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      displayName: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Nombre o razon social"
+                                  required
+                                />
+                                <select
+                                  className="input cursor-pointer"
+                                  value={editForm.defaultPriceListId}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      defaultPriceListId: event.target.value,
+                                    }))
+                                  }
+                                >
+                                  <option value="">Sin lista por defecto</option>
+                                  {priceLists.map((priceList) => (
+                                    <option key={priceList.id} value={priceList.id}>
+                                      {priceList.name}
+                                      {priceList.isDefault ? " (Default)" : ""}
+                                      {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
                               <input
-                                className="input sm:col-span-2"
-                                value={editForm.displayName}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    displayName: event.target.value,
-                                  }))
-                                }
-                                placeholder="Nombre o razon social"
-                                required
-                              />
-                              <select
-                                className="input cursor-pointer sm:col-span-2"
-                                value={editForm.defaultPriceListId}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    defaultPriceListId: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="">Sin lista por defecto</option>
-                                {priceLists.map((priceList) => (
-                                  <option key={priceList.id} value={priceList.id}>
-                                    {priceList.name}
-                                    {priceList.isDefault ? " (Default)" : ""}
-                                    {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
-                                  </option>
-                                ))}
-                              </select>
-                              <input
-                                className="input"
+                                className="input w-full"
                                 value={editForm.taxId}
                                 onChange={(event) =>
                                   setEditForm((prev) => ({
@@ -650,29 +664,30 @@ export default function CustomersPage() {
                                 }
                                 placeholder="CUIT"
                               />
-                              <input
-                                className="input"
-                                value={editForm.email}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    email: event.target.value,
-                                  }))
-                                }
-                                placeholder="Correo"
-                              />
-                              <input
-                                className="input"
-                                value={editForm.phone}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    phone: event.target.value,
-                                  }))
-                                }
-                                placeholder="Telefono"
-                              />
-                            </div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  className="input"
+                                  value={editForm.email}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      email: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Correo"
+                                />
+                                <input
+                                  className="input"
+                                  value={editForm.phone}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      phone: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Telefono"
+                                />
+                              </div>
                               <input
                                 className="input w-full"
                                 value={editForm.address}
@@ -718,7 +733,7 @@ export default function CustomersPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="py-3 text-sm text-zinc-500" colSpan={5}>
+                  <td className="py-3 text-sm text-zinc-500" colSpan={6}>
                     Sin clientes por ahora.
                   </td>
                 </tr>

@@ -28,6 +28,12 @@ type BillingClientProps = {
 };
 
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
+const QUEUE_POLL_ATTEMPTS = 90;
+const QUEUE_POLL_INTERVAL_MS = 1000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default function BillingClient({
   initialSales,
@@ -157,6 +163,65 @@ export default function BillingClient({
   const hasRecipientDoc =
     invoiceForm.docType.trim().length > 0 && invoiceForm.docNumber.trim().length > 0;
 
+  const applyIssuedInvoice = (saleId: string, invoiceId: string, warnings: string[]) => {
+    setInvoiceWarnings(warnings);
+    setInvoiceStatus("Factura emitida correctamente.");
+    setSales((prev) =>
+      prev.map((sale) =>
+        sale.id === saleId ? { ...sale, billingStatus: "BILLED" } : sale
+      )
+    );
+    window.open(
+      `/api/fiscal-invoices/${invoiceId}/pdf`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  };
+
+  const waitForQueuedInvoice = async (jobId: string, saleId: string) => {
+    for (let attempt = 0; attempt < QUEUE_POLL_ATTEMPTS; attempt += 1) {
+      const pollResponse = await fetch(`/api/fiscal-invoices/jobs/${jobId}`, {
+        cache: "no-store",
+      });
+      const pollData = await pollResponse.json();
+      if (!pollResponse.ok) {
+        setInvoiceStatus(pollData?.error ?? "No se pudo consultar la cola de facturacion");
+        return false;
+      }
+
+      if (
+        pollData?.status === "COMPLETED" &&
+        pollData?.invoice &&
+        typeof pollData.invoice.id === "string"
+      ) {
+        const warnings = Array.isArray(pollData?.warnings)
+          ? pollData.warnings.filter(
+              (item: unknown): item is string => typeof item === "string"
+            )
+          : [];
+        applyIssuedInvoice(saleId, pollData.invoice.id, warnings);
+        return true;
+      }
+
+      if (pollData?.status === "ERROR") {
+        setInvoiceStatus(pollData?.error ?? "No se pudo emitir factura");
+        return false;
+      }
+
+      setInvoiceStatus(
+        pollData?.status === "RUNNING"
+          ? "Factura en procesamiento..."
+          : "Factura en cola, esperando turno..."
+      );
+      await sleep(QUEUE_POLL_INTERVAL_MS);
+    }
+
+    setInvoiceStatus(
+      "La factura sigue en cola. Revisa en unos segundos desde el listado."
+    );
+    return false;
+  };
+
   const submitInvoice = async () => {
     if (!saleToInvoice) return;
     setInvoiceStatus(null);
@@ -165,28 +230,49 @@ export default function BillingClient({
     try {
       const subtotal = Number(saleToInvoice.subtotal ?? saleToInvoice.total ?? 0);
       const iva = Number(saleToInvoice.taxes ?? 0);
+      const extraAmount = Number(saleToInvoice.extraAmount ?? 0);
       const total = Number(saleToInvoice.total ?? subtotal + iva);
       if (!Number.isFinite(total) || total <= 0) {
         setInvoiceStatus("No se pudo calcular totales de la venta.");
         return;
       }
+      if (Number.isFinite(extraAmount) && Math.abs(extraAmount) > 0.005) {
+        setInvoiceStatus(
+          "La venta tiene recargos o descuentos. Ajusta los totales antes de facturar."
+        );
+        return;
+      }
+
+      const itemsTaxRates = (saleToInvoice.items ?? [])
+        .map((item) => {
+          if (!item.id) return null;
+          const rate = Number(item.taxRate ?? 0);
+          if (!Number.isFinite(rate)) return null;
+          return { saleItemId: item.id, rate };
+        })
+        .filter(
+          (item): item is { saleItemId: string; rate: number } => item !== null
+        );
+      if (!itemsTaxRates.length) {
+        setInvoiceStatus(
+          "La venta no tiene alicuotas de IVA por item. Revisala antes de facturar."
+        );
+        return;
+      }
+
+      const payload: Record<string, unknown> = {
+        saleId: saleToInvoice.id,
+        type: invoiceForm.type,
+        docType: invoiceForm.docType || undefined,
+        docNumber: invoiceForm.docNumber || undefined,
+        itemsTaxRates,
+        requiresIncomeTaxDeduction: invoiceForm.requiresIncomeTaxDeduction,
+      };
 
       const res = await fetch("/api/fiscal-invoices", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          saleId: saleToInvoice.id,
-          type: invoiceForm.type,
-          docType: invoiceForm.docType || undefined,
-          docNumber: invoiceForm.docNumber || undefined,
-          manualTotals: {
-            net: Number.isFinite(subtotal) ? subtotal : total,
-            iva: Number.isFinite(iva) ? iva : 0,
-            total,
-            exempt: 0,
-          },
-          requiresIncomeTaxDeduction: invoiceForm.requiresIncomeTaxDeduction,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -194,22 +280,26 @@ export default function BillingClient({
         return;
       }
 
-      const warnings = Array.isArray(data?.warnings)
-        ? data.warnings.filter((item: unknown): item is string => typeof item === "string")
-        : [];
-      setInvoiceWarnings(warnings);
-      setInvoiceStatus("Factura emitida correctamente.");
-      setSales((prev) =>
-        prev.map((sale) =>
-          sale.id === saleToInvoice.id
-            ? { ...sale, billingStatus: "BILLED" }
-            : sale
-        )
-      );
-      if (data?.id) {
-        window.open(`/api/fiscal-invoices/${data.id}/pdf`, "_blank", "noopener,noreferrer");
+      if (typeof data?.id === "string") {
+        const warnings = Array.isArray(data?.warnings)
+          ? data.warnings.filter(
+              (item: unknown): item is string => typeof item === "string"
+            )
+          : [];
+        applyIssuedInvoice(saleToInvoice.id, data.id, warnings);
+        setSaleToInvoice(null);
+        return;
       }
-      setSaleToInvoice(null);
+
+      if (typeof data?.jobId === "string") {
+        const completed = await waitForQueuedInvoice(data.jobId, saleToInvoice.id);
+        if (completed) {
+          setSaleToInvoice(null);
+        }
+        return;
+      }
+
+      setInvoiceStatus("No se pudo emitir factura");
     } catch {
       setInvoiceStatus("No se pudo emitir factura");
     } finally {
@@ -524,6 +614,15 @@ export default function BillingClient({
                 </div>
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full text-left text-xs">
+                    <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+                      <tr>
+                        <th className="py-2 pr-4">Venta</th>
+                        <th className="py-2 pr-4">Cliente</th>
+                        <th className="py-2 pr-4">Fecha</th>
+                        <th className="py-2 pr-4">Total</th>
+                        <th className="py-2 pr-4">Acciones</th>
+                      </tr>
+                    </thead>
                     <tbody>
                       {filteredToBill.length ? (
                         filteredToBill.map((sale) => (
@@ -678,8 +777,8 @@ export default function BillingClient({
             </label>
             {requiresIdentification && !hasRecipientDoc ? (
               <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-                Advertencia: por monto o deduccion corresponde identificar receptor.
-                Se puede continuar, pero quedara aviso de cumplimiento.
+                Por monto o deduccion corresponde identificar al receptor.
+                Para emitir, completa tipo y numero de documento.
               </p>
             ) : null}
             <p className="inline-flex items-center rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-medium text-emerald-800">
@@ -697,7 +796,7 @@ export default function BillingClient({
                 type="button"
                 className="btn btn-emerald text-xs"
                 onClick={submitInvoice}
-                disabled={isIssuing}
+                disabled={isIssuing || (requiresIdentification && !hasRecipientDoc)}
               >
                 {isIssuing ? "Emitiendo..." : "Emitir factura"}
               </button>

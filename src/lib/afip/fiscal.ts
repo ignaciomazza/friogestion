@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAfipClient } from "@/lib/afip/client";
 import { getSalesPoints } from "@/lib/afip/electronic-billing";
@@ -177,6 +177,14 @@ function ensureNotFuture(date: Date) {
   }
 }
 
+function round2(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function differsByMoreThanOneCent(a: number, b: number) {
+  return Math.abs(round2(a) - round2(b)) > 0.01;
+}
+
 function buildQrPayload(data: {
   issueDate: Date;
   cuit: number;
@@ -231,6 +239,14 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     throw new Error("SALE_ALREADY_BILLED");
   }
 
+  if (sale.status === "CANCELLED") {
+    throw new Error("SALE_CANCELLED");
+  }
+
+  if (sale.status !== "CONFIRMED") {
+    throw new Error("SALE_STATUS_INVALID");
+  }
+
   if (input.serviceDates) {
     throw new Error("SERVICE_DATES_NOT_SUPPORTED");
   }
@@ -253,6 +269,19 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   }));
 
   const totals = resolveTotals(items, input.itemsTaxRates, input.manualTotals);
+
+  const saleSubtotal = Number(sale.subtotal ?? 0);
+  const saleTaxes = Number(sale.taxes ?? 0);
+  const saleTotal = Number(sale.total ?? saleSubtotal + saleTaxes);
+  const fiscalSubtotal = totals.net + totals.exempt;
+  if (
+    differsByMoreThanOneCent(fiscalSubtotal, saleSubtotal) ||
+    differsByMoreThanOneCent(totals.iva, saleTaxes) ||
+    differsByMoreThanOneCent(totals.total, saleTotal)
+  ) {
+    throw new Error("SALE_TOTALS_MISMATCH");
+  }
+
   const doc = resolveFiscalRecipientDocument({
     customerType: sale.customer.type,
     customerTaxId: sale.customer.taxId ?? null,
@@ -261,6 +290,13 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     totalAmount: totals.total,
     requiresIncomeTaxDeduction: input.requiresIncomeTaxDeduction ?? false,
   });
+  if (doc.requireIdentification && !doc.identificationProvided) {
+    throw new Error("DOC_TYPE_REQUIRED");
+  }
+  if (input.type === "A" && doc.docType !== 80) {
+    throw new Error("FACTURA_A_REQUIRES_CUIT");
+  }
+
   const currencyCode = await resolveCurrency(
     input.organizationId,
     input.currencyCode
@@ -289,72 +325,118 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   if (totals.ivaItems.length) {
     voucherData.Iva = totals.ivaItems;
   }
-
-  const result = await afip.ElectronicBilling.createNextVoucher(voucherData);
-  const cae = result?.CAE;
-  const caeDue = result?.CAEFchVto;
-  const voucherNumber = Number(
-    result?.voucherNumber ?? result?.voucher_number
-  );
-
-  if (!cae) {
-    throw new Error("AFIP_CAE_MISSING");
-  }
-
-  if (!Number.isFinite(voucherNumber)) {
-    throw new Error("AFIP_VOUCHER_NUMBER_MISSING");
-  }
-
-  voucherData.CbteDesde = voucherNumber;
-  voucherData.CbteHasta = voucherNumber;
-
-  const qrPayload = buildQrPayload({
-    issueDate,
-    cuit: Number(afip.CUIT),
-    pointOfSale,
-    voucherType,
-    voucherNumber,
-    total: totals.total,
-    monId,
-    monCotiz,
-    docType: doc.docType,
-    docNumber: doc.docNumber,
-    cae,
-  });
-
-  const qrBase64 = await buildQrDataUrl(qrPayload);
-
-  const payloadAfip = {
-    voucherData,
-    qrBase64,
-    serviceDates: null,
-    manualTotals: input.manualTotals ?? null,
-    complianceWarnings: doc.warnings,
-    requiresIncomeTaxDeduction: Boolean(input.requiresIncomeTaxDeduction),
-  };
-
-  const [invoice] = await prisma.$transaction([
-    prisma.fiscalInvoice.create({
+  let reservedInvoiceId: string | null = null;
+  let voucherAuthorized = false;
+  try {
+    const reserved = await prisma.fiscalInvoice.create({
       data: {
         organizationId: sale.organizationId,
         saleId: sale.id,
         type: input.type,
-        pointOfSale: pointOfSale.toString(),
-        number: voucherNumber.toString(),
-        cae,
-        caeDueDate: caeDue ? new Date(caeDue) : null,
         issuedAt: issueDate,
         currencyCode,
-        payloadAfip: payloadAfip as Prisma.JsonObject,
       },
-    }),
-    prisma.sale.update({
-      where: { id: sale.id },
-      data: { billingStatus: "BILLED" },
-    }),
-  ]);
+      select: { id: true },
+    });
+    reservedInvoiceId = reserved.id;
+    const reservedId = reserved.id;
 
-  return { invoice, warnings: doc.warnings };
+    const invoice = await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`
+          SELECT 1 FROM "Organization"
+          WHERE id = ${sale.organizationId}
+          FOR UPDATE
+        `;
+
+        const result = await afip.ElectronicBilling.createNextVoucher(voucherData);
+        const cae = result?.CAE;
+        const caeDue = result?.CAEFchVto;
+        const voucherNumber = Number(
+          result?.voucherNumber ?? result?.voucher_number
+        );
+
+        if (!cae) {
+          throw new Error("AFIP_CAE_MISSING");
+        }
+
+        if (!Number.isFinite(voucherNumber)) {
+          throw new Error("AFIP_VOUCHER_NUMBER_MISSING");
+        }
+        voucherAuthorized = true;
+
+        voucherData.CbteDesde = voucherNumber;
+        voucherData.CbteHasta = voucherNumber;
+
+        const qrPayload = buildQrPayload({
+          issueDate,
+          cuit: Number(afip.CUIT),
+          pointOfSale,
+          voucherType,
+          voucherNumber,
+          total: totals.total,
+          monId,
+          monCotiz,
+          docType: doc.docType,
+          docNumber: doc.docNumber,
+          cae,
+        });
+
+        const qrBase64 = await buildQrDataUrl(qrPayload);
+
+        const payloadAfip = {
+          voucherData,
+          qrBase64,
+          serviceDates: null,
+          manualTotals: input.manualTotals ?? null,
+          complianceWarnings: doc.warnings,
+          requiresIncomeTaxDeduction: Boolean(input.requiresIncomeTaxDeduction),
+        };
+
+        const updated = await tx.fiscalInvoice.update({
+          where: { id: reservedId },
+          data: {
+            type: input.type,
+            pointOfSale: pointOfSale.toString(),
+            number: voucherNumber.toString(),
+            cae,
+            caeDueDate: caeDue ? new Date(caeDue) : null,
+            issuedAt: issueDate,
+            currencyCode,
+            payloadAfip: payloadAfip as Prisma.JsonObject,
+          },
+        });
+
+        await tx.sale.update({
+          where: { id: sale.id },
+          data: { billingStatus: "BILLED" },
+        });
+
+        return updated;
+      },
+      { maxWait: 10_000, timeout: 120_000 }
+    );
+
+    return { invoice, warnings: doc.warnings };
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new Error("SALE_ALREADY_BILLED");
+    }
+    if (reservedInvoiceId && !voucherAuthorized) {
+      await prisma.fiscalInvoice.deleteMany({
+        where: {
+          id: reservedInvoiceId,
+          saleId: sale.id,
+          cae: null,
+          number: null,
+        },
+      });
+    }
+    throw error;
+  }
 }
 
 export async function issueCreditNote(input: IssueCreditNoteInput) {

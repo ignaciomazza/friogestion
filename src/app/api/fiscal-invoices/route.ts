@@ -3,8 +3,13 @@ import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
-import { issueFiscalInvoice } from "@/lib/afip/fiscal";
 import { mapAfipError } from "@/lib/afip/errors";
+import {
+  enqueueFiscalInvoiceIssueJob,
+  extractJobWarnings,
+  getFiscalInvoiceIssueJob,
+  runFiscalIssueQueue,
+} from "@/lib/afip/issue-queue";
 import { isAuthError } from "@/lib/auth/errors";
 import { parseOptionalDate } from "@/lib/validation";
 
@@ -117,7 +122,7 @@ export async function POST(req: NextRequest) {
       serviceDates = { from, to, due };
     }
 
-    const result = await issueFiscalInvoice({
+    const requestPayload = {
       organizationId: membership.organizationId,
       saleId: body.saleId,
       type: body.type,
@@ -130,19 +135,75 @@ export async function POST(req: NextRequest) {
       itemsTaxRates: body.itemsTaxRates,
       manualTotals: body.manualTotals ?? null,
       requiresIncomeTaxDeduction: body.requiresIncomeTaxDeduction ?? false,
+    } as const;
+
+    const job = await enqueueFiscalInvoiceIssueJob({
+      organizationId: membership.organizationId,
+      request: {
+        saleId: requestPayload.saleId,
+        type: requestPayload.type,
+        pointOfSale: requestPayload.pointOfSale,
+        docType: requestPayload.docType,
+        docNumber: requestPayload.docNumber,
+        currencyCode: requestPayload.currencyCode,
+        issueDate: requestPayload.issueDate,
+        serviceDates: requestPayload.serviceDates,
+        itemsTaxRates: requestPayload.itemsTaxRates,
+        manualTotals: requestPayload.manualTotals,
+        requiresIncomeTaxDeduction:
+          requestPayload.requiresIncomeTaxDeduction,
+      },
     });
-    const invoice = result.invoice;
+
+    await runFiscalIssueQueue(membership.organizationId);
+
+    const resolvedJob = await getFiscalInvoiceIssueJob({
+      organizationId: membership.organizationId,
+      jobId: job.id,
+    });
+    if (!resolvedJob) {
+      return NextResponse.json(
+        { error: "No se pudo recuperar el estado de facturacion" },
+        { status: 500 }
+      );
+    }
+
+    if (resolvedJob.status === "ERROR") {
+      return NextResponse.json(
+        {
+          code: resolvedJob.errorCode ?? "AFIP_ERROR",
+          error: resolvedJob.errorMessage ?? "Error en ARCA.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (resolvedJob.status === "COMPLETED" && resolvedJob.fiscalInvoice) {
+      const invoice = resolvedJob.fiscalInvoice;
+      const warnings = extractJobWarnings(resolvedJob.responsePayload);
+      return NextResponse.json({
+        id: invoice.id,
+        saleId: invoice.saleId,
+        type: invoice.type,
+        pointOfSale: invoice.pointOfSale,
+        number: invoice.number,
+        cae: invoice.cae,
+        issuedAt: invoice.issuedAt?.toISOString() ?? null,
+        warnings,
+        jobId: resolvedJob.id,
+        jobStatus: resolvedJob.status,
+      });
+    }
 
     return NextResponse.json({
-      id: invoice.id,
-      saleId: invoice.saleId,
-      type: invoice.type,
-      pointOfSale: invoice.pointOfSale,
-      number: invoice.number,
-      cae: invoice.cae,
-      issuedAt: invoice.issuedAt?.toISOString() ?? null,
-      warnings: result.warnings,
-    });
+      jobId: resolvedJob.id,
+      saleId: resolvedJob.saleId,
+      status: resolvedJob.status,
+      message:
+        resolvedJob.status === "RUNNING"
+          ? "Factura en procesamiento"
+          : "Factura en cola",
+    }, { status: 202 });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });

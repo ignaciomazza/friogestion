@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
+import { STOCK_PAGE_ENABLED } from "@/lib/features";
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
+  }
+
+  if (!STOCK_PAGE_ENABLED && pathname.startsWith("/app/stock")) {
+    const productsUrl = req.nextUrl.clone();
+    productsUrl.pathname = "/app/products";
+    productsUrl.search = "";
+    return NextResponse.redirect(productsUrl);
   }
 
   const token = req.cookies.get(AUTH_COOKIE_NAME)?.value;

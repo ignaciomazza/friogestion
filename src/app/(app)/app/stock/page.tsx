@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   CheckIcon,
@@ -10,6 +11,7 @@ import {
   PlusIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
+import { STOCK_ACCOUNTING_ENABLED, STOCK_PAGE_ENABLED } from "@/lib/features";
 import { normalizeDecimalInput } from "@/lib/input-format";
 import { UNIT_LABELS, UNIT_VALUES, UNIT_OPTIONS } from "@/lib/units";
 
@@ -167,6 +169,7 @@ const derivePercentagesFromPrices = (
 };
 
 export default function StockPage() {
+  const router = useRouter();
   const [products, setProducts] = useState<StockProduct[]>([]);
   const [priceLists, setPriceLists] = useState<PriceListOption[]>([]);
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
@@ -182,6 +185,12 @@ export default function StockPage() {
     model: "",
     unit: "",
   });
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) {
+      router.replace("/app/products");
+    }
+  }, [router]);
 
   const hydrateRows = (
     nextProducts: StockProduct[],
@@ -219,6 +228,7 @@ export default function StockPage() {
   };
 
   const loadStock = useCallback(async () => {
+    if (!STOCK_PAGE_ENABLED) return;
     setIsLoading(true);
     try {
       const res = await fetch("/api/stock", { cache: "no-store" });
@@ -245,6 +255,7 @@ export default function StockPage() {
   }, []);
 
   useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
     loadStock().catch(() => undefined);
   }, [loadStock]);
 
@@ -407,7 +418,11 @@ export default function StockPage() {
       }
 
       const adjustmentNumber = Number(draft.adjustmentQty);
-      if (Number.isFinite(adjustmentNumber) && adjustmentNumber !== 0) {
+      if (
+        STOCK_ACCOUNTING_ENABLED &&
+        Number.isFinite(adjustmentNumber) &&
+        adjustmentNumber !== 0
+      ) {
         const adjustRes = await fetch("/api/stock/adjustments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -479,17 +494,25 @@ export default function StockPage() {
     }
   };
 
+  if (!STOCK_PAGE_ENABLED) {
+    return null;
+  }
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">Stock</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Ajusta costo ARS/USD, precios por lista y stock por producto en una sola grilla.
+          Ajusta costo ARS/USD y precios por lista en una sola grilla.
         </p>
       </div>
 
       <div className="table-scroll pb-1">
-        <div className="grid min-w-[680px] grid-cols-3 gap-2">
+        <div
+          className={`grid min-w-[680px] gap-2 ${
+            STOCK_ACCOUNTING_ENABLED ? "grid-cols-3" : "grid-cols-2"
+          }`}
+        >
           <div className="card border !border-sky-200 p-3 !bg-white">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-sky-700">
@@ -511,19 +534,21 @@ export default function StockPage() {
               </p>
             </div>
           </div>
-          <div className="card border !border-amber-200 p-3 !bg-white">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-amber-700">
-                Stock total
-              </span>
-              <p className="text-base font-semibold text-zinc-900">
-                {totalStock.toLocaleString("es-AR", {
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 3,
-                })}
-              </p>
+          {STOCK_ACCOUNTING_ENABLED ? (
+            <div className="card border !border-amber-200 p-3 !bg-white">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-amber-700">
+                  Stock total
+                </span>
+                <p className="text-base font-semibold text-zinc-900">
+                  {totalStock.toLocaleString("es-AR", {
+                    minimumFractionDigits: 0,
+                    maximumFractionDigits: 3,
+                  })}
+                </p>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
 
@@ -648,7 +673,7 @@ export default function StockPage() {
       <div className="card space-y-4 p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Stock de productos
+            Costos y listas de precios
           </h2>
           <input
             className="input w-full max-w-sm"
@@ -658,19 +683,23 @@ export default function StockPage() {
           />
         </div>
         <div className="table-scroll">
-          <table className="w-full min-w-[1280px] text-left text-xs">
+          <table className="w-full min-w-[1020px] text-left text-xs">
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="py-2 pr-3">Producto</th>
-                <th className="py-2 pr-3">Costo ARS</th>
-                <th className="py-2 pr-3">Costo USD</th>
+                <th className="w-[220px] py-2 pr-2">Producto</th>
+                <th className="w-[108px] py-2 pr-2">Costo ARS</th>
+                <th className="w-[108px] py-2 pr-2">Costo USD</th>
                 {priceLists.map((priceList) => (
-                  <th key={priceList.id} className="py-2 pr-3">
+                  <th key={priceList.id} className="w-[108px] py-2 pr-2">
                     Precio {priceList.name}
                   </th>
                 ))}
-                <th className="py-2 pr-3">Stock</th>
-                <th className="py-2 pr-3 text-right">Guardar</th>
+                {STOCK_ACCOUNTING_ENABLED ? (
+                  <th className="w-[220px] py-2 pr-2">Stock</th>
+                ) : null}
+                <th className="sticky right-0 z-20 w-[110px] bg-white/95 py-2 pr-2 text-right">
+                  Guardar
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -747,8 +776,8 @@ export default function StockPage() {
                     key={product.id}
                     className="border-t border-zinc-200/60 align-middle transition-colors hover:bg-white/60"
                   >
-                    <td className="py-3 pr-3">
-                      <div className="flex max-w-[320px] items-center gap-2 whitespace-nowrap">
+                    <td className="py-3 pr-2">
+                      <div className="flex max-w-[220px] items-center gap-2 whitespace-nowrap">
                         <p className="truncate text-sm font-medium text-zinc-900">
                           {product.name}
                         </p>
@@ -758,8 +787,8 @@ export default function StockPage() {
                         </p>
                       </div>
                     </td>
-                    <td className="py-3 pr-3">
-                      <div className="w-32">
+                    <td className="py-3 pr-2">
+                      <div className="w-24">
                         <MoneyInput
                           className="input no-spinner w-full px-2 text-right tabular-nums"
                           value={draft.cost}
@@ -774,8 +803,8 @@ export default function StockPage() {
                         />
                       </div>
                     </td>
-                    <td className="py-3 pr-3">
-                      <div className="w-32">
+                    <td className="py-3 pr-2">
+                      <div className="w-24">
                         <MoneyInput
                           className="input no-spinner w-full px-2 text-right tabular-nums"
                           value={draft.costUsd}
@@ -791,8 +820,8 @@ export default function StockPage() {
                       </div>
                     </td>
                     {priceLists.map((priceList) => (
-                      <td key={`${product.id}-${priceList.id}`} className="py-3 pr-3">
-                        <div className="w-32">
+                      <td key={`${product.id}-${priceList.id}`} className="py-3 pr-2">
+                        <div className="w-24">
                           <MoneyInput
                             className="input no-spinner w-full px-2 text-right tabular-nums"
                             value={draft.percentages[priceList.id] ?? ""}
@@ -810,61 +839,65 @@ export default function StockPage() {
                         </div>
                       </td>
                     ))}
-                    <td className="py-3 pr-3">
-                      <div className="flex items-center gap-2 whitespace-nowrap">
-                        <span className="font-semibold text-zinc-800">
-                          {formatStock(product.stock)}
-                        </span>
-                        <button
-                          type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
-                          onClick={() => nudgeStockAdjustment(product.id, -1)}
-                          aria-label="Restar una unidad"
-                        >
-                          <MinusIcon className="size-3.5" />
-                        </button>
-                        <input
-                          className="input w-20 text-right tabular-nums"
-                          inputMode="decimal"
-                          value={draft.adjustmentQty}
-                          onChange={(event) =>
-                            updateRow(product.id, {
-                              adjustmentQty: normalizeSignedQuantity(
-                                event.target.value,
-                              ),
-                            })
-                          }
-                          placeholder="+/-"
-                        />
-                        <button
-                          type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
-                          onClick={() => nudgeStockAdjustment(product.id, 1)}
-                          aria-label="Sumar una unidad"
-                        >
-                          <PlusIcon className="size-3.5" />
-                        </button>
-                        <span className={`text-[11px] font-semibold ${adjustmentClass}`}>
-                          {adjustmentLabel}
-                        </span>
-                        <span className="text-zinc-500">=</span>
-                        <span
-                          className={`font-semibold ${
-                            isProjectedNegative
-                              ? "text-amber-700"
-                              : "text-emerald-700"
-                          }`}
-                        >
-                          {formatStock(projectedStock)}
-                        </span>
-                      </div>
-                      {draft.warning ? (
-                        <p className="mt-1 text-[11px] text-amber-700">
-                          {draft.warning}
-                        </p>
-                      ) : null}
-                    </td>
-                    <td className="py-3 pr-3 text-right">
+                    {STOCK_ACCOUNTING_ENABLED ? (
+                      <td className="py-3 pr-2">
+                        <div className="flex items-center gap-2 whitespace-nowrap">
+                          <span className="font-semibold text-zinc-800">
+                            {formatStock(product.stock)}
+                          </span>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                            onClick={() => nudgeStockAdjustment(product.id, -1)}
+                            aria-label="Restar una unidad"
+                          >
+                            <MinusIcon className="size-3.5" />
+                          </button>
+                          <input
+                            className="input w-20 text-right tabular-nums"
+                            inputMode="decimal"
+                            value={draft.adjustmentQty}
+                            onChange={(event) =>
+                              updateRow(product.id, {
+                                adjustmentQty: normalizeSignedQuantity(
+                                  event.target.value,
+                                ),
+                              })
+                            }
+                            placeholder="+/-"
+                          />
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                            onClick={() => nudgeStockAdjustment(product.id, 1)}
+                            aria-label="Sumar una unidad"
+                          >
+                            <PlusIcon className="size-3.5" />
+                          </button>
+                          <span
+                            className={`text-[11px] font-semibold ${adjustmentClass}`}
+                          >
+                            {adjustmentLabel}
+                          </span>
+                          <span className="text-zinc-500">=</span>
+                          <span
+                            className={`font-semibold ${
+                              isProjectedNegative
+                                ? "text-amber-700"
+                                : "text-emerald-700"
+                            }`}
+                          >
+                            {formatStock(projectedStock)}
+                          </span>
+                        </div>
+                        {draft.warning ? (
+                          <p className="mt-1 text-[11px] text-amber-700">
+                            {draft.warning}
+                          </p>
+                        ) : null}
+                      </td>
+                    ) : null}
+                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right">
                       <button
                         type="button"
                         className="btn btn-emerald text-xs"
@@ -882,7 +915,7 @@ export default function StockPage() {
                 <tr>
                   <td
                     className="py-4 text-sm text-zinc-500"
-                    colSpan={priceLists.length + 5}
+                    colSpan={priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)}
                   >
                     No hay productos para mostrar.
                   </td>

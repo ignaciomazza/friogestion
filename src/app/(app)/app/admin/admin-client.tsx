@@ -32,6 +32,7 @@ import {
   normalizeIntegerInput,
 } from "@/lib/input-format";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
+import { STOCK_ENABLED } from "@/lib/features";
 
 type UserRow = {
   id: string;
@@ -1317,54 +1318,56 @@ export default function AdminClient({
         </div>
       </div>
 
-      <Section
-        title="Ventas y stock"
-        subtitle="Define si las ventas confirmadas desde presupuestos descuentan stock."
-        icon={<Cog6ToothIcon className="size-4" />}
-      >
-        <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Ajuste automatico en presupuestos
-              </p>
-              <p className="text-xs text-zinc-500">
-                Se aplica al confirmar y crear venta desde Presupuestos.
-              </p>
-            </div>
-            <button
-              type="button"
-              role="switch"
-              aria-label="Ajustar stock al confirmar venta desde presupuestos"
-              aria-checked={adjustStockOnQuoteConfirm}
-              onClick={() =>
-                handleAdjustStockOnQuoteConfirm(!adjustStockOnQuoteConfirm)
-              }
-              disabled={isSalesSettingsSaving}
-              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
-                adjustStockOnQuoteConfirm
-                  ? "border-sky-300 bg-sky-100"
-                  : "border-zinc-300 bg-zinc-100"
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
-                  adjustStockOnQuoteConfirm ? "translate-x-5" : "translate-x-0.5"
+      {STOCK_ENABLED ? (
+        <Section
+          title="Ventas y stock"
+          subtitle="Define si las ventas confirmadas desde presupuestos descuentan stock."
+          icon={<Cog6ToothIcon className="size-4" />}
+        >
+          <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Ajuste automatico en presupuestos
+                </p>
+                <p className="text-xs text-zinc-500">
+                  Se aplica al confirmar y crear venta desde Presupuestos.
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Ajustar stock al confirmar venta desde presupuestos"
+                aria-checked={adjustStockOnQuoteConfirm}
+                onClick={() =>
+                  handleAdjustStockOnQuoteConfirm(!adjustStockOnQuoteConfirm)
+                }
+                disabled={isSalesSettingsSaving}
+                className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
+                  adjustStockOnQuoteConfirm
+                    ? "border-sky-300 bg-sky-100"
+                    : "border-zinc-300 bg-zinc-100"
                 }`}
-              />
-            </button>
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+                    adjustStockOnQuoteConfirm ? "translate-x-5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-zinc-600">
+              {adjustStockOnQuoteConfirm
+                ? "Estado actual: activo (descuenta stock al confirmar venta)."
+                : "Estado actual: desactivado (no descuenta stock al confirmar venta)."}
+              {isSalesSettingsSaving ? " Guardando..." : ""}
+            </p>
+            {salesSettingsStatus ? (
+              <p className="mt-2 text-xs text-zinc-500">{salesSettingsStatus}</p>
+            ) : null}
           </div>
-          <p className="mt-2 text-xs text-zinc-600">
-            {adjustStockOnQuoteConfirm
-              ? "Estado actual: activo (descuenta stock al confirmar venta)."
-              : "Estado actual: desactivado (no descuenta stock al confirmar venta)."}
-            {isSalesSettingsSaving ? " Guardando..." : ""}
-          </p>
-          {salesSettingsStatus ? (
-            <p className="mt-2 text-xs text-zinc-500">{salesSettingsStatus}</p>
-          ) : null}
-        </div>
-      </Section>
+        </Section>
+      ) : null}
 
       <Section
         title="Cotizacion y moneda"
@@ -1569,7 +1572,7 @@ export default function AdminClient({
 
       <Section
         title="Listas de precios"
-        subtitle="Administra listas para clientes y stock."
+        subtitle="Administra listas para clientes y productos."
         icon={<DocumentTextIcon className="size-4" />}
       >
         <div className="space-y-5">

@@ -55,6 +55,17 @@ export function PurchasesRecentTable({
       </div>
       <div className="table-scroll">
         <table className="w-full text-left text-xs">
+          <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+            <tr>
+              <th className="py-2 pr-4">Factura</th>
+              <th className="py-2 pr-4">Proveedor</th>
+              <th className="py-2 pr-4">Fecha</th>
+              <th className="py-2 pr-4">Estado</th>
+              <th className="py-2 pr-4 text-right">Pago</th>
+              <th className="py-2 pr-4">Total</th>
+              <th className="py-2 pr-4 text-right">ARCA</th>
+            </tr>
+          </thead>
           <tbody>
             {purchases.length ? (
               purchases.map((purchase) => {

@@ -35,7 +35,7 @@ export default function ProductsPage() {
     sku: "",
     brand: "",
     model: "",
-    unit: "",
+    unit: "u",
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
@@ -43,7 +43,7 @@ export default function ProductsPage() {
     sku: "",
     brand: "",
     model: "",
-    unit: "",
+    unit: "u",
   });
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -88,7 +88,7 @@ export default function ProductsPage() {
         sku: "",
         brand: "",
         model: "",
-        unit: "",
+        unit: "u",
       });
       setStatus("Producto creado");
       await loadProducts();
@@ -106,7 +106,7 @@ export default function ProductsPage() {
       sku: item.sku ?? "",
       brand: item.brand ?? "",
       model: item.model ?? "",
-      unit: item.unit ?? "",
+      unit: item.unit ?? "u",
     });
   };
 
@@ -117,7 +117,7 @@ export default function ProductsPage() {
       sku: "",
       brand: "",
       model: "",
-      unit: "",
+      unit: "u",
     });
   };
 
@@ -296,7 +296,6 @@ export default function ProductsPage() {
                   setForm((prev) => ({ ...prev, unit: event.target.value }))
                 }
               >
-                <option value="">Unidad</option>
                 {UNIT_OPTIONS.map((unit) => (
                   <option key={unit.value} value={unit.value}>
                     {unit.label}
@@ -422,6 +421,16 @@ export default function ProductsPage() {
         </div>
         <div className="table-scroll">
           <table className="w-full text-left text-xs">
+            <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="py-2 pr-4">Producto</th>
+                <th className="py-2 pr-4">Codigo</th>
+                <th className="py-2 pr-4">Marca</th>
+                <th className="py-2 pr-4">Modelo</th>
+                <th className="py-2 pr-4">Unidad</th>
+                <th className="py-2 pr-4 text-right">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
               {filteredItems.length ? (
                 filteredItems.map((item) => (
@@ -435,6 +444,9 @@ export default function ProductsPage() {
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.brand ?? "-"}
+                      </td>
+                      <td className="py-3 pr-4 text-zinc-600">
+                        {item.model ?? "-"}
                       </td>
                       <td className="py-3 pr-4 text-zinc-900">
                         {item.unit
@@ -475,7 +487,7 @@ export default function ProductsPage() {
                           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                           className="border-t border-zinc-200/60"
                         >
-                          <td className="py-3" colSpan={5}>
+                          <td className="py-3" colSpan={6}>
                             <form onSubmit={handleUpdate} className="space-y-4">
                               <div className="grid gap-3 sm:grid-cols-6">
                               <input
@@ -511,7 +523,6 @@ export default function ProductsPage() {
                                   }))
                                 }
                               >
-                                <option value="">Unidad</option>
                                 {UNIT_OPTIONS.map((unit) => (
                                   <option key={unit.value} value={unit.value}>
                                     {unit.label}
@@ -567,7 +578,7 @@ export default function ProductsPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="py-3 text-sm text-zinc-500" colSpan={5}>
+                  <td className="py-3 text-sm text-zinc-500" colSpan={6}>
                     Sin productos por ahora.
                   </td>
                 </tr>

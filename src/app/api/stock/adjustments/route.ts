@@ -7,6 +7,7 @@ import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { aggregateStockByProduct } from "@/lib/stock-balance";
+import { STOCK_ENABLED } from "@/lib/features";
 
 const adjustmentSchema = z.object({
   productId: z.string().min(1),
@@ -21,6 +22,12 @@ export async function POST(req: NextRequest) {
   try {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
+    if (!STOCK_ENABLED) {
+      return NextResponse.json(
+        { error: "Stock deshabilitado temporalmente" },
+        { status: 409 },
+      );
+    }
     const body = adjustmentSchema.parse(await req.json());
 
     const product = await prisma.product.findFirst({
@@ -91,4 +98,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-

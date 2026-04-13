@@ -12,12 +12,17 @@ const ERROR_MESSAGES: Record<string, string> = {
   SALE_NOT_FOUND: "La venta no existe o no pertenece a la organizacion.",
   SALE_ALREADY_BILLED: "La venta ya fue facturada.",
   SALE_CANCELLED: "No se puede facturar una venta cancelada.",
+  SALE_STATUS_INVALID: "Solo se pueden facturar ventas confirmadas.",
+  SALE_TOTALS_MISMATCH:
+    "Los totales fiscales no coinciden con la venta. Revise recargos, descuentos o intereses antes de facturar.",
   SERVICE_DATES_NOT_SUPPORTED:
     "Este sistema solo emite comprobantes de productos (Concepto 1).",
   CONCEPTO_NOT_SUPPORTED:
     "El comprobante original no es de productos (Concepto 1).",
   DOC_TYPE_REQUIRED: "Falta tipo y numero de documento del receptor.",
   DOC_TYPE_UNSUPPORTED: "Solo se admite DNI o CUIT como documento.",
+  FACTURA_A_REQUIRES_CUIT:
+    "Factura A requiere CUIT valido del receptor.",
   DOC_NUMBER_INVALID: "El numero de documento es invalido.",
   CUSTOMER_TAX_ID_INVALID: "El CUIT del cliente es invalido.",
   SALES_POINT_MISSING:

@@ -7,6 +7,7 @@ import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { parseOptionalDate } from "@/lib/validation";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import { STOCK_ENABLED } from "@/lib/features";
 import {
   buildPurchaseValidationPayload,
   type PurchaseValidationPayload,
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
     const subtotalAmount = totalAmount - purchaseVatAmount;
 
     const impactCurrentAccount = body.impactCurrentAccount ?? false;
-    const adjustStock = body.adjustStock ?? false;
+    const adjustStock = STOCK_ENABLED && (body.adjustStock ?? false);
     const registerCashOut = body.registerCashOut ?? false;
 
     const stockAdjustments = (body.stockAdjustments ?? []).filter(
@@ -333,7 +334,7 @@ export async function POST(req: NextRequest) {
       status: purchase.status,
       hasInvoice,
       impactsAccount: impactCurrentAccount,
-      adjustedStock: adjustStock && stockAdjustments.length > 0,
+      adjustedStock: false,
       cashOutRegistered: Boolean(registerCashOut && cashOutAccount),
       arcaValidationStatus:
         arcaValidation?.status ?? purchase.arcaValidationStatus,

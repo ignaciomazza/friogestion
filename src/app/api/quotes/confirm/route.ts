@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { buildSaleOutMovements } from "@/lib/stock";
+import { STOCK_ENABLED } from "@/lib/features";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
@@ -54,12 +55,6 @@ export async function POST(req: NextRequest) {
     const { payload, membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = confirmSchema.parse(await req.json());
-    const organization = await prisma.organization.findUnique({
-      where: { id: organizationId },
-      select: { adjustStockOnQuoteConfirm: true },
-    });
-    const adjustStockOnQuoteConfirm =
-      organization?.adjustStockOnQuoteConfirm ?? true;
 
     const quote = await prisma.quote.findFirst({
       where: { id: body.id, organizationId },
@@ -174,7 +169,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (adjustStockOnQuoteConfirm) {
+      if (STOCK_ENABLED) {
         const saleStock = buildSaleOutMovements({
           organizationId,
           occurredAt: created.saleDate ?? new Date(),

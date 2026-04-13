@@ -34,7 +34,7 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [customers, products, quotes, priceLists, organization, usdRate] =
+  const [customers, products, quotes, priceLists, usdRate] =
     await Promise.all([
       prisma.customer.findMany({
         where: { organizationId: membership.organizationId, systemKey: null },
@@ -63,10 +63,6 @@ export default async function QuotesPage() {
       prisma.priceList.findMany({
         where: { organizationId: membership.organizationId, isActive: true },
         orderBy: [{ isDefault: "desc" }, { name: "asc" }],
-      }),
-      prisma.organization.findUnique({
-        where: { id: membership.organizationId },
-        select: { adjustStockOnQuoteConfirm: true },
       }),
       prisma.exchangeRate.findFirst({
         where: {
@@ -129,9 +125,6 @@ export default async function QuotesPage() {
         isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
       }))}
-      initialAdjustStockOnConfirm={
-        organization?.adjustStockOnQuoteConfirm ?? true
-      }
       initialLatestUsdRate={usdRate?.rate?.toString() ?? null}
     />
   );

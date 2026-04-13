@@ -27,6 +27,7 @@ import {
 import { cn } from "@/lib/cn";
 import { ADMIN_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
+import { STOCK_PAGE_ENABLED } from "@/lib/features";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
 
 type TopbarClientProps = {
@@ -94,7 +95,9 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Operacion",
     items: [
       { href: "/app/purchases", label: "Compras", Icon: ShoppingBagIcon },
-      { href: "/app/stock", label: "Stock", Icon: CubeIcon },
+      ...(STOCK_PAGE_ENABLED
+        ? [{ href: "/app/stock", label: "Stock", Icon: CubeIcon }]
+        : []),
       { href: "/app/products", label: "Productos", Icon: DocumentTextIcon },
       { href: "/app/customers", label: "Clientes", Icon: UsersIcon },
       {

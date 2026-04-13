@@ -43,7 +43,6 @@ type QuoteRecentTableProps = {
   onEdit: (quote: QuoteRow) => void;
   onDelete: (quote: QuoteRow) => void;
   onConfirmSale: (quote: QuoteRow) => void;
-  confirmAdjustsStock: boolean;
   isBusyId: string | null;
 };
 
@@ -54,7 +53,6 @@ export function QuoteRecentTable({
   onEdit,
   onDelete,
   onConfirmSale,
-  confirmAdjustsStock,
   isBusyId,
 }: QuoteRecentTableProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -124,6 +122,16 @@ export function QuoteRecentTable({
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
+          <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+            <tr>
+              <th className="py-2 pr-4">Presupuesto</th>
+              <th className="py-2 pr-4">Cliente</th>
+              <th className="py-2 pr-4">Vigencia</th>
+              <th className="py-2 pr-4">Estado</th>
+              <th className="py-2 pr-4">Total</th>
+              <th className="py-2 pr-4 text-right">Acciones</th>
+            </tr>
+          </thead>
           <tbody>
             {quotes.length ? (
               quotes.map((quote) => {
@@ -208,11 +216,7 @@ export function QuoteRecentTable({
                             disabled={isLocked || isBusy}
                           >
                             <CheckIcon className="size-4" />
-                            {isLocked
-                              ? "Confirmada"
-                              : confirmAdjustsStock
-                                ? "Confirmar venta"
-                                : "Confirmar venta (sin stock)"}
+                            {isLocked ? "Confirmada" : "Confirmar venta"}
                           </button>
                           <button
                             type="button"

@@ -7,6 +7,7 @@ import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { aggregateStockByProduct } from "@/lib/stock-balance";
+import { STOCK_ENABLED } from "@/lib/features";
 
 const stockPatchSchema = z.object({
   productId: z.string().min(1),
@@ -49,13 +50,17 @@ export async function GET(req: NextRequest) {
           price: true,
         },
       }),
-      prisma.stockMovement.findMany({
-        where: { organizationId },
-        select: { productId: true, type: true, qty: true },
-      }),
+      STOCK_ENABLED
+        ? prisma.stockMovement.findMany({
+            where: { organizationId },
+            select: { productId: true, type: true, qty: true },
+          })
+        : Promise.resolve([]),
     ]);
 
-    const stockByProduct = aggregateStockByProduct(movements);
+    const stockByProduct = STOCK_ENABLED
+      ? aggregateStockByProduct(movements)
+      : new Map<string, number>();
     const pricesByProduct = new Map<
       string,
       Array<{ priceListId: string; price: string }>
@@ -88,7 +93,9 @@ export async function GET(req: NextRequest) {
         cost: product.cost?.toString() ?? null,
         costUsd: product.costUsd?.toString() ?? null,
         price: product.price?.toString() ?? null,
-        stock: (stockByProduct.get(product.id) ?? 0).toFixed(3),
+        stock: STOCK_ENABLED
+          ? (stockByProduct.get(product.id) ?? 0).toFixed(3)
+          : "0.000",
         prices: pricesByProduct.get(product.id) ?? [],
       })),
     });

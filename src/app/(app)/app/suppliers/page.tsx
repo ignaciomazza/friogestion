@@ -388,22 +388,22 @@ export default function SuppliersPage() {
           <p className="section-subtitle">Alta rapida para compras y pagos.</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-5">
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Nombre comercial</span>
-            <input
-              className="input w-full"
-              value={form.displayName}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  displayName: event.target.value,
-                }))
-              }
-              placeholder="Nombre comercial"
-              required
-            />
-          </label>
           <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-3">
+              <span className="input-label">Nombre comercial</span>
+              <input
+                className="input"
+                value={form.displayName}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    displayName: event.target.value,
+                  }))
+                }
+                placeholder="Nombre comercial"
+                required
+              />
+            </label>
             <label className="flex flex-col gap-3">
               <span className="input-label">Razon social</span>
               <input
@@ -418,29 +418,29 @@ export default function SuppliersPage() {
                 placeholder="Razon social"
               />
             </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">CUIT</span>
-              <input
-                className="input"
-                value={form.taxId}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    taxId: normalizeTaxId(event.target.value),
-                  }))
-                }
-                placeholder="CUIT"
-              />
-              <button
-                type="button"
-                className="btn text-xs"
-                onClick={() => handleLookupByTaxId("new")}
-                disabled={isLookupLoading}
-              >
-                {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
-              </button>
-            </label>
           </div>
+          <label className="flex flex-col gap-3">
+            <span className="input-label">CUIT</span>
+            <input
+              className="input w-full"
+              value={form.taxId}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  taxId: normalizeTaxId(event.target.value),
+                }))
+              }
+              placeholder="CUIT"
+            />
+            <button
+              type="button"
+              className="btn text-xs w-fit"
+              onClick={() => handleLookupByTaxId("new")}
+              disabled={isLookupLoading}
+            >
+              {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
+            </button>
+          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
               <span className="input-label">Correo</span>
@@ -556,6 +556,16 @@ export default function SuppliersPage() {
         </div>
         <div className="table-scroll">
           <table className="w-full text-left text-xs">
+            <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+              <tr>
+                <th className="py-2 pr-4">Nombre comercial</th>
+                <th className="py-2 pr-4">Razon social</th>
+                <th className="py-2 pr-4">Correo</th>
+                <th className="py-2 pr-4">Telefono</th>
+                <th className="py-2 pr-4">CUIT / ARCA</th>
+                <th className="py-2 pr-4 text-right">Acciones</th>
+              </tr>
+            </thead>
             <tbody>
               {filteredItems.length ? (
                 filteredItems.map((item) => (
@@ -563,6 +573,9 @@ export default function SuppliersPage() {
                     <tr className="border-t border-zinc-200/60 transition-colors hover:bg-white/60">
                       <td className="py-3 pr-4 text-zinc-900">
                         {item.displayName}
+                      </td>
+                      <td className="py-3 pr-4 text-zinc-600">
+                        {item.legalName ?? "-"}
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.email ?? "-"}
@@ -638,34 +651,35 @@ export default function SuppliersPage() {
                           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                           className="border-t border-zinc-200/60"
                         >
-                          <td className="py-3" colSpan={5}>
+                          <td className="py-3" colSpan={6}>
                             <form onSubmit={handleUpdate} className="space-y-4">
                               <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  className="input"
+                                  value={editForm.displayName}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      displayName: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Nombre comercial"
+                                  required
+                                />
+                                <input
+                                  className="input"
+                                  value={editForm.legalName}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      legalName: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Razon social"
+                                />
+                              </div>
                               <input
-                                className="input"
-                                value={editForm.displayName}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    displayName: event.target.value,
-                                  }))
-                                }
-                                placeholder="Nombre comercial"
-                                required
-                              />
-                              <input
-                                className="input"
-                                value={editForm.legalName}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    legalName: event.target.value,
-                                  }))
-                                }
-                                placeholder="Razon social"
-                              />
-                              <input
-                                className="input"
+                                className="input w-full"
                                 value={editForm.taxId}
                                 onChange={(event) =>
                                   setEditForm((prev) => ({
@@ -675,28 +689,30 @@ export default function SuppliersPage() {
                                 }
                                 placeholder="CUIT"
                               />
-                              <input
-                                className="input"
-                                value={editForm.email}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    email: event.target.value,
-                                  }))
-                                }
-                                placeholder="Correo"
-                              />
-                              <input
-                                className="input"
-                                value={editForm.phone}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    phone: event.target.value,
-                                  }))
-                                }
-                                placeholder="Telefono"
-                              />
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  className="input"
+                                  value={editForm.email}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      email: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Correo"
+                                />
+                                <input
+                                  className="input"
+                                  value={editForm.phone}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      phone: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="Telefono"
+                                />
+                              </div>
                               <input
                                 className="input"
                                 value={editForm.address}
@@ -708,7 +724,6 @@ export default function SuppliersPage() {
                                 }
                                 placeholder="Direccion"
                               />
-                            </div>
                               <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
@@ -753,7 +768,7 @@ export default function SuppliersPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="py-3 text-sm text-zinc-500" colSpan={5}>
+                  <td className="py-3 text-sm text-zinc-500" colSpan={6}>
                     Sin proveedores por ahora.
                   </td>
                 </tr>

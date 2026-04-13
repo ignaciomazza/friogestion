@@ -88,6 +88,13 @@ enum ArcaJobStatus {
   ERROR
 }
 
+enum FiscalIssueJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  ERROR
+}
+
 enum ArcaJobStep {
   CREATE_CERT
   AUTH_WS
@@ -242,6 +249,8 @@ model Organization {
   installmentPlans InstallmentPlan[]
   fiscalConfig   OrganizationFiscalConfig?
   arcaJobs       ArcaConnectionJob[]
+  fiscalIssueJobs FiscalInvoiceIssueJob[]
+  fiscalIssueQueueState FiscalIssueQueueState?
   counters       OrganizationCounter[]
   arcaTaxpayerLookupCache ArcaTaxpayerLookupCache[]
   supplierArcaVerifications SupplierArcaVerification[]
@@ -590,6 +599,7 @@ model Sale {
   receipts     Receipt[]
   currentAccountEntries CurrentAccountEntry[]
   fiscalInvoice FiscalInvoice?
+  fiscalInvoiceIssueJob FiscalInvoiceIssueJob?
   creditNotes  FiscalCreditNote[]
   deliveryNotes DeliveryNote[]
 
@@ -955,9 +965,48 @@ model FiscalInvoice {
 
   organization Organization @relation(fields: [organizationId], references: [id])
   sale         Sale        @relation(fields: [saleId], references: [id])
+  issueJob     FiscalInvoiceIssueJob?
   creditNotes  FiscalCreditNote[]
 
   @@index([organizationId])
+}
+
+model FiscalInvoiceIssueJob {
+  id             String               @id @default(cuid())
+  organizationId String
+  saleId         String               @unique
+  fiscalInvoiceId String?             @unique
+  status         FiscalIssueJobStatus @default(PENDING)
+  requestPayload Json
+  responsePayload Json?
+  errorCode      String?
+  errorMessage   String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  organization Organization  @relation(fields: [organizationId], references: [id])
+  sale         Sale          @relation(fields: [saleId], references: [id])
+  fiscalInvoice FiscalInvoice? @relation(fields: [fiscalInvoiceId], references: [id])
+
+  @@index([organizationId, status, createdAt])
+  @@index([createdAt])
+}
+
+model FiscalIssueQueueState {
+  id             String   @id @default(cuid())
+  organizationId String   @unique
+  isRunning      Boolean  @default(false)
+  workerToken    String?
+  lockExpiresAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, isRunning])
+  @@index([lockExpiresAt])
 }
 
 model FiscalCreditNote {

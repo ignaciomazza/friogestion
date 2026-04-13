@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import { canCancelSupplierPayments } from "@/lib/auth/rbac";
+import { STOCK_ENABLED } from "@/lib/features";
 import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
 import { SupplierPaymentsPanel } from "./components/SupplierPaymentsPanel";
@@ -503,6 +504,7 @@ export default function PurchasesPage() {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setStatus(null);
+    const shouldAdjustStock = STOCK_ENABLED && adjustStock;
 
     if (!supplierId) {
       setStatus("Selecciona un proveedor");
@@ -526,7 +528,7 @@ export default function PurchasesPage() {
       return;
     }
 
-    if (adjustStock && normalizedStockAdjustments.length === 0) {
+    if (shouldAdjustStock && normalizedStockAdjustments.length === 0) {
       setStatus("Agrega items para ajustar stock");
       return;
     }
@@ -555,8 +557,8 @@ export default function PurchasesPage() {
           totalAmount: total,
           purchaseVatAmount: vatAmount ?? undefined,
           impactCurrentAccount,
-          adjustStock,
-          stockAdjustments: adjustStock
+          adjustStock: shouldAdjustStock,
+          stockAdjustments: shouldAdjustStock
             ? normalizedStockAdjustments.map((item) => ({
                 productId: item.productId,
                 qty: item.qty,
@@ -662,8 +664,7 @@ export default function PurchasesPage() {
       <div>
         <h1 className="text-2xl font-semibold text-zinc-900">Compras</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Carga compras con o sin factura, con opcion de mover stock y registrar
-          egreso.
+          Carga compras con o sin factura y registra egresos.
         </p>
       </div>
 
@@ -893,11 +894,13 @@ export default function PurchasesPage() {
                 onChange={setImpactCurrentAccount}
                 label="Impacta cuenta corriente"
               />
-              <MiniToggle
-                checked={adjustStock}
-                onChange={setAdjustStock}
-                label="Ajustar stock"
-              />
+              {STOCK_ENABLED ? (
+                <MiniToggle
+                  checked={adjustStock}
+                  onChange={setAdjustStock}
+                  label="Ajustar stock"
+                />
+              ) : null}
               <MiniToggle
                 checked={registerCashOut}
                 onChange={setRegisterCashOut}
@@ -1100,7 +1103,7 @@ export default function PurchasesPage() {
               </div>
             ) : null}
 
-            {adjustStock ? (
+            {STOCK_ENABLED && adjustStock ? (
               <div className="space-y-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-4">
                 <div className="flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">

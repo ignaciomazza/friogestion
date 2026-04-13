@@ -38,7 +38,7 @@ export default async function BillingPage() {
 
   const sales = await prisma.sale.findMany({
     where: { organizationId: membership.organizationId },
-    include: { customer: true },
+    include: { customer: true, items: true },
     orderBy: { createdAt: "desc" },
     take: 80,
   });
@@ -73,9 +73,21 @@ export default async function BillingPage() {
         createdAt: sale.createdAt.toISOString(),
         subtotal: sale.subtotal?.toString() ?? null,
         taxes: sale.taxes?.toString() ?? null,
+        extraType: sale.extraType ?? null,
+        extraValue: sale.extraValue?.toString() ?? null,
+        extraAmount: sale.extraAmount?.toString() ?? null,
         total: sale.total?.toString() ?? null,
         status: sale.status,
         billingStatus: sale.billingStatus,
+        items: sale.items.map((item) => ({
+          id: item.id,
+          productName: item.productId,
+          qty: item.qty.toString(),
+          unitPrice: item.unitPrice.toString(),
+          total: item.total.toString(),
+          taxRate: item.taxRate?.toString() ?? "0",
+          taxAmount: item.taxAmount?.toString() ?? null,
+        })),
       }))}
     />
   );

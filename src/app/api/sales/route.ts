@@ -9,6 +9,7 @@ import { parseOptionalDate } from "@/lib/validation";
 import {
   buildSaleOutMovements,
 } from "@/lib/stock";
+import { STOCK_ENABLED } from "@/lib/features";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
@@ -325,7 +326,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      if (body.adjustStock !== false) {
+      if (STOCK_ENABLED && body.adjustStock !== false) {
         const stockMovements = buildSaleOutMovements({
           organizationId,
           occurredAt: created.saleDate ?? new Date(),

@@ -29,7 +29,6 @@ type QuotesClientProps = {
   initialProducts: ProductOption[];
   initialQuotes: QuoteRow[];
   initialPriceLists: PriceListOption[];
-  initialAdjustStockOnConfirm: boolean;
   initialLatestUsdRate: string | null;
 };
 
@@ -101,7 +100,6 @@ export default function QuotesClient({
   initialProducts,
   initialQuotes,
   initialPriceLists,
-  initialAdjustStockOnConfirm,
   initialLatestUsdRate,
 }: QuotesClientProps) {
   const [customers, setCustomers] =
@@ -162,7 +160,6 @@ export default function QuotesClient({
   const [isCustomerLookupLoading, setIsCustomerLookupLoading] = useState(false);
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [quoteView, setQuoteView] = useState<"list" | "new">("new");
-  const adjustStockOnConfirm = initialAdjustStockOnConfirm;
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNoteRow[]>([]);
   const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
   const [deliveryBusyId, setDeliveryBusyId] = useState<string | null>(null);
@@ -882,10 +879,7 @@ export default function QuotesClient({
   };
 
   const handleConfirmSale = async (quote: QuoteRow) => {
-    const confirmationMessage = adjustStockOnConfirm
-      ? "Confirmar y crear venta?"
-      : "Confirmar y crear venta sin ajustar stock?";
-    if (!window.confirm(confirmationMessage)) return;
+    if (!window.confirm("Confirmar y crear venta?")) return;
     setTableStatus(null);
     setBusyId(quote.id);
     try {
@@ -1424,7 +1418,6 @@ export default function QuotesClient({
             onEdit={handleEdit}
             onDelete={handleDelete}
             onConfirmSale={handleConfirmSale}
-            confirmAdjustsStock={adjustStockOnConfirm}
             isBusyId={busyId}
           />
           <div className="card space-y-4 p-6">

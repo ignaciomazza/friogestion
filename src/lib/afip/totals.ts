@@ -1,4 +1,4 @@
-const ALLOWED_RATES = [0, 10.5, 21] as const;
+const ALLOWED_RATES = [0, 2.5, 5, 10.5, 21, 27] as const;
 
 export type IvaItem = {
   Id: number;
@@ -23,8 +23,11 @@ function round2(value: number) {
 }
 
 function mapRateToId(rate: number) {
+  if (rate === 27) return 6;
   if (rate === 21) return 5;
   if (rate === 10.5) return 4;
+  if (rate === 5) return 8;
+  if (rate === 2.5) return 9;
   return 3;
 }
 
