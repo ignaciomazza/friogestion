@@ -41,10 +41,12 @@ export async function POST(req: NextRequest) {
         systemKey: CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON,
         displayName: CONSUMER_FINAL_DEFAULT_NAME,
         type: "CONSUMER_FINAL",
+        fiscalTaxProfile: "CONSUMIDOR_FINAL",
         defaultPriceListId: priceListForConsumerFinal?.id ?? null,
       },
       update: {
         type: "CONSUMER_FINAL",
+        fiscalTaxProfile: "CONSUMIDOR_FINAL",
         defaultPriceListId: priceListForConsumerFinal?.id ?? null,
       },
     });
@@ -58,6 +60,7 @@ export async function POST(req: NextRequest) {
       phone: customer.phone,
       address: customer.address,
       type: customer.type,
+      fiscalTaxProfile: customer.fiscalTaxProfile,
       systemKey: customer.systemKey,
       defaultPriceListId: customer.defaultPriceListId,
     });

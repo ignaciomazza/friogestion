@@ -52,6 +52,8 @@ const ERROR_MESSAGES: Record<string, string> = {
     "No hay datos de ARCA suficientes para emitir la nota de credito.",
   INVOICE_NUMBER_MISSING:
     "No se pudo determinar el numero del comprobante original.",
+  FISCAL_ISSUE_JOB_ORG_CONFLICT:
+    "Existe un conflicto de cola para esta venta. Reintente en unos segundos.",
 };
 
 const normalizeArcaMessage = (value: string) =>

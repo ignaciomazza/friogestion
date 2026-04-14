@@ -10,6 +10,11 @@ import {
   type ManualTotals,
 } from "@/lib/afip/totals";
 import { resolveFiscalRecipientDocument } from "@/lib/afip/consumer-final";
+import {
+  resolveCondicionIvaReceptor,
+  resolveInvoiceTypeFromFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
+import { logServerError, logServerInfo, logServerWarn } from "@/lib/server/log";
 
 type ServiceDates = {
   from: Date;
@@ -20,7 +25,7 @@ type ServiceDates = {
 type IssueInvoiceInput = {
   organizationId: string;
   saleId: string;
-  type: "A" | "B";
+  type?: "A" | "B" | null;
   pointOfSale?: number | null;
   docType?: string | number | null;
   docNumber?: string | null;
@@ -185,6 +190,10 @@ function differsByMoreThanOneCent(a: number, b: number) {
   return Math.abs(round2(a) - round2(b)) > 0.01;
 }
 
+function differsByMoreThanFiveCents(a: number, b: number) {
+  return Math.abs(round2(a) - round2(b)) > 0.05;
+}
+
 function buildQrPayload(data: {
   issueDate: Date;
   cuit: number;
@@ -222,6 +231,14 @@ function buildQrPayload(data: {
 }
 
 export async function issueFiscalInvoice(input: IssueInvoiceInput) {
+  logServerInfo("fiscal.issue.start", "Starting fiscal invoice issue", {
+    organizationId: input.organizationId,
+    saleId: input.saleId,
+    requestedType: input.type ?? null,
+    pointOfSale: input.pointOfSale ?? null,
+    hasManualTotals: Boolean(input.manualTotals),
+    hasItemRates: Boolean(input.itemsTaxRates?.length),
+  });
   const sale = await prisma.sale.findFirst({
     where: { id: input.saleId, organizationId: input.organizationId },
     include: {
@@ -251,10 +268,29 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     throw new Error("SERVICE_DATES_NOT_SUPPORTED");
   }
 
+  const resolvedType = resolveInvoiceTypeFromFiscalTaxProfile(
+    sale.customer.fiscalTaxProfile
+  );
+  if (input.type && input.type !== resolvedType) {
+    logServerWarn(
+      "fiscal.issue.type-overridden",
+      "Requested invoice type differs from customer fiscal profile; using resolved type",
+      {
+        saleId: sale.id,
+        requestedType: input.type,
+        resolvedType,
+        fiscalTaxProfile: sale.customer.fiscalTaxProfile,
+      }
+    );
+  }
+
   const afip = await getAfipClient(input.organizationId);
-  const voucherType = input.type === "A" ? 1 : 6;
+  const voucherType = resolvedType === "A" ? 1 : 6;
   const concept = 1;
-  const condicionIva = input.type === "A" ? 1 : 5;
+  const condicionIva = resolveCondicionIvaReceptor(
+    sale.customer.fiscalTaxProfile,
+    resolvedType
+  );
   const issueDate = input.issueDate ?? sale.saleDate ?? new Date();
   ensureNotFuture(issueDate);
   const pointOfSale = await resolvePointOfSale(
@@ -274,12 +310,43 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   const saleTaxes = Number(sale.taxes ?? 0);
   const saleTotal = Number(sale.total ?? saleSubtotal + saleTaxes);
   const fiscalSubtotal = totals.net + totals.exempt;
-  if (
-    differsByMoreThanOneCent(fiscalSubtotal, saleSubtotal) ||
-    differsByMoreThanOneCent(totals.iva, saleTaxes) ||
-    differsByMoreThanOneCent(totals.total, saleTotal)
-  ) {
-    throw new Error("SALE_TOTALS_MISMATCH");
+  const subtotalMismatch = differsByMoreThanOneCent(fiscalSubtotal, saleSubtotal);
+  const ivaMismatch = differsByMoreThanOneCent(totals.iva, saleTaxes);
+  const totalMismatch = differsByMoreThanOneCent(totals.total, saleTotal);
+  if (subtotalMismatch || ivaMismatch || totalMismatch) {
+    const isWithinTolerance =
+      !differsByMoreThanFiveCents(fiscalSubtotal, saleSubtotal) &&
+      !differsByMoreThanFiveCents(totals.iva, saleTaxes) &&
+      !differsByMoreThanFiveCents(totals.total, saleTotal);
+    if (!isWithinTolerance) {
+      logServerWarn(
+        "fiscal.issue.totals-mismatch",
+        "Fiscal totals mismatch exceeds tolerance",
+        {
+          saleId: sale.id,
+          fiscalSubtotal,
+          saleSubtotal,
+          fiscalIva: totals.iva,
+          saleIva: saleTaxes,
+          fiscalTotal: totals.total,
+          saleTotal,
+        }
+      );
+      throw new Error("SALE_TOTALS_MISMATCH");
+    }
+    logServerWarn(
+      "fiscal.issue.totals-mismatch-tolerated",
+      "Fiscal totals mismatch tolerated due rounding tolerance",
+      {
+        saleId: sale.id,
+        fiscalSubtotal,
+        saleSubtotal,
+        fiscalIva: totals.iva,
+        saleIva: saleTaxes,
+        fiscalTotal: totals.total,
+        saleTotal,
+      }
+    );
   }
 
   const doc = resolveFiscalRecipientDocument({
@@ -293,7 +360,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   if (doc.requireIdentification && !doc.identificationProvided) {
     throw new Error("DOC_TYPE_REQUIRED");
   }
-  if (input.type === "A" && doc.docType !== 80) {
+  if (resolvedType === "A" && doc.docType !== 80) {
     throw new Error("FACTURA_A_REQUIRES_CUIT");
   }
 
@@ -332,7 +399,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
       data: {
         organizationId: sale.organizationId,
         saleId: sale.id,
-        type: input.type,
+        type: resolvedType,
         issuedAt: issueDate,
         currencyCode,
       },
@@ -396,7 +463,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
         const updated = await tx.fiscalInvoice.update({
           where: { id: reservedId },
           data: {
-            type: input.type,
+            type: resolvedType,
             pointOfSale: pointOfSale.toString(),
             number: voucherNumber.toString(),
             cae,
@@ -417,6 +484,16 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
       { maxWait: 10_000, timeout: 120_000 }
     );
 
+    logServerInfo("fiscal.issue.success", "Fiscal invoice issued", {
+      saleId: sale.id,
+      fiscalInvoiceId: invoice.id,
+      type: resolvedType,
+      voucherType,
+      pointOfSale,
+      voucherNumber: invoice.number,
+      cae: invoice.cae,
+      warnings: doc.warnings.length,
+    });
     return { invoice, warnings: doc.warnings };
   } catch (error) {
     if (
@@ -435,6 +512,14 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
         },
       });
     }
+    logServerError("fiscal.issue.failed", error, {
+      saleId: sale.id,
+      organizationId: sale.organizationId,
+      resolvedType,
+      pointOfSale,
+      voucherAuthorized,
+      reservedInvoiceId,
+    });
     throw error;
   }
 }

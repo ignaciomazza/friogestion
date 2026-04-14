@@ -3,6 +3,7 @@ export type SaleRow = {
   customerName: string;
   customerTaxId?: string | null;
   customerType?: string | null;
+  customerFiscalTaxProfile?: string | null;
   saleNumber: string | null;
   saleDate: string | null;
   createdAt: string;

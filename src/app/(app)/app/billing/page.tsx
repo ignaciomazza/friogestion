@@ -38,13 +38,21 @@ export default async function BillingPage() {
 
   const sales = await prisma.sale.findMany({
     where: { organizationId: membership.organizationId },
-    include: { customer: true, items: true },
+    include: { customer: true, items: { include: { product: true } } },
     orderBy: { createdAt: "desc" },
     take: 80,
   });
-  const fiscalConfig = await prisma.organizationFiscalConfig.findUnique({
+  const fiscalInvoices = await prisma.fiscalInvoice.findMany({
     where: { organizationId: membership.organizationId },
-    select: { defaultPointOfSale: true },
+    include: {
+      sale: {
+        include: {
+          customer: true,
+        },
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 120,
   });
 
   const afipStatus = await getAfipStatus(membership.organizationId);
@@ -62,12 +70,27 @@ export default async function BillingPage() {
   return (
     <BillingClient
       afipStatus={{ ...afipStatus, clientReady }}
-      defaultPointOfSale={fiscalConfig?.defaultPointOfSale ?? null}
+      initialIssuedInvoices={fiscalInvoices.map((invoice) => ({
+        id: invoice.id,
+        saleId: invoice.saleId,
+        saleNumber: invoice.sale.saleNumber,
+        customerName: invoice.sale.customer.displayName,
+        type: invoice.type,
+        pointOfSale: invoice.pointOfSale,
+        number: invoice.number,
+        cae: invoice.cae,
+        issuedAt: invoice.issuedAt?.toISOString() ?? null,
+        createdAt: invoice.createdAt.toISOString(),
+        subtotal: invoice.sale.subtotal?.toString() ?? null,
+        iva: invoice.sale.taxes?.toString() ?? null,
+        total: invoice.sale.total?.toString() ?? null,
+      }))}
       initialSales={sales.map((sale) => ({
         id: sale.id,
         customerName: sale.customer.displayName,
         customerTaxId: sale.customer.taxId,
         customerType: sale.customer.type,
+        customerFiscalTaxProfile: sale.customer.fiscalTaxProfile,
         saleNumber: sale.saleNumber,
         saleDate: sale.saleDate?.toISOString() ?? null,
         createdAt: sale.createdAt.toISOString(),
@@ -81,7 +104,7 @@ export default async function BillingPage() {
         billingStatus: sale.billingStatus,
         items: sale.items.map((item) => ({
           id: item.id,
-          productName: item.productId,
+          productName: item.product.name,
           qty: item.qty.toString(),
           unitPrice: item.unitPrice.toString(),
           total: item.total.toString(),

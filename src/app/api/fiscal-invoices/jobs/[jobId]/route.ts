@@ -7,6 +7,7 @@ import {
   getFiscalInvoiceIssueJob,
   runFiscalIssueQueue,
 } from "@/lib/afip/issue-queue";
+import { logServerDebug, logServerError } from "@/lib/server/log";
 
 export const runtime = "nodejs";
 
@@ -14,6 +15,12 @@ export async function GET(
   req: NextRequest,
   context: { params: Promise<{ jobId: string }> }
 ) {
+  let meta:
+    | {
+        organizationId: string;
+        jobId: string;
+      }
+    | undefined;
   try {
     const { membership } = await requireRole(req, [
       "OWNER",
@@ -22,16 +29,32 @@ export async function GET(
       "CASHIER",
     ]);
     const params = await context.params;
+    meta = { organizationId: membership.organizationId, jobId: params.jobId };
 
-    await runFiscalIssueQueue(membership.organizationId);
+    const queueRun = await runFiscalIssueQueue(membership.organizationId);
+    logServerDebug(
+      "api.fiscal-invoices.jobs.get.queue-run",
+      "Fiscal queue executed from job polling endpoint",
+      {
+        ...meta,
+        queueRunning: queueRun.running,
+        processed: queueRun.processed,
+      }
+    );
 
     const job = await getFiscalInvoiceIssueJob({
       organizationId: membership.organizationId,
       jobId: params.jobId,
     });
     if (!job) {
+      logServerDebug("api.fiscal-invoices.jobs.get.not-found", "Fiscal job not found", meta);
       return NextResponse.json({ error: "Proceso no encontrado" }, { status: 404 });
     }
+    logServerDebug("api.fiscal-invoices.jobs.get.found", "Fiscal job status returned", {
+      ...meta,
+      status: job.status,
+      hasInvoice: Boolean(job.fiscalInvoice),
+    });
 
     return NextResponse.json({
       id: job.id,
@@ -60,6 +83,7 @@ export async function GET(
     if (isAuthError(error)) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
+    logServerError("api.fiscal-invoices.jobs.get", error, meta);
     return NextResponse.json(
       { error: "No se pudo recuperar el estado de facturacion" },
       { status: 400 }

@@ -7,6 +7,10 @@ import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import {
+  CUSTOMER_FISCAL_TAX_PROFILE_VALUES,
+  type CustomerFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
 
 const customerSchema = z.object({
   displayName: z.string().min(2),
@@ -15,6 +19,7 @@ const customerSchema = z.object({
   phone: z.string().min(4).optional(),
   taxId: z.string().min(6).optional(),
   address: z.string().min(3).optional(),
+  fiscalTaxProfile: z.enum(CUSTOMER_FISCAL_TAX_PROFILE_VALUES).optional(),
 });
 
 const customerUpdateSchema = z.object({
@@ -25,6 +30,7 @@ const customerUpdateSchema = z.object({
   phone: z.string().min(4).optional(),
   taxId: z.string().min(6).optional(),
   address: z.string().min(3).optional(),
+  fiscalTaxProfile: z.enum(CUSTOMER_FISCAL_TAX_PROFILE_VALUES).optional(),
 });
 
 const normalizeDefaultPriceListId = (value?: string) => {
@@ -52,6 +58,11 @@ const ensureDefaultPriceList = async (
 
   return priceList;
 };
+
+const inferFiscalTaxProfileFromCustomerType = (
+  type: "CONSUMER_FINAL" | "BUSINESS"
+): CustomerFiscalTaxProfile =>
+  type === "CONSUMER_FINAL" ? "CONSUMIDOR_FINAL" : "MONOTRIBUTISTA";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
@@ -126,6 +137,7 @@ export async function GET(req: NextRequest) {
         phone: customer.phone,
         address: customer.address,
         type: customer.type,
+        fiscalTaxProfile: customer.fiscalTaxProfile,
         systemKey: customer.systemKey,
         defaultPriceListId: customer.defaultPriceListId,
       })),
@@ -150,12 +162,16 @@ export async function POST(req: NextRequest) {
     const inferredType = defaultPriceList?.isConsumerFinal
       ? "CONSUMER_FINAL"
       : "BUSINESS";
+    const fiscalTaxProfile =
+      body.fiscalTaxProfile ??
+      inferFiscalTaxProfileFromCustomerType(inferredType);
 
     const customer = await prisma.customer.create({
       data: {
         organizationId,
         displayName: body.displayName.trim(),
         type: inferredType,
+        fiscalTaxProfile,
         defaultPriceListId: defaultPriceList?.id ?? undefined,
         email: body.email?.trim() || undefined,
         phone: body.phone?.trim() || undefined,
@@ -173,6 +189,7 @@ export async function POST(req: NextRequest) {
       phone: customer.phone,
       address: customer.address,
       type: customer.type,
+      fiscalTaxProfile: customer.fiscalTaxProfile,
       systemKey: customer.systemKey,
       defaultPriceListId: customer.defaultPriceListId,
     });
@@ -203,6 +220,7 @@ export async function PATCH(req: NextRequest) {
     const organizationId = membership.organizationId;
     const body = customerUpdateSchema.parse(await req.json());
     let nextType: "CONSUMER_FINAL" | "BUSINESS" | undefined = undefined;
+    let nextFiscalTaxProfile: CustomerFiscalTaxProfile | undefined = undefined;
     let defaultPriceListId: string | null | undefined = undefined;
     if (body.defaultPriceListId !== undefined) {
       const defaultPriceList = await ensureDefaultPriceList(
@@ -214,7 +232,11 @@ export async function PATCH(req: NextRequest) {
         nextType = defaultPriceList.isConsumerFinal
           ? "CONSUMER_FINAL"
           : "BUSINESS";
+        nextFiscalTaxProfile = inferFiscalTaxProfileFromCustomerType(nextType);
       }
+    }
+    if (body.fiscalTaxProfile !== undefined) {
+      nextFiscalTaxProfile = body.fiscalTaxProfile;
     }
 
     const existing = await prisma.customer.findFirst({
@@ -222,6 +244,7 @@ export async function PATCH(req: NextRequest) {
       select: {
         id: true,
         type: true,
+        fiscalTaxProfile: true,
       },
     });
 
@@ -237,6 +260,7 @@ export async function PATCH(req: NextRequest) {
       data: {
         displayName: body.displayName.trim(),
         type: nextType ?? existing.type,
+        fiscalTaxProfile: nextFiscalTaxProfile ?? existing.fiscalTaxProfile,
         ...(defaultPriceListId !== undefined
           ? { defaultPriceListId }
           : {}),
@@ -256,6 +280,7 @@ export async function PATCH(req: NextRequest) {
       phone: customer.phone,
       address: customer.address,
       type: customer.type,
+      fiscalTaxProfile: customer.fiscalTaxProfile,
       systemKey: customer.systemKey,
       defaultPriceListId: customer.defaultPriceListId,
     });

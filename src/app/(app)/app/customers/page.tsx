@@ -12,6 +12,12 @@ import {
   TrashIcon,
   UsersIcon,
 } from "@/components/icons";
+import {
+  CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  CUSTOMER_FISCAL_TAX_PROFILE_VALUES,
+  inferFiscalTaxProfileFromArcaTaxStatus,
+  type CustomerFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
 
 type CustomerRow = {
   id: string;
@@ -21,6 +27,7 @@ type CustomerRow = {
   email: string | null;
   phone: string | null;
   type: string;
+  fiscalTaxProfile?: CustomerFiscalTaxProfile | null;
   defaultPriceListId?: string | null;
 };
 
@@ -63,6 +70,7 @@ export default function CustomersPage() {
     taxId: "",
     address: "",
     defaultPriceListId: "",
+    fiscalTaxProfile: "CONSUMIDOR_FINAL" as CustomerFiscalTaxProfile,
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({
@@ -72,6 +80,7 @@ export default function CustomersPage() {
     taxId: "",
     address: "",
     defaultPriceListId: "",
+    fiscalTaxProfile: "CONSUMIDOR_FINAL" as CustomerFiscalTaxProfile,
   });
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -182,12 +191,16 @@ export default function CustomersPage() {
       const taxpayer = data?.taxpayer;
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
       const address = taxpayer?.address ?? "";
+      const fiscalTaxProfile = inferFiscalTaxProfileFromArcaTaxStatus(
+        typeof taxpayer?.taxStatus === "string" ? taxpayer.taxStatus : null,
+      );
       if (target === "new") {
         setForm((prev) => ({
           ...prev,
           taxId,
           displayName: prev.displayName || displayName,
           address: prev.address || address,
+          fiscalTaxProfile: fiscalTaxProfile ?? prev.fiscalTaxProfile,
         }));
       } else {
         setEditForm((prev) => ({
@@ -195,9 +208,13 @@ export default function CustomersPage() {
           taxId,
           displayName: prev.displayName || displayName,
           address: prev.address || address,
+          fiscalTaxProfile: fiscalTaxProfile ?? prev.fiscalTaxProfile,
         }));
       }
-      setStatus(`Datos ARCA actualizados (${data.source}).`);
+      const statusText = fiscalTaxProfile
+        ? `Condicion fiscal sugerida: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
+        : "ARCA no devolvio condicion fiscal clara.";
+      setStatus(`Datos ARCA actualizados (${data.source}). ${statusText}`);
     } catch {
       setStatus("No se pudo consultar ARCA");
     } finally {
@@ -224,6 +241,7 @@ export default function CustomersPage() {
           taxId: form.taxId || undefined,
           address: form.address || undefined,
           defaultPriceListId: form.defaultPriceListId || undefined,
+          fiscalTaxProfile: form.fiscalTaxProfile,
         }),
       });
 
@@ -240,6 +258,7 @@ export default function CustomersPage() {
         taxId: "",
         address: "",
         defaultPriceListId: "",
+        fiscalTaxProfile: "CONSUMIDOR_FINAL",
       });
       setStatus("Cliente creado");
       await reloadFromStart();
@@ -259,6 +278,7 @@ export default function CustomersPage() {
       taxId: item.taxId ?? "",
       address: item.address ?? "",
       defaultPriceListId: item.defaultPriceListId ?? "",
+      fiscalTaxProfile: item.fiscalTaxProfile ?? "CONSUMIDOR_FINAL",
     });
   };
 
@@ -271,6 +291,7 @@ export default function CustomersPage() {
       taxId: "",
       address: "",
       defaultPriceListId: "",
+      fiscalTaxProfile: "CONSUMIDOR_FINAL",
     });
   };
 
@@ -291,6 +312,7 @@ export default function CustomersPage() {
           taxId: editForm.taxId || undefined,
           address: editForm.address || undefined,
           defaultPriceListId: editForm.defaultPriceListId || undefined,
+          fiscalTaxProfile: editForm.fiscalTaxProfile,
         }),
       });
 
@@ -438,10 +460,19 @@ export default function CustomersPage() {
                 className="input cursor-pointer"
                 value={form.defaultPriceListId}
                 onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    defaultPriceListId: event.target.value,
-                  }))
+                  setForm((prev) => {
+                    const nextDefaultPriceListId = event.target.value;
+                    const selectedList = priceLists.find(
+                      (priceList) => priceList.id === nextDefaultPriceListId,
+                    );
+                    return {
+                      ...prev,
+                      defaultPriceListId: nextDefaultPriceListId,
+                      fiscalTaxProfile: selectedList?.isConsumerFinal
+                        ? "CONSUMIDOR_FINAL"
+                        : prev.fiscalTaxProfile,
+                    };
+                  })
                 }
               >
                 <option value="">Sin lista por defecto</option>
@@ -450,6 +481,26 @@ export default function CustomersPage() {
                     {priceList.name}
                     {priceList.isDefault ? " (Default)" : ""}
                     {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-3">
+              <span className="input-label">Condicion fiscal</span>
+              <select
+                className="input cursor-pointer"
+                value={form.fiscalTaxProfile}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    fiscalTaxProfile:
+                      event.target.value as CustomerFiscalTaxProfile,
+                  }))
+                }
+              >
+                {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+                  <option key={profile} value={profile}>
+                    {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
                   </option>
                 ))}
               </select>
@@ -595,6 +646,7 @@ export default function CustomersPage() {
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="py-2 pr-4">Cliente</th>
+                <th className="py-2 pr-4">Condicion fiscal</th>
                 <th className="py-2 pr-4">Lista</th>
                 <th className="py-2 pr-4">Correo</th>
                 <th className="py-2 pr-4">Telefono</th>
@@ -609,6 +661,13 @@ export default function CustomersPage() {
                     <tr className="border-t border-zinc-200/60 transition-colors hover:bg-white/60">
                       <td className="py-3 pr-4 text-zinc-900">
                         {item.displayName}
+                      </td>
+                      <td className="py-3 pr-4 text-zinc-600">
+                        {item.fiscalTaxProfile
+                          ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[
+                              item.fiscalTaxProfile
+                            ]
+                          : "Sin definir"}
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.defaultPriceListId
@@ -661,7 +720,7 @@ export default function CustomersPage() {
                           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                           className="border-t border-zinc-200/60"
                         >
-                          <td className="py-3" colSpan={6}>
+                          <td className="py-3" colSpan={7}>
                             <form onSubmit={handleUpdate} className="space-y-4">
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <input
@@ -680,18 +739,45 @@ export default function CustomersPage() {
                                   className="input cursor-pointer"
                                   value={editForm.defaultPriceListId}
                                   onChange={(event) =>
+                                    setEditForm((prev) => {
+                                      const nextDefaultPriceListId = event.target.value;
+                                      const selectedList = priceLists.find(
+                                        (priceList) =>
+                                          priceList.id === nextDefaultPriceListId,
+                                      );
+                                      return {
+                                        ...prev,
+                                        defaultPriceListId: nextDefaultPriceListId,
+                                        fiscalTaxProfile: selectedList?.isConsumerFinal
+                                          ? "CONSUMIDOR_FINAL"
+                                          : prev.fiscalTaxProfile,
+                                      };
+                                    })
+                                  }
+                                >
+                                    <option value="">Sin lista por defecto</option>
+                                    {priceLists.map((priceList) => (
+                                      <option key={priceList.id} value={priceList.id}>
+                                        {priceList.name}
+                                        {priceList.isDefault ? " (Default)" : ""}
+                                        {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                                      </option>
+                                    ))}
+                                  </select>
+                                <select
+                                  className="input cursor-pointer"
+                                  value={editForm.fiscalTaxProfile}
+                                  onChange={(event) =>
                                     setEditForm((prev) => ({
                                       ...prev,
-                                      defaultPriceListId: event.target.value,
+                                      fiscalTaxProfile:
+                                        event.target.value as CustomerFiscalTaxProfile,
                                     }))
                                   }
                                 >
-                                  <option value="">Sin lista por defecto</option>
-                                  {priceLists.map((priceList) => (
-                                    <option key={priceList.id} value={priceList.id}>
-                                      {priceList.name}
-                                      {priceList.isDefault ? " (Default)" : ""}
-                                      {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                                  {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+                                    <option key={profile} value={profile}>
+                                      {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
                                     </option>
                                   ))}
                                 </select>
@@ -776,7 +862,7 @@ export default function CustomersPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="py-3 text-sm text-zinc-500" colSpan={6}>
+                  <td className="py-3 text-sm text-zinc-500" colSpan={7}>
                     {isLoadingList ? "Cargando clientes..." : "Sin clientes por ahora."}
                   </td>
                 </tr>

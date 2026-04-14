@@ -12,6 +12,7 @@ import {
 } from "@/lib/afip/issue-queue";
 import { isAuthError } from "@/lib/auth/errors";
 import { parseOptionalDate } from "@/lib/validation";
+import { logServerDebug, logServerError, logServerInfo } from "@/lib/server/log";
 
 export const runtime = "nodejs";
 
@@ -39,7 +40,7 @@ const serviceDatesSchema = z.object({
 
 const bodySchema = z.object({
   saleId: z.string().min(1),
-  type: z.enum(["A", "B"]),
+  type: z.enum(["A", "B"]).optional(),
   pointOfSale: z.coerce.number().int().positive().optional(),
   docType: z.union([z.string(), z.coerce.number()]).optional(),
   docNumber: z.string().optional(),
@@ -90,6 +91,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  let requestMeta:
+    | {
+        requestId: string;
+        organizationId: string;
+        saleId: string;
+      }
+    | null = null;
   try {
     const { membership } = await requireRole(req, [
       "OWNER",
@@ -98,6 +106,21 @@ export async function POST(req: NextRequest) {
       "CASHIER",
     ]);
     const body = bodySchema.parse(await req.json());
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    requestMeta = {
+      requestId,
+      organizationId: membership.organizationId,
+      saleId: body.saleId,
+    };
+    logServerInfo("api.fiscal-invoices.post.request", "Fiscal issue request received", {
+      ...requestMeta,
+      requestedType: body.type ?? null,
+      hasDocType: Boolean(body.docType),
+      hasDocNumber: Boolean(body.docNumber),
+      hasManualTotals: Boolean(body.manualTotals),
+      itemsTaxRates: body.itemsTaxRates?.length ?? 0,
+      requiresIncomeTaxDeduction: Boolean(body.requiresIncomeTaxDeduction),
+    });
 
     const issueDateResult = parseOptionalDate(body.issueDate);
     if (body.issueDate && issueDateResult.error) {
@@ -125,7 +148,7 @@ export async function POST(req: NextRequest) {
     const requestPayload = {
       organizationId: membership.organizationId,
       saleId: body.saleId,
-      type: body.type,
+      type: body.type ?? null,
       pointOfSale: body.pointOfSale ?? null,
       docType: body.docType ?? null,
       docNumber: body.docNumber ?? null,
@@ -154,8 +177,19 @@ export async function POST(req: NextRequest) {
           requestPayload.requiresIncomeTaxDeduction,
       },
     });
+    logServerInfo("api.fiscal-invoices.post.job-enqueued", "Fiscal issue job enqueued", {
+      ...requestMeta,
+      jobId: job.id,
+      jobStatus: job.status,
+    });
 
-    await runFiscalIssueQueue(membership.organizationId);
+    const queueRun = await runFiscalIssueQueue(membership.organizationId);
+    logServerDebug("api.fiscal-invoices.post.queue-run", "Fiscal issue queue executed", {
+      ...requestMeta,
+      jobId: job.id,
+      queueRunning: queueRun.running,
+      processed: queueRun.processed,
+    });
 
     const resolvedJob = await getFiscalInvoiceIssueJob({
       organizationId: membership.organizationId,
@@ -169,6 +203,12 @@ export async function POST(req: NextRequest) {
     }
 
     if (resolvedJob.status === "ERROR") {
+      logServerInfo("api.fiscal-invoices.post.job-error", "Fiscal issue job finished with error", {
+        ...requestMeta,
+        jobId: resolvedJob.id,
+        errorCode: resolvedJob.errorCode,
+        error: resolvedJob.errorMessage,
+      });
       return NextResponse.json(
         {
           code: resolvedJob.errorCode ?? "AFIP_ERROR",
@@ -181,6 +221,17 @@ export async function POST(req: NextRequest) {
     if (resolvedJob.status === "COMPLETED" && resolvedJob.fiscalInvoice) {
       const invoice = resolvedJob.fiscalInvoice;
       const warnings = extractJobWarnings(resolvedJob.responsePayload);
+      logServerInfo(
+        "api.fiscal-invoices.post.job-completed",
+        "Fiscal issue job completed with invoice",
+        {
+          ...requestMeta,
+          jobId: resolvedJob.id,
+          invoiceId: invoice.id,
+          invoiceType: invoice.type,
+          warnings: warnings.length,
+        }
+      );
       return NextResponse.json({
         id: invoice.id,
         saleId: invoice.saleId,
@@ -195,6 +246,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    logServerInfo(
+      "api.fiscal-invoices.post.job-pending",
+      "Fiscal issue job is pending or running",
+      {
+        ...requestMeta,
+        jobId: resolvedJob.id,
+        jobStatus: resolvedJob.status,
+      }
+    );
     return NextResponse.json({
       jobId: resolvedJob.id,
       saleId: resolvedJob.saleId,
@@ -211,6 +271,7 @@ export async function POST(req: NextRequest) {
     if (isAuthError(error)) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
+    logServerError("api.fiscal-invoices.post", error, requestMeta ?? undefined);
     const mapped = mapAfipError(error);
     return NextResponse.json(mapped, { status: 400 });
   }

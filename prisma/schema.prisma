@@ -24,6 +24,12 @@ enum CustomerType {
   PUBLIC_ENTITY
 }
 
+enum CustomerFiscalTaxProfile {
+  RESPONSABLE_INSCRIPTO
+  MONOTRIBUTISTA
+  CONSUMIDOR_FINAL
+}
+
 enum PurchaseStatus {
   DRAFT
   CONFIRMED
@@ -405,6 +411,7 @@ model Customer {
   phone              String?
   address            String?
   type               CustomerType @default(CONSUMER_FINAL)
+  fiscalTaxProfile   CustomerFiscalTaxProfile @default(CONSUMIDOR_FINAL)
   defaultPriceListId String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt

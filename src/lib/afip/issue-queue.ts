@@ -4,6 +4,12 @@ import { prisma } from "@/lib/prisma";
 import { issueFiscalInvoice } from "@/lib/afip/fiscal";
 import { mapAfipError } from "@/lib/afip/errors";
 import type { ManualTotals } from "@/lib/afip/totals";
+import {
+  logServerDebug,
+  logServerError,
+  logServerInfo,
+  logServerWarn,
+} from "@/lib/server/log";
 
 const LOCK_TTL_MS = 2 * 60 * 1000;
 
@@ -15,7 +21,7 @@ type ServiceDates = {
 
 export type FiscalIssueRequest = {
   saleId: string;
-  type: "A" | "B";
+  type?: "A" | "B" | null;
   pointOfSale?: number | null;
   docType?: string | number | null;
   docNumber?: string | null;
@@ -29,7 +35,7 @@ export type FiscalIssueRequest = {
 
 type FiscalIssueRequestPayload = {
   saleId: string;
-  type: "A" | "B";
+  type: "A" | "B" | null;
   pointOfSale?: number | null;
   docType?: string | number | null;
   docNumber?: string | null;
@@ -52,7 +58,7 @@ function toJsonObject(value: FiscalIssueRequestPayload): Prisma.JsonObject {
 function serializeRequestPayload(input: FiscalIssueRequest): FiscalIssueRequestPayload {
   return {
     saleId: input.saleId,
-    type: input.type,
+    type: input.type ?? null,
     pointOfSale: input.pointOfSale ?? null,
     docType: input.docType ?? null,
     docNumber: input.docNumber ?? null,
@@ -84,8 +90,13 @@ function deserializeRequestPayload(payload: Prisma.JsonValue): FiscalIssueReques
   }
   const record = payload as Record<string, unknown>;
   const saleId = typeof record.saleId === "string" ? record.saleId : null;
-  const type = record.type === "A" || record.type === "B" ? record.type : null;
-  if (!saleId || !type) {
+  let type: "A" | "B" | null = null;
+  if (record.type === "A" || record.type === "B") {
+    type = record.type;
+  } else if (record.type !== null && record.type !== undefined) {
+    throw new Error("FISCAL_ISSUE_JOB_PAYLOAD_INVALID");
+  }
+  if (!saleId) {
     throw new Error("FISCAL_ISSUE_JOB_PAYLOAD_INVALID");
   }
 
@@ -239,6 +250,11 @@ async function markJobAsError(
   jobId: string,
   mapped: { code: string; error: string; details?: string }
 ) {
+  logServerWarn("fiscal.issue-queue.job.error", mapped.error, {
+    jobId,
+    code: mapped.code,
+    details: mapped.details ?? null,
+  });
   await prisma.fiscalInvoiceIssueJob.update({
     where: { id: jobId },
     data: {
@@ -254,6 +270,9 @@ async function markJobAsError(
 }
 
 async function processJob(jobId: string) {
+  logServerDebug("fiscal.issue-queue.job.start", "Processing fiscal issue job", {
+    jobId,
+  });
   const job = await prisma.fiscalInvoiceIssueJob.findUnique({
     where: { id: jobId },
     select: {
@@ -269,6 +288,7 @@ async function processJob(jobId: string) {
   try {
     request = deserializeRequestPayload(job.requestPayload);
   } catch (error) {
+    logServerError("fiscal.issue-queue.job.payload", error, { jobId: job.id });
     const mapped = mapAfipError(error);
     await markJobAsError(job.id, mapped);
     return;
@@ -293,7 +313,17 @@ async function processJob(jobId: string) {
         finishedAt: new Date(),
       },
     });
+    logServerDebug("fiscal.issue-queue.job.completed", "Fiscal issue job completed", {
+      jobId: job.id,
+      saleId: job.saleId,
+      fiscalInvoiceId: result.invoice.id,
+      warnings: result.warnings.length,
+    });
   } catch (error) {
+    logServerError("fiscal.issue-queue.job.failed", error, {
+      jobId: job.id,
+      saleId: job.saleId,
+    });
     const mapped = mapAfipError(error);
     if (mapped.code === "SALE_ALREADY_BILLED") {
       const existingInvoice = await prisma.fiscalInvoice.findFirst({
@@ -312,6 +342,15 @@ async function processJob(jobId: string) {
             finishedAt: new Date(),
           },
         });
+        logServerInfo(
+          "fiscal.issue-queue.job.reused-invoice",
+          "Reused existing fiscal invoice for already billed sale",
+          {
+            jobId: job.id,
+            saleId: job.saleId,
+            fiscalInvoiceId: existingInvoice.id,
+          }
+        );
         return;
       }
     }
@@ -325,8 +364,50 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
   request: FiscalIssueRequest;
 }) {
   const payload = serializeRequestPayload(input.request);
+  const existing = await prisma.fiscalInvoiceIssueJob.findUnique({
+    where: { saleId: input.request.saleId },
+  });
+  if (existing) {
+    if (existing.organizationId !== input.organizationId) {
+      throw new Error("FISCAL_ISSUE_JOB_ORG_CONFLICT");
+    }
+    if (existing.status === "ERROR") {
+      const requeued = await prisma.fiscalInvoiceIssueJob.update({
+        where: { id: existing.id },
+        data: {
+          status: "PENDING",
+          requestPayload: toJsonObject(payload),
+          responsePayload: Prisma.DbNull,
+          errorCode: null,
+          errorMessage: null,
+          startedAt: null,
+          finishedAt: null,
+        },
+      });
+      logServerInfo(
+        "fiscal.issue-queue.enqueue.requeued",
+        "Requeued previous failed fiscal issue job",
+        {
+          jobId: requeued.id,
+          saleId: requeued.saleId,
+        }
+      );
+      return requeued;
+    }
+    logServerDebug(
+      "fiscal.issue-queue.enqueue.reuse-existing",
+      "Reused existing fiscal issue job",
+      {
+        jobId: existing.id,
+        saleId: existing.saleId,
+        status: existing.status,
+      }
+    );
+    return existing;
+  }
+
   try {
-    return await prisma.fiscalInvoiceIssueJob.create({
+    const created = await prisma.fiscalInvoiceIssueJob.create({
       data: {
         organizationId: input.organizationId,
         saleId: input.request.saleId,
@@ -334,6 +415,11 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
         requestPayload: toJsonObject(payload),
       },
     });
+    logServerInfo("fiscal.issue-queue.enqueue.created", "Created fiscal issue job", {
+      jobId: created.id,
+      saleId: created.saleId,
+    });
+    return created;
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -345,8 +431,11 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
       if (!existing) {
         throw error;
       }
+      if (existing.organizationId !== input.organizationId) {
+        throw new Error("FISCAL_ISSUE_JOB_ORG_CONFLICT");
+      }
       if (existing.status === "ERROR") {
-        return prisma.fiscalInvoiceIssueJob.update({
+        const requeued = await prisma.fiscalInvoiceIssueJob.update({
           where: { id: existing.id },
           data: {
             status: "PENDING",
@@ -358,7 +447,25 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
             finishedAt: null,
           },
         });
+        logServerInfo(
+          "fiscal.issue-queue.enqueue.requeued-race",
+          "Requeued failed fiscal issue job after create race",
+          {
+            jobId: requeued.id,
+            saleId: requeued.saleId,
+          }
+        );
+        return requeued;
       }
+      logServerDebug(
+        "fiscal.issue-queue.enqueue.reuse-existing-race",
+        "Reused existing fiscal issue job after create race",
+        {
+          jobId: existing.id,
+          saleId: existing.saleId,
+          status: existing.status,
+        }
+      );
       return existing;
     }
     throw error;
@@ -369,9 +476,20 @@ export async function runFiscalIssueQueue(organizationId: string) {
   const workerToken = randomUUID();
   const acquired = await tryAcquireQueueLock(organizationId, workerToken);
   if (!acquired) {
+    logServerDebug(
+      "fiscal.issue-queue.lock.skipped",
+      "Fiscal queue worker skipped because lock is already acquired",
+      {
+        organizationId,
+      }
+    );
     return { running: false, processed: 0 };
   }
 
+  logServerDebug("fiscal.issue-queue.lock.acquired", "Fiscal queue lock acquired", {
+    organizationId,
+    workerToken,
+  });
   let processed = 0;
   try {
     for (;;) {
@@ -381,9 +499,19 @@ export async function runFiscalIssueQueue(organizationId: string) {
       await processJob(job.id);
       processed += 1;
     }
+    logServerDebug("fiscal.issue-queue.run.completed", "Fiscal queue run completed", {
+      organizationId,
+      workerToken,
+      processed,
+    });
     return { running: true, processed };
   } finally {
     await releaseQueueLock(organizationId, workerToken);
+    logServerDebug("fiscal.issue-queue.lock.released", "Fiscal queue lock released", {
+      organizationId,
+      workerToken,
+      processed,
+    });
   }
 }
 
