@@ -45,29 +45,12 @@ type ReceiptLineRow = {
 
 type ReceiptRow = {
   id: string;
+  receiptNumber: string | null;
   status: string;
   total: string;
   receivedAt: string;
   confirmedAt: string | null;
   lines: ReceiptLineRow[];
-};
-
-const RECEIPT_STATUS_LABELS: Record<string, string> = {
-  PENDING: "Pendiente",
-  CONFIRMED: "Confirmado",
-  REJECTED: "Rechazado",
-};
-
-const DOUBLE_CHECK_LABELS: Record<string, string> = {
-  PENDING: "Doble control pendiente",
-  VERIFIED: "Doble control OK",
-};
-
-const DOUBLE_CHECK_STYLES: Record<string, string> = {
-  PENDING:
-    "bg-white text-amber-800 border border-amber-200",
-  VERIFIED:
-    "bg-white text-emerald-800 border border-emerald-200",
 };
 
 type SalesRecentTableProps = {
@@ -379,42 +362,16 @@ export function SalesRecentTable({
                                 </p>
                               ) : receiptsBySale[sale.id]?.length ? (
                                 <div className="space-y-2">
-                                  {receiptsBySale[sale.id].map((receipt) => {
-                                    const verificationLines = receipt.lines.filter(
-                                      (line) => line.requiresVerification,
-                                    );
-                                    const hasPendingVerification =
-                                      verificationLines.some((line) => !line.verifiedAt);
-                                    return (
-                                      <div
-                                        key={receipt.id}
-                                        className="rounded-2xl border border-sky-200 bg-white p-3 text-xs text-zinc-600"
-                                      >
+                                  {receiptsBySale[sale.id].map((receipt) => (
+                                    <div
+                                      key={receipt.id}
+                                      className="rounded-2xl border border-sky-200 bg-white p-3 text-xs text-zinc-600"
+                                    >
                                       <div className="flex flex-wrap items-center justify-between gap-3">
                                         <div>
                                           <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-                                            {RECEIPT_STATUS_LABELS[receipt.status] ??
-                                              receipt.status}
+                                            Recibo Nro {receipt.receiptNumber ?? "-"}
                                           </p>
-                                          <p className="text-xs text-zinc-500">
-                                            Recibido{" "}
-                                            {new Date(receipt.receivedAt).toLocaleDateString(
-                                              "es-AR",
-                                            )}
-                                          </p>
-                                          {verificationLines.length ? (
-                                            <span
-                                              className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase ${
-                                                hasPendingVerification
-                                                  ? DOUBLE_CHECK_STYLES.PENDING
-                                                  : DOUBLE_CHECK_STYLES.VERIFIED
-                                              }`}
-                                            >
-                                              {hasPendingVerification
-                                                ? DOUBLE_CHECK_LABELS.PENDING
-                                                : DOUBLE_CHECK_LABELS.VERIFIED}
-                                            </span>
-                                          ) : null}
                                         </div>
                                         <div className="flex items-center gap-2">
                                           <span className="text-sm font-semibold text-zinc-900">
@@ -441,31 +398,19 @@ export function SalesRecentTable({
                                               <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-white text-sky-800 border border-sky-200">
                                                 {line.paymentMethodName}
                                               </span>
-                                              {line.accountName ? (
-                                                <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-zinc-100/30 text-zinc-700 border border-zinc-200/70">
-                                                  {line.accountName}
-                                                </span>
-                                              ) : null}
-                                              {line.requiresVerification ? (
-                                                <span
-                                                  className={`pill text-[9px] px-2 py-0.5 font-semibold ${
-                                                    line.verifiedAt
-                                                      ? DOUBLE_CHECK_STYLES.VERIFIED
-                                                      : DOUBLE_CHECK_STYLES.PENDING
-                                                  }`}
-                                                >
-                                                  {line.verifiedAt
-                                                    ? "Doble control OK"
-                                                    : "Doble control pendiente"}
-                                                </span>
-                                              ) : null}
+                                              {line.accountName
+                                                ? (
+                                                  <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-zinc-100/30 text-zinc-700 border border-zinc-200/70">
+                                                    {line.accountName}
+                                                  </span>
+                                                )
+                                                : null}
                                             </li>
                                           ))}
                                         </ul>
                                       ) : null}
                                     </div>
-                                    );
-                                  })}
+                                  ))}
                                 </div>
                               ) : (
                                 <p className="text-xs text-zinc-500">

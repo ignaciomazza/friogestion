@@ -46,6 +46,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       receipts.map((receipt) => ({
         id: receipt.id,
+        receiptNumber: receipt.receiptNumber,
         status: receipt.status,
         total: receipt.total.toString(),
         receivedAt: receipt.receivedAt.toISOString(),
@@ -235,6 +236,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       id: receipt.id,
+      receiptNumber: receipt.receiptNumber,
       status: receipt.status,
       total: receipt.total.toString(),
       receivedAt: receipt.receivedAt.toISOString(),
