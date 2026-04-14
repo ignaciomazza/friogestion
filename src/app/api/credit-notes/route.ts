@@ -42,9 +42,11 @@ export async function GET(req: NextRequest) {
         fiscalInvoiceId: note.fiscalInvoiceId,
         saleId: note.saleId,
         number: note.creditNumber,
+        pointOfSale: note.pointOfSale,
         type: note.type,
         cae: note.cae,
         issuedAt: note.issuedAt?.toISOString() ?? null,
+        createdAt: note.createdAt.toISOString(),
         customerName: note.sale?.customer.displayName ?? null,
       }))
     );
@@ -98,9 +100,11 @@ export async function POST(req: NextRequest) {
       id: note.id,
       fiscalInvoiceId: note.fiscalInvoiceId,
       number: note.creditNumber,
+      pointOfSale: note.pointOfSale,
       type: note.type,
       cae: note.cae,
       issuedAt: note.issuedAt?.toISOString() ?? null,
+      createdAt: note.createdAt.toISOString(),
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

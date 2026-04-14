@@ -54,6 +54,14 @@ export default async function BillingPage() {
     orderBy: { createdAt: "desc" },
     take: 120,
   });
+  const creditNotes = await prisma.fiscalCreditNote.findMany({
+    where: {
+      organizationId: membership.organizationId,
+      fiscalInvoiceId: { not: null },
+    },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+  });
 
   const afipStatus = await getAfipStatus(membership.organizationId);
   let clientReady = false;
@@ -85,6 +93,18 @@ export default async function BillingPage() {
         iva: invoice.sale.taxes?.toString() ?? null,
         total: invoice.sale.total?.toString() ?? null,
       }))}
+      initialCreditNotes={creditNotes
+        .filter((note) => Boolean(note.fiscalInvoiceId))
+        .map((note) => ({
+          id: note.id,
+          fiscalInvoiceId: note.fiscalInvoiceId ?? "",
+          number: note.creditNumber ?? null,
+          pointOfSale: note.pointOfSale ?? null,
+          type: note.type ?? null,
+          cae: note.cae ?? null,
+          issuedAt: note.issuedAt?.toISOString() ?? null,
+          createdAt: note.createdAt.toISOString(),
+        }))}
       initialSales={sales.map((sale) => ({
         id: sale.id,
         customerName: sale.customer.displayName,

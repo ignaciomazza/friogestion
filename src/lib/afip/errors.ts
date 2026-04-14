@@ -47,6 +47,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   AFIP_CUIT_REQUIRED: "Falta CUIT para emitir comprobantes.",
   ISSUE_DATE_IN_FUTURE: "La fecha del comprobante no puede ser futura.",
   FISCAL_INVOICE_NOT_FOUND: "Factura no encontrada.",
+  FISCAL_INVOICE_ALREADY_ANNULLED:
+    "La factura ya tiene una nota de credito asociada.",
   INVOICE_TYPE_INVALID: "Tipo de factura invalido.",
   INVOICE_VOUCHER_DATA_MISSING:
     "No hay datos de ARCA suficientes para emitir la nota de credito.",

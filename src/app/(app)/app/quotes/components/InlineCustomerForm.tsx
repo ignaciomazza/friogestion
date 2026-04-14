@@ -3,10 +3,16 @@
 import type { FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PlusIcon } from "@/components/icons";
+import {
+  CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  CUSTOMER_FISCAL_TAX_PROFILE_VALUES,
+  type CustomerFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
 
 type CustomerFormData = {
   displayName: string;
   defaultPriceListId: string;
+  fiscalTaxProfile: CustomerFiscalTaxProfile;
   email: string;
   phone: string;
   taxId: string;
@@ -152,6 +158,25 @@ export function InlineCustomerForm({
                   >
                     {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
                   </button>
+                </label>
+                <label className="flex flex-col gap-2">
+                  <span className="input-label">Condicion fiscal</span>
+                  <select
+                    className="input cursor-pointer"
+                    value={form.fiscalTaxProfile}
+                    onChange={(event) =>
+                      onFormChange(
+                        "fiscalTaxProfile",
+                        event.target.value as CustomerFiscalTaxProfile,
+                      )
+                    }
+                  >
+                    {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+                      <option key={profile} value={profile}>
+                        {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
+                      </option>
+                    ))}
+                  </select>
                 </label>
               </div>
               <div className="grid gap-x-3 gap-y-2 sm:grid-cols-2">

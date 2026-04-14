@@ -540,6 +540,18 @@ export async function issueCreditNote(input: IssueCreditNoteInput) {
     throw new Error("FISCAL_INVOICE_NOT_FOUND");
   }
 
+  const existingCreditNote = await prisma.fiscalCreditNote.findFirst({
+    where: {
+      organizationId: input.organizationId,
+      fiscalInvoiceId: invoice.id,
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  if (existingCreditNote) {
+    throw new Error("FISCAL_INVOICE_ALREADY_ANNULLED");
+  }
+
   if (invoice.type !== "A" && invoice.type !== "B") {
     throw new Error("INVOICE_TYPE_INVALID");
   }

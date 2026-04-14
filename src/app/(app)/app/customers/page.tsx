@@ -485,6 +485,30 @@ export default function CustomersPage() {
                 ))}
               </select>
             </label>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="flex flex-col gap-3">
+              <span className="input-label">CUIT</span>
+              <input
+                className="input w-full"
+                value={form.taxId}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    taxId: normalizeTaxId(event.target.value),
+                  }))
+                }
+                placeholder="CUIT"
+              />
+              <button
+                type="button"
+                className="btn text-xs w-fit"
+                onClick={() => handleLookupByTaxId("new")}
+                disabled={isLookupLoading}
+              >
+                {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
+              </button>
+            </label>
             <label className="flex flex-col gap-3">
               <span className="input-label">Condicion fiscal</span>
               <select
@@ -506,28 +530,6 @@ export default function CustomersPage() {
               </select>
             </label>
           </div>
-          <label className="flex flex-col gap-3">
-            <span className="input-label">CUIT</span>
-            <input
-              className="input w-full"
-              value={form.taxId}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  taxId: normalizeTaxId(event.target.value),
-                }))
-              }
-              placeholder="CUIT"
-            />
-            <button
-              type="button"
-              className="btn text-xs w-fit"
-              onClick={() => handleLookupByTaxId("new")}
-              disabled={isLookupLoading}
-            >
-              {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
-            </button>
-          </label>
           <div className="grid gap-4 sm:grid-cols-2">
             <label className="flex flex-col gap-3">
               <span className="input-label">Correo</span>
@@ -750,20 +752,33 @@ export default function CustomersPage() {
                                         defaultPriceListId: nextDefaultPriceListId,
                                         fiscalTaxProfile: selectedList?.isConsumerFinal
                                           ? "CONSUMIDOR_FINAL"
-                                          : prev.fiscalTaxProfile,
+                                        : prev.fiscalTaxProfile,
                                       };
                                     })
                                   }
                                 >
-                                    <option value="">Sin lista por defecto</option>
-                                    {priceLists.map((priceList) => (
-                                      <option key={priceList.id} value={priceList.id}>
-                                        {priceList.name}
-                                        {priceList.isDefault ? " (Default)" : ""}
-                                        {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
-                                      </option>
-                                    ))}
-                                  </select>
+                                  <option value="">Sin lista por defecto</option>
+                                  {priceLists.map((priceList) => (
+                                    <option key={priceList.id} value={priceList.id}>
+                                      {priceList.name}
+                                      {priceList.isDefault ? " (Default)" : ""}
+                                      {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  className="input w-full"
+                                  value={editForm.taxId}
+                                  onChange={(event) =>
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      taxId: normalizeTaxId(event.target.value),
+                                    }))
+                                  }
+                                  placeholder="CUIT"
+                                />
                                 <select
                                   className="input cursor-pointer"
                                   value={editForm.fiscalTaxProfile}
@@ -779,20 +794,9 @@ export default function CustomersPage() {
                                     <option key={profile} value={profile}>
                                       {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
                                     </option>
-                                  ))}
+                                    ))}
                                 </select>
                               </div>
-                              <input
-                                className="input w-full"
-                                value={editForm.taxId}
-                                onChange={(event) =>
-                                  setEditForm((prev) => ({
-                                    ...prev,
-                                    taxId: normalizeTaxId(event.target.value),
-                                  }))
-                                }
-                                placeholder="CUIT"
-                              />
                               <div className="grid gap-3 sm:grid-cols-2">
                                 <input
                                   className="input"

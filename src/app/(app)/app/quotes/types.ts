@@ -1,3 +1,5 @@
+import type { CustomerFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
+
 export type QuoteRow = {
   id: string;
   customerName: string;
@@ -25,6 +27,7 @@ export type CustomerOption = {
   phone: string | null;
   address: string | null;
   type: string;
+  fiscalTaxProfile?: CustomerFiscalTaxProfile | null;
   systemKey: string | null;
   defaultPriceListId?: string | null;
 };

@@ -31,6 +31,7 @@ type AfipStatus = {
 type BillingClientProps = {
   initialSales: SaleRow[];
   initialIssuedInvoices: IssuedInvoiceRow[];
+  initialCreditNotes: IssuedCreditNoteRow[];
   afipStatus: AfipStatus;
 };
 
@@ -69,6 +70,35 @@ type IssuedInvoicePayload = {
   createdAt: string | null;
 };
 
+type IssuedCreditNoteRow = {
+  id: string;
+  fiscalInvoiceId: string;
+  number: string | null;
+  pointOfSale: string | null;
+  type: string | null;
+  cae: string | null;
+  issuedAt: string | null;
+  createdAt: string;
+};
+
+type CreditNotePreview = {
+  invoiceId: string;
+  customerName: string;
+  customerTaxId: string | null;
+  invoiceType: string | null;
+  pointOfSale: string | null;
+  number: string | null;
+  issuedAt: string | null;
+  currencyCode: string;
+  concept: number | null;
+  docType: number | null;
+  docNumber: number | null;
+  net: number;
+  iva: number;
+  exempt: number;
+  total: number;
+};
+
 type InvoiceDraftResult =
   | {
       ok: false;
@@ -93,6 +123,20 @@ const IVA_RATE_TO_ID: Record<number, number> = {
   0: 3,
 };
 const ALLOWED_IVA_RATES = new Set<number>([0, 2.5, 5, 10.5, 21, 27]);
+const DOC_TYPE_LABELS: Record<number, string> = {
+  80: "CUIT",
+  86: "CUIL",
+  87: "CDI",
+  89: "LE",
+  90: "LC",
+  91: "CI extranjera",
+  92: "En tramite",
+  93: "Acta nacimiento",
+  94: "Pasaporte",
+  95: "CI BS AS RNP",
+  96: "DNI",
+  99: "Consumidor final",
+};
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -104,6 +148,16 @@ function normalizeTaxId(value?: string | null) {
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function parseFiniteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatVoucherLabel(pointOfSale?: string | null, number?: string | null) {
+  if (pointOfSale && number) return `${pointOfSale}-${number}`;
+  return number ?? "-";
 }
 
 function buildManualTotals(
@@ -169,11 +223,14 @@ function buildManualTotals(
 export default function BillingClient({
   initialSales,
   initialIssuedInvoices,
+  initialCreditNotes,
   afipStatus,
 }: BillingClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
   const [issuedInvoices, setIssuedInvoices] =
     useState<IssuedInvoiceRow[]>(initialIssuedInvoices);
+  const [issuedCreditNotes, setIssuedCreditNotes] =
+    useState<IssuedCreditNoteRow[]>(initialCreditNotes);
   const [sortOrder, setSortOrder] = useState("newest");
   const [billingQuery, setBillingQuery] = useState("");
   const [issuedQuery, setIssuedQuery] = useState("");
@@ -189,6 +246,10 @@ export default function BillingClient({
   const [invoiceForm, setInvoiceForm] = useState({
     requiresIncomeTaxDeduction: false,
   });
+  const [invoiceToCancel, setInvoiceToCancel] = useState<IssuedInvoiceRow | null>(null);
+  const [creditPreview, setCreditPreview] = useState<CreditNotePreview | null>(null);
+  const [creditPreviewStatus, setCreditPreviewStatus] = useState<string | null>(null);
+  const [isIssuingCreditNote, setIsIssuingCreditNote] = useState(false);
   const [arcaValidation, setArcaValidation] = useState<ArcaValidationState>({
     status: "idle",
     message: null,
@@ -257,6 +318,15 @@ export default function BillingClient({
     return list;
   }, [issuedInvoices, issuedQuery]);
 
+  const creditNoteByInvoiceId = useMemo(() => {
+    const map = new Map<string, IssuedCreditNoteRow>();
+    for (const note of issuedCreditNotes) {
+      if (!note.fiscalInvoiceId || map.has(note.fiscalInvoiceId)) continue;
+      map.set(note.fiscalInvoiceId, note);
+    }
+    return map;
+  }, [issuedCreditNotes]);
+
   const billed = useMemo(
     () => sales.filter((sale) => sale.billingStatus === "BILLED"),
     [sales]
@@ -316,6 +386,133 @@ export default function BillingClient({
     setSaleToInvoice(null);
   };
 
+  const openCreditNoteModal = (invoice: IssuedInvoiceRow) => {
+    setInvoiceToCancel(invoice);
+    setCreditPreview(null);
+    setCreditPreviewStatus("Cargando datos de la factura...");
+    setInvoiceStatus(null);
+  };
+
+  const closeCreditNoteModal = () => {
+    if (isIssuingCreditNote) return;
+    setInvoiceToCancel(null);
+    setCreditPreview(null);
+    setCreditPreviewStatus(null);
+  };
+
+  useEffect(() => {
+    if (!invoiceToCancel) return;
+
+    let cancelled = false;
+    const loadCreditPreview = async () => {
+      try {
+        const res = await fetch(`/api/fiscal-invoices/${invoiceToCancel.id}`, {
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          if (cancelled) return;
+          setCreditPreviewStatus(
+            data?.error ?? "No se pudo cargar la factura para anular."
+          );
+          return;
+        }
+
+        const payloadAfip =
+          typeof data?.payloadAfip === "object" && data.payloadAfip
+            ? (data.payloadAfip as Record<string, unknown>)
+            : null;
+        const voucherData =
+          payloadAfip &&
+          typeof payloadAfip.voucherData === "object" &&
+          payloadAfip.voucherData
+            ? (payloadAfip.voucherData as Record<string, unknown>)
+            : null;
+
+        const pointOfSaleRaw =
+          parseFiniteNumber(voucherData?.PtoVta) ??
+          parseFiniteNumber(data?.pointOfSale);
+        const numberRaw =
+          parseFiniteNumber(voucherData?.CbteDesde) ??
+          parseFiniteNumber(voucherData?.CbteHasta) ??
+          parseFiniteNumber(data?.number);
+        const issuedAt =
+          typeof data?.issuedAt === "string" ? data.issuedAt : invoiceToCancel.issuedAt;
+        const currencyCodeRaw =
+          typeof voucherData?.MonId === "string"
+            ? voucherData.MonId
+            : typeof data?.currencyCode === "string"
+              ? data.currencyCode
+              : "ARS";
+        const currencyCode =
+          currencyCodeRaw === "PES"
+            ? "ARS"
+            : currencyCodeRaw === "DOL"
+              ? "USD"
+              : currencyCodeRaw;
+        const customerName =
+          typeof data?.customer?.displayName === "string"
+            ? data.customer.displayName
+            : invoiceToCancel.customerName;
+        const customerTaxId =
+          typeof data?.customer?.taxId === "string" ? data.customer.taxId : null;
+        const invoiceType =
+          typeof data?.type === "string" ? data.type : invoiceToCancel.type;
+        const net =
+          round2(
+            parseFiniteNumber(voucherData?.ImpNeto) ??
+              parseFiniteNumber(invoiceToCancel.subtotal) ??
+              0
+          );
+        const iva =
+          round2(
+            parseFiniteNumber(voucherData?.ImpIVA) ??
+              parseFiniteNumber(invoiceToCancel.iva) ??
+              0
+          );
+        const exempt = round2(parseFiniteNumber(voucherData?.ImpOpEx) ?? 0);
+        const total =
+          round2(
+            parseFiniteNumber(voucherData?.ImpTotal) ??
+              parseFiniteNumber(invoiceToCancel.total) ??
+              net + iva + exempt
+          );
+        const concept = parseFiniteNumber(voucherData?.Concepto);
+        const docType = parseFiniteNumber(voucherData?.DocTipo);
+        const docNumber = parseFiniteNumber(voucherData?.DocNro);
+
+        if (cancelled) return;
+        setCreditPreview({
+          invoiceId: invoiceToCancel.id,
+          customerName,
+          customerTaxId,
+          invoiceType,
+          pointOfSale:
+            pointOfSaleRaw !== null ? pointOfSaleRaw.toString().padStart(4, "0") : null,
+          number: numberRaw !== null ? numberRaw.toString().padStart(8, "0") : null,
+          issuedAt,
+          currencyCode,
+          concept,
+          docType,
+          docNumber,
+          net,
+          iva,
+          exempt,
+          total,
+        });
+        setCreditPreviewStatus(null);
+      } catch {
+        if (cancelled) return;
+        setCreditPreviewStatus("No se pudo cargar la factura para anular.");
+      }
+    };
+
+    void loadCreditPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [invoiceToCancel]);
+
   const invoiceTotal = Number(saleToInvoice?.total ?? 0);
   const customerFiscalTaxProfile = normalizeCustomerFiscalTaxProfile(
     saleToInvoice?.customerFiscalTaxProfile ?? null
@@ -357,6 +554,9 @@ export default function BillingClient({
   const previewSubtotal = round2(Number(saleToInvoice?.subtotal ?? 0));
   const previewIva = round2(Number(saleToInvoice?.taxes ?? 0));
   const previewTotal = round2(Number(saleToInvoice?.total ?? previewSubtotal + previewIva));
+  const linkedCreditNoteForSelectedInvoice = invoiceToCancel
+    ? creditNoteByInvoiceId.get(invoiceToCancel.id) ?? null
+    : null;
 
   const buildInvoiceDraft = (): InvoiceDraftResult => {
     if (!saleToInvoice) {
@@ -821,6 +1021,71 @@ export default function BillingClient({
     }
   };
 
+  const submitCreditNote = async () => {
+    if (!invoiceToCancel) return;
+    if (creditNoteByInvoiceId.has(invoiceToCancel.id)) {
+      setCreditPreviewStatus("La factura ya tiene una nota de credito emitida.");
+      return;
+    }
+
+    setIsIssuingCreditNote(true);
+    setCreditPreviewStatus(null);
+    setInvoiceStatus(null);
+    try {
+      const res = await fetch("/api/credit-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fiscalInvoiceId: invoiceToCancel.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCreditPreviewStatus(data?.error ?? "No se pudo emitir nota de credito");
+        return;
+      }
+
+      if (typeof data?.id !== "string") {
+        setCreditPreviewStatus("No se pudo emitir nota de credito");
+        return;
+      }
+
+      const noteEntry: IssuedCreditNoteRow = {
+        id: data.id,
+        fiscalInvoiceId:
+          typeof data?.fiscalInvoiceId === "string"
+            ? data.fiscalInvoiceId
+            : invoiceToCancel.id,
+        number: typeof data?.number === "string" ? data.number : null,
+        pointOfSale:
+          typeof data?.pointOfSale === "string" ? data.pointOfSale : null,
+        type: typeof data?.type === "string" ? data.type : null,
+        cae: typeof data?.cae === "string" ? data.cae : null,
+        issuedAt: typeof data?.issuedAt === "string" ? data.issuedAt : null,
+        createdAt:
+          typeof data?.createdAt === "string" ? data.createdAt : new Date().toISOString(),
+      };
+      setIssuedCreditNotes((prev) => [
+        noteEntry,
+        ...prev.filter((item) => item.id !== noteEntry.id),
+      ]);
+      setInvoiceStatus(
+        `Factura ${formatVoucherLabel(invoiceToCancel.pointOfSale, invoiceToCancel.number)} anulada con nota de credito.`
+      );
+      setInvoiceWarnings([]);
+      window.open(
+        `/api/credit-notes/${noteEntry.id}/pdf`,
+        "_blank",
+        "noopener,noreferrer"
+      );
+      setInvoiceToCancel(null);
+      setCreditPreview(null);
+      setCreditPreviewStatus(null);
+    } catch {
+      setCreditPreviewStatus("No se pudo emitir nota de credito");
+    } finally {
+      setIsIssuingCreditNote(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -1110,7 +1375,7 @@ export default function BillingClient({
                         <th className="py-2 pr-4 text-right">Precio</th>
                         <th className="py-2 pr-4 text-right">IVA</th>
                         <th className="py-2 pr-4 text-right">Total</th>
-                        <th className="py-2 pr-4">Acciones</th>
+                        <th className="py-2 pr-4 text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1144,8 +1409,8 @@ export default function BillingClient({
                             <td className="py-2 pr-4 text-right text-zinc-900">
                               {sale.total ? formatCurrencyARS(sale.total.toString()) : "-"}
                             </td>
-                            <td className="py-2 pr-4">
-                              <div className="flex flex-wrap items-center gap-2">
+                            <td className="py-2 pr-4 text-right">
+                              <div className="flex flex-wrap items-center justify-end gap-2">
                                 <a
                                   className="btn text-xs"
                                   href={`/api/pdf/sale?id=${sale.id}`}
@@ -1256,55 +1521,89 @@ export default function BillingClient({
                         <th className="py-2 pr-3 text-right">Neto</th>
                         <th className="py-2 pr-3 text-right">IVA</th>
                         <th className="py-2 pr-3 text-right">Total</th>
-                        <th className="py-2 pr-3">Acciones</th>
+                        <th className="py-2 pr-3 text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredIssuedInvoices.length ? (
-                        filteredIssuedInvoices.map((invoice) => (
-                          <tr
-                            key={invoice.id}
-                            className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
-                          >
-                            <td className="py-2 pr-3 text-zinc-600">
-                              {invoice.issuedAt
-                                ? new Date(invoice.issuedAt).toLocaleDateString("es-AR")
-                                : new Date(invoice.createdAt).toLocaleDateString("es-AR")}
-                            </td>
-                            <td className="py-2 pr-3 text-zinc-900">
-                              {invoice.pointOfSale && invoice.number
-                                ? `${invoice.pointOfSale}-${invoice.number}`
-                                : invoice.number ?? "-"}
-                              {invoice.type ? ` · ${invoice.type}` : ""}
-                            </td>
-                            <td className="py-2 pr-3 text-zinc-600">
-                              {invoice.saleNumber ?? "-"}
-                            </td>
-                            <td className="py-2 pr-3 text-zinc-900">
-                              {invoice.customerName}
-                            </td>
-                            <td className="py-2 pr-3 text-right text-zinc-700">
-                              {invoice.subtotal ? formatCurrencyARS(invoice.subtotal) : "-"}
-                            </td>
-                            <td className="py-2 pr-3 text-right text-zinc-700">
-                              {invoice.iva ? formatCurrencyARS(invoice.iva) : "-"}
-                            </td>
-                            <td className="py-2 pr-3 text-right text-zinc-900">
-                              {invoice.total ? formatCurrencyARS(invoice.total) : "-"}
-                            </td>
-                            <td className="py-2 pr-3">
-                              <a
-                                className="btn text-xs"
-                                href={`/api/fiscal-invoices/${invoice.id}/pdf`}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                <ArrowDownTrayIcon className="size-4" />
-                                PDF
-                              </a>
-                            </td>
-                          </tr>
-                        ))
+                        filteredIssuedInvoices.map((invoice) => {
+                          const linkedCreditNote = creditNoteByInvoiceId.get(invoice.id);
+                          const creditNoteLabel = linkedCreditNote
+                            ? formatVoucherLabel(
+                                linkedCreditNote.pointOfSale,
+                                linkedCreditNote.number
+                              )
+                            : null;
+
+                          return (
+                            <tr
+                              key={invoice.id}
+                              className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
+                            >
+                              <td className="py-2 pr-3 text-zinc-600">
+                                {invoice.issuedAt
+                                  ? new Date(invoice.issuedAt).toLocaleDateString("es-AR")
+                                  : new Date(invoice.createdAt).toLocaleDateString("es-AR")}
+                              </td>
+                              <td className="py-2 pr-3 text-zinc-900">
+                                {formatVoucherLabel(invoice.pointOfSale, invoice.number)}
+                                {invoice.type ? ` · ${invoice.type}` : ""}
+                              </td>
+                              <td className="py-2 pr-3 text-zinc-600">
+                                {invoice.saleNumber ?? "-"}
+                              </td>
+                              <td className="py-2 pr-3 text-zinc-900">
+                                {invoice.customerName}
+                              </td>
+                              <td className="py-2 pr-3 text-right text-zinc-700">
+                                {invoice.subtotal ? formatCurrencyARS(invoice.subtotal) : "-"}
+                              </td>
+                              <td className="py-2 pr-3 text-right text-zinc-700">
+                                {invoice.iva ? formatCurrencyARS(invoice.iva) : "-"}
+                              </td>
+                              <td className="py-2 pr-3 text-right text-zinc-900">
+                                {invoice.total ? formatCurrencyARS(invoice.total) : "-"}
+                              </td>
+                              <td className="py-2 pr-3 text-right">
+                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                  <a
+                                    className="btn text-xs"
+                                    href={`/api/fiscal-invoices/${invoice.id}/pdf`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    <ArrowDownTrayIcon className="size-4" />
+                                    PDF factura
+                                  </a>
+                                  {linkedCreditNote ? (
+                                    <>
+                                      <a
+                                        className="btn btn-sky text-xs"
+                                        href={`/api/credit-notes/${linkedCreditNote.id}/pdf`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        <ArrowDownTrayIcon className="size-4" />
+                                        PDF NC
+                                      </a>
+                                      <span className="rounded-full border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-800">
+                                        Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""}
+                                      </span>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn btn-rose text-xs"
+                                      onClick={() => openCreditNoteModal(invoice)}
+                                    >
+                                      Anular factura
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
                       ) : (
                         <tr>
                           <td className="py-3 text-sm text-zinc-500" colSpan={8}>
@@ -1322,6 +1621,135 @@ export default function BillingClient({
           ) : null}
         </AnimatePresence>
       </div>
+
+      {invoiceToCancel ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
+          <div className="card w-full max-w-xl space-y-4 p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-zinc-900">
+                  Anular factura con nota de credito
+                </h3>
+                <p className="text-xs text-zinc-500">
+                  Factura {formatVoucherLabel(invoiceToCancel.pointOfSale, invoiceToCancel.number)}
+                  {invoiceToCancel.type ? ` · ${invoiceToCancel.type}` : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={closeCreditNoteModal}
+                disabled={isIssuingCreditNote}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {linkedCreditNoteForSelectedInvoice ? (
+              <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
+                Esta factura ya fue anulada con la NC{" "}
+                {formatVoucherLabel(
+                  linkedCreditNoteForSelectedInvoice.pointOfSale,
+                  linkedCreditNoteForSelectedInvoice.number
+                )}
+                .
+              </div>
+            ) : null}
+
+            {creditPreview ? (
+              <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
+                <p className="mt-1 text-xs text-zinc-600">
+                  Se emitira una nota de credito{" "}
+                  {creditPreview.invoiceType ? `tipo ${creditPreview.invoiceType}` : ""}
+                  {" "}asociada a la factura original, reutilizando sus datos fiscales.
+                </p>
+                <div className="mt-3 grid gap-2 text-xs text-zinc-600 sm:grid-cols-2">
+                  <p>
+                    <span className="font-medium text-zinc-900">Factura origen:</span>{" "}
+                    {formatVoucherLabel(creditPreview.pointOfSale, creditPreview.number)}
+                  </p>
+                  <p>
+                    <span className="font-medium text-zinc-900">Fecha factura:</span>{" "}
+                    {creditPreview.issuedAt
+                      ? new Date(creditPreview.issuedAt).toLocaleDateString("es-AR")
+                      : "-"}
+                  </p>
+                  <p>
+                    <span className="font-medium text-zinc-900">Cliente:</span>{" "}
+                    {creditPreview.customerName}
+                  </p>
+                  <p>
+                    <span className="font-medium text-zinc-900">CUIT/DOC:</span>{" "}
+                    {creditPreview.customerTaxId ??
+                      (creditPreview.docNumber !== null
+                        ? `${creditPreview.docType ? `${DOC_TYPE_LABELS[creditPreview.docType] ?? `Tipo ${creditPreview.docType}`}: ` : ""}${creditPreview.docNumber.toLocaleString("es-AR")}`
+                        : "-")}
+                  </p>
+                </div>
+                <div className="mt-3 grid gap-1 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 text-xs text-zinc-700 sm:grid-cols-4">
+                  <p>
+                    Neto:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(creditPreview.net.toFixed(2))}
+                    </span>
+                  </p>
+                  <p>
+                    IVA:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(creditPreview.iva.toFixed(2))}
+                    </span>
+                  </p>
+                  <p>
+                    Exento:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(creditPreview.exempt.toFixed(2))}
+                    </span>
+                  </p>
+                  <p>
+                    Total:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(creditPreview.total.toFixed(2))}
+                    </span>
+                  </p>
+                </div>
+              </div>
+            ) : null}
+
+            {creditPreviewStatus ? (
+              <p className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-700">
+                {creditPreviewStatus}
+              </p>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-zinc-600">
+                Total a anular:{" "}
+                <span className="font-semibold text-zinc-900">
+                  {creditPreview
+                    ? formatCurrencyARS(creditPreview.total.toFixed(2))
+                    : invoiceToCancel.total
+                      ? formatCurrencyARS(invoiceToCancel.total)
+                      : "-"}
+                </span>
+              </p>
+              <button
+                type="button"
+                className="btn btn-rose text-xs"
+                onClick={submitCreditNote}
+                disabled={
+                  isIssuingCreditNote ||
+                  !creditPreview ||
+                  Boolean(linkedCreditNoteForSelectedInvoice)
+                }
+              >
+                {isIssuingCreditNote
+                  ? "Confirmando..."
+                  : "Confirmar nota de credito"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {saleToInvoice ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">

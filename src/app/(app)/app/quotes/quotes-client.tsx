@@ -4,6 +4,11 @@ import type { FormEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon, PlusIcon } from "@/components/icons";
+import {
+  CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  inferFiscalTaxProfileFromArcaTaxStatus,
+  type CustomerFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
 import { resolveSuggestedProductPrice } from "@/lib/pricing";
 import { InlineCustomerForm } from "./components/InlineCustomerForm";
@@ -35,6 +40,7 @@ type QuotesClientProps = {
 type CustomerFormState = {
   displayName: string;
   defaultPriceListId: string;
+  fiscalTaxProfile: CustomerFiscalTaxProfile;
   email: string;
   phone: string;
   taxId: string;
@@ -164,6 +170,7 @@ export default function QuotesClient({
       initialPriceLists.find((priceList) => priceList.isDefault)?.id ??
       initialPriceLists.find((priceList) => priceList.isConsumerFinal)?.id ??
       "",
+    fiscalTaxProfile: "CONSUMIDOR_FINAL",
     email: "",
     phone: "",
     taxId: "",
@@ -385,6 +392,64 @@ export default function QuotesClient({
     return defaultPriceListId ?? consumerFinalPriceListId ?? "";
   };
 
+  const priceListOrderIds = useMemo(
+    () => priceLists.map((priceList) => priceList.id),
+    [priceLists],
+  );
+
+  const getSuggestedProductPrice = ({
+    product,
+    preferredPriceListId,
+    customerPriceListId,
+  }: {
+    product: ProductOption;
+    preferredPriceListId: string;
+    customerPriceListId?: string | null;
+  }) => {
+    const effectiveCustomerPriceListId =
+      customerPriceListId === undefined
+        ? selectedCustomer?.defaultPriceListId ?? null
+        : customerPriceListId;
+    return resolveSuggestedProductPrice({
+      prices: product.prices ?? [],
+      productCost: product.cost,
+      productCostUsd: product.costUsd,
+      productPrice: product.price,
+      preferredPriceListId,
+      customerPriceListId: effectiveCustomerPriceListId,
+      defaultPriceListId,
+      usdRateArs: latestUsdRate,
+      priceListOrderIds,
+    });
+  };
+
+  const applyPriceListAndRefreshItems = ({
+    nextPriceListId,
+    customerPriceListId,
+  }: {
+    nextPriceListId: string;
+    customerPriceListId?: string | null;
+  }) => {
+    setSelectedPriceListId(nextPriceListId);
+    setItems((prev) =>
+      prev.map((item) => {
+        if (!item.productId) return item;
+        const product = productMap.get(item.productId);
+        if (!product) return item;
+        const suggestedPrice = getSuggestedProductPrice({
+          product,
+          preferredPriceListId: nextPriceListId,
+          customerPriceListId,
+        });
+        if (!suggestedPrice || suggestedPrice === item.unitPrice) return item;
+        return {
+          ...item,
+          unitPrice: suggestedPrice,
+        };
+      }),
+    );
+  };
+
   const resetForm = () => {
     setCustomerId("");
     setCustomerSearch("");
@@ -442,9 +507,13 @@ export default function QuotesClient({
     upsertCustomers([customer]);
     const isAnonymousConsumerFinal =
       customer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
+    const nextPriceListId = resolvePreferredPriceListId(customer);
     setCustomerId(customer.id);
     setCustomerSearch(formatCustomerLabel(customer));
-    setSelectedPriceListId(resolvePreferredPriceListId(customer));
+    applyPriceListAndRefreshItems({
+      nextPriceListId,
+      customerPriceListId: customer.defaultPriceListId ?? null,
+    });
     setIsConsumerFinalAnonymous(isAnonymousConsumerFinal);
     setConsumerFinalCustomer(isAnonymousConsumerFinal ? customer : null);
     setIsCustomerOpen(false);
@@ -458,7 +527,10 @@ export default function QuotesClient({
       setConsumerFinalCustomer(null);
       setCustomerId("");
       setCustomerSearch("");
-      setSelectedPriceListId(defaultPriceListId ?? consumerFinalPriceListId ?? "");
+      applyPriceListAndRefreshItems({
+        nextPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
+        customerPriceListId: null,
+      });
       setIsCustomerOpen(false);
       setCustomerActiveIndex(0);
       return;
@@ -476,10 +548,14 @@ export default function QuotesClient({
         return;
       }
       const customer = data as CustomerOption;
+      const nextPriceListId = resolvePreferredPriceListId(customer);
       setConsumerFinalCustomer(customer);
       setCustomerId(customer.id);
       setCustomerSearch(formatCustomerLabel(customer));
-      setSelectedPriceListId(resolvePreferredPriceListId(customer));
+      applyPriceListAndRefreshItems({
+        nextPriceListId,
+        customerPriceListId: customer.defaultPriceListId ?? null,
+      });
       setIsConsumerFinalAnonymous(true);
       setIsCustomerOpen(false);
       setCustomerActiveIndex(0);
@@ -493,16 +569,9 @@ export default function QuotesClient({
 
   const handleSelectProduct = (index: number, product: ProductOption) => {
     upsertProducts([product]);
-    const suggestedPrice = resolveSuggestedProductPrice({
-      prices: product.prices ?? [],
-      productCost: product.cost,
-      productCostUsd: product.costUsd,
-      productPrice: product.price,
+    const suggestedPrice = getSuggestedProductPrice({
+      product,
       preferredPriceListId: selectedPriceListId,
-      customerPriceListId: selectedCustomer?.defaultPriceListId,
-      defaultPriceListId,
-      usdRateArs: latestUsdRate,
-      priceListOrderIds: priceLists.map((priceList) => priceList.id),
     });
 
     setItems((prev) => {
@@ -523,30 +592,10 @@ export default function QuotesClient({
   };
 
   const handleSelectedPriceListChange = (nextPriceListId: string) => {
-    setSelectedPriceListId(nextPriceListId);
-    setItems((prev) =>
-      prev.map((item) => {
-        if (!item.productId) return item;
-        const product = productMap.get(item.productId);
-        if (!product) return item;
-        const suggestedPrice = resolveSuggestedProductPrice({
-          prices: product.prices ?? [],
-          productCost: product.cost,
-          productCostUsd: product.costUsd,
-          productPrice: product.price,
-          preferredPriceListId: nextPriceListId,
-          customerPriceListId: selectedCustomer?.defaultPriceListId,
-          defaultPriceListId,
-          usdRateArs: latestUsdRate,
-          priceListOrderIds: priceLists.map((priceList) => priceList.id),
-        });
-        if (!suggestedPrice) return item;
-        return {
-          ...item,
-          unitPrice: suggestedPrice,
-        };
-      }),
-    );
+    applyPriceListAndRefreshItems({
+      nextPriceListId,
+      customerPriceListId: selectedCustomer?.defaultPriceListId ?? null,
+    });
   };
 
   const handleRemoveItem = (index: number) => {
@@ -1108,10 +1157,34 @@ export default function QuotesClient({
     field: keyof CustomerFormState,
     value: string,
   ) => {
-    setCustomerForm((prev) => ({
-      ...prev,
-      [field]: field === "taxId" ? normalizeTaxId(value) : value,
-    }));
+    setCustomerForm((prev) => {
+      if (field === "taxId") {
+        return {
+          ...prev,
+          taxId: normalizeTaxId(value),
+        };
+      }
+      if (field === "defaultPriceListId") {
+        const selectedList = priceLists.find((priceList) => priceList.id === value);
+        return {
+          ...prev,
+          defaultPriceListId: value,
+          fiscalTaxProfile: selectedList?.isConsumerFinal
+            ? "CONSUMIDOR_FINAL"
+            : prev.fiscalTaxProfile,
+        };
+      }
+      if (field === "fiscalTaxProfile") {
+        return {
+          ...prev,
+          fiscalTaxProfile: value as CustomerFiscalTaxProfile,
+        };
+      }
+      return {
+        ...prev,
+        [field]: value,
+      };
+    });
   };
 
   const handleLookupCustomerByTaxId = async () => {
@@ -1136,13 +1209,20 @@ export default function QuotesClient({
       const taxpayer = data?.taxpayer;
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
       const address = taxpayer?.address ?? "";
+      const fiscalTaxProfile = inferFiscalTaxProfileFromArcaTaxStatus(
+        typeof taxpayer?.taxStatus === "string" ? taxpayer.taxStatus : null,
+      );
       setCustomerForm((prev) => ({
         ...prev,
         taxId,
         displayName: prev.displayName || displayName,
         address: prev.address || address,
+        fiscalTaxProfile: fiscalTaxProfile ?? prev.fiscalTaxProfile,
       }));
-      setCustomerStatus(`Datos ARCA actualizados (${data.source}).`);
+      const statusText = fiscalTaxProfile
+        ? `Condicion fiscal sugerida: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
+        : "ARCA no devolvio condicion fiscal clara.";
+      setCustomerStatus(`Datos ARCA actualizados (${data.source}). ${statusText}`);
     } catch {
       setCustomerStatus("No se pudo consultar ARCA");
     } finally {
@@ -1170,6 +1250,7 @@ export default function QuotesClient({
           phone: customerForm.phone || undefined,
           taxId: customerForm.taxId || undefined,
           address: customerForm.address || undefined,
+          fiscalTaxProfile: customerForm.fiscalTaxProfile,
         }),
       });
       const data = (await res.json()) as
@@ -1188,10 +1269,14 @@ export default function QuotesClient({
       }
 
       const createdCustomer = data as CustomerOption;
+      const nextPriceListId = resolvePreferredPriceListId(createdCustomer);
       upsertCustomers([createdCustomer]);
       setCustomerId(createdCustomer.id);
       setCustomerSearch(formatCustomerLabel(createdCustomer));
-      setSelectedPriceListId(resolvePreferredPriceListId(createdCustomer));
+      applyPriceListAndRefreshItems({
+        nextPriceListId,
+        customerPriceListId: createdCustomer.defaultPriceListId ?? null,
+      });
       const isAnonymousConsumerFinal =
         createdCustomer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
       setIsConsumerFinalAnonymous(isAnonymousConsumerFinal);
@@ -1205,6 +1290,7 @@ export default function QuotesClient({
       setCustomerForm({
         displayName: "",
         defaultPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
+        fiscalTaxProfile: "CONSUMIDOR_FINAL",
         email: "",
         phone: "",
         taxId: "",
