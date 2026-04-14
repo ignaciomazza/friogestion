@@ -27,17 +27,70 @@ const supplierUpdateSchema = z.object({
   address: z.string().min(3).optional(),
 });
 
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 200;
+
+const parseLimit = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PAGE_SIZE;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 1) return 1;
+  if (normalized > MAX_PAGE_SIZE) return MAX_PAGE_SIZE;
+  return normalized;
+};
+
+const parseOffset = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) return 0;
+  return normalized;
+};
+
+const parseSort = (value: string | null) => (value === "za" ? "za" : "az");
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const suppliers = await prisma.supplier.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
+    const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const limit = parseLimit(req.nextUrl.searchParams.get("limit"));
+    const offset = parseOffset(req.nextUrl.searchParams.get("offset"));
+    const sort = parseSort(req.nextUrl.searchParams.get("sort"));
 
-    return NextResponse.json(
-      suppliers.map((supplier) => ({
+    const where: Prisma.SupplierWhereInput = {
+      organizationId,
+      ...(query
+        ? {
+            OR: [
+              { displayName: { contains: query, mode: "insensitive" } },
+              { taxId: { contains: query, mode: "insensitive" } },
+              { email: { contains: query, mode: "insensitive" } },
+              { phone: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const orderBy: Prisma.SupplierOrderByWithRelationInput[] = [
+      { displayName: sort === "za" ? "desc" : "asc" },
+      { createdAt: "desc" },
+    ];
+
+    const [total, suppliers] = await prisma.$transaction([
+      prisma.supplier.count({ where }),
+      prisma.supplier.findMany({
+        where,
+        orderBy,
+        skip: offset,
+        take: limit,
+      }),
+    ]);
+
+    const nextOffset = offset + suppliers.length;
+    const hasMore = nextOffset < total;
+
+    return NextResponse.json({
+      items: suppliers.map((supplier) => ({
         id: supplier.id,
         displayName: supplier.displayName,
         legalName: supplier.legalName,
@@ -50,8 +103,11 @@ export async function GET(req: NextRequest) {
           supplier.arcaVerificationCheckedAt?.toISOString() ?? null,
         arcaVerificationMessage: supplier.arcaVerificationMessage ?? null,
         arcaVerificationSnapshot: supplier.arcaVerificationSnapshot ?? null,
-      }))
-    );
+      })),
+      total,
+      nextOffset: hasMore ? nextOffset : null,
+      hasMore,
+    });
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

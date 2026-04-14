@@ -26,17 +26,124 @@ const productUpdateSchema = z.object({
   unit: z.enum(UNIT_VALUES).optional(),
 });
 
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 200;
+
+const parseLimit = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PAGE_SIZE;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 1) return 1;
+  if (normalized > MAX_PAGE_SIZE) return MAX_PAGE_SIZE;
+  return normalized;
+};
+
+const parseOffset = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) return 0;
+  return normalized;
+};
+
+const parseSort = (value: string | null) => (value === "za" ? "za" : "az");
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const products = await prisma.product.findMany({
-      where: { organizationId },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
+    const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const limit = parseLimit(req.nextUrl.searchParams.get("limit"));
+    const offset = parseOffset(req.nextUrl.searchParams.get("offset"));
+    const sort = parseSort(req.nextUrl.searchParams.get("sort"));
+    const includePrices =
+      req.nextUrl.searchParams.get("includePrices") === "1";
+    const unitParam = req.nextUrl.searchParams.get("unit")?.trim() ?? "";
+    const unit = unitParam && unitParam !== "ALL" ? unitParam : null;
 
-    return NextResponse.json(
-      products.map((product) => ({
+    if (unit && !UNIT_VALUES.includes(unit as (typeof UNIT_VALUES)[number])) {
+      return NextResponse.json({ error: "Unidad invalida" }, { status: 400 });
+    }
+
+    const where: Prisma.ProductWhereInput = {
+      organizationId,
+      ...(query
+        ? {
+            OR: [
+              { name: { contains: query, mode: "insensitive" } },
+              { sku: { contains: query, mode: "insensitive" } },
+              { brand: { contains: query, mode: "insensitive" } },
+              { model: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+      ...(unit ? { unit } : {}),
+    };
+
+    const orderBy: Prisma.ProductOrderByWithRelationInput[] = [
+      { name: sort === "za" ? "desc" : "asc" },
+      { createdAt: "desc" },
+    ];
+
+    if (includePrices) {
+      const [total, products] = await prisma.$transaction([
+        prisma.product.count({ where }),
+        prisma.product.findMany({
+          where,
+          orderBy,
+          skip: offset,
+          take: limit,
+          include: {
+            priceItems: {
+              select: {
+                priceListId: true,
+                price: true,
+              },
+            },
+          },
+        }),
+      ]);
+
+      const nextOffset = offset + products.length;
+      const hasMore = nextOffset < total;
+
+      return NextResponse.json({
+        items: products.map((product) => ({
+          id: product.id,
+          name: product.name,
+          sku: product.sku,
+          brand: product.brand,
+          model: product.model,
+          unit: product.unit,
+          cost: product.cost?.toString() ?? null,
+          costUsd: product.costUsd?.toString() ?? null,
+          price: product.price?.toString() ?? null,
+          isActive: product.isActive,
+          prices: product.priceItems.map((priceItem) => ({
+            priceListId: priceItem.priceListId,
+            price: priceItem.price.toString(),
+          })),
+        })),
+        total,
+        nextOffset: hasMore ? nextOffset : null,
+        hasMore,
+      });
+    }
+
+    const [total, products] = await prisma.$transaction([
+      prisma.product.count({ where }),
+      prisma.product.findMany({
+        where,
+        orderBy,
+        skip: offset,
+        take: limit,
+      }),
+    ]);
+
+    const nextOffset = offset + products.length;
+    const hasMore = nextOffset < total;
+
+    return NextResponse.json({
+      items: products.map((product) => ({
         id: product.id,
         name: product.name,
         sku: product.sku,
@@ -47,8 +154,11 @@ export async function GET(req: NextRequest) {
         costUsd: product.costUsd?.toString() ?? null,
         price: product.price?.toString() ?? null,
         isActive: product.isActive,
-      }))
-    );
+      })),
+      total,
+      nextOffset: hasMore ? nextOffset : null,
+      hasMore,
+    });
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

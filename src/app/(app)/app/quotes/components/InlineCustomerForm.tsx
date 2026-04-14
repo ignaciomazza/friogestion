@@ -23,6 +23,7 @@ type PriceListOption = {
 
 type InlineCustomerFormProps = {
   show: boolean;
+  autoFocusName?: boolean;
   onToggle: () => void;
   form: CustomerFormData;
   priceLists: PriceListOption[];
@@ -37,6 +38,7 @@ type InlineCustomerFormProps = {
 
 export function InlineCustomerForm({
   show,
+  autoFocusName,
   onToggle,
   form,
   priceLists,
@@ -48,6 +50,12 @@ export function InlineCustomerForm({
   isSubmitting,
   onSubmit,
 }: InlineCustomerFormProps) {
+  const normalizedStatus = status?.toLowerCase() ?? "";
+  const isErrorStatus =
+    normalizedStatus.includes("no se pudo") ||
+    normalizedStatus.includes("requerido") ||
+    normalizedStatus.includes("ingresa");
+
   return (
     <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
       <button
@@ -95,6 +103,7 @@ export function InlineCustomerForm({
                 <input
                   className="input w-full"
                   value={form.displayName}
+                  autoFocus={autoFocusName}
                   onChange={(event) =>
                     onFormChange("displayName", event.target.value)
                   }
@@ -184,11 +193,21 @@ export function InlineCustomerForm({
                 <PlusIcon className="size-4" />
                 {isSubmitting ? "Guardando..." : "Crear cliente"}
               </button>
-              {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
             </form>
           </motion.div>
         ) : null}
       </AnimatePresence>
+      {status ? (
+        <p
+          className={`text-xs ${
+            isErrorStatus ? "text-rose-700" : "text-emerald-700"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {status}
+        </p>
+      ) : null}
     </div>
   );
 }

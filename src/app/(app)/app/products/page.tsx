@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   CheckIcon,
@@ -21,15 +21,28 @@ type ProductRow = {
   unit: string | null;
 };
 
-const normalizeQuery = (value: string) => value.trim().toLowerCase();
+type ProductsResponse = {
+  items: ProductRow[];
+  total: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
+
+const PAGE_SIZE = 100;
 
 export default function ProductsPage() {
   const [items, setItems] = useState<ProductRow[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [productQuery, setProductQuery] = useState("");
+  const [debouncedProductQuery, setDebouncedProductQuery] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
   const [sortOrder, setSortOrder] = useState("az");
+  const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [form, setForm] = useState({
     name: "",
     sku: "",
@@ -48,17 +61,72 @@ export default function ProductsPage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const loadProducts = async () => {
-    const res = await fetch("/api/products", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as ProductRow[];
-      setItems(data);
-    }
-  };
+  const loadProducts = useCallback(
+    async ({
+      offset,
+      append,
+    }: {
+      offset: number;
+      append: boolean;
+    }) => {
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingList(true);
+      }
+
+      const params = new URLSearchParams();
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
+      params.set("sort", sortOrder);
+      if (debouncedProductQuery.trim()) {
+        params.set("q", debouncedProductQuery.trim());
+      }
+      if (unitFilter !== "ALL") {
+        params.set("unit", unitFilter);
+      }
+
+      try {
+        const res = await fetch(`/api/products?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as ProductsResponse;
+
+        setItems((previous) =>
+          append ? [...previous, ...data.items] : data.items,
+        );
+        setTotalItems(data.total);
+        setNextOffset(data.nextOffset);
+        setHasMore(data.hasMore);
+      } finally {
+        setIsLoadingList(false);
+        setIsLoadingMore(false);
+      }
+    },
+    [debouncedProductQuery, sortOrder, unitFilter],
+  );
 
   useEffect(() => {
-    loadProducts().catch(() => undefined);
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedProductQuery(productQuery);
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [productQuery]);
+
+  useEffect(() => {
+    loadProducts({ offset: 0, append: false }).catch(() => undefined);
+  }, [loadProducts]);
+
+  const reloadFromStart = async () => {
+    await loadProducts({ offset: 0, append: false });
+  };
+
+  const handleLoadMore = async () => {
+    if (nextOffset === null || isLoadingMore) return;
+    await loadProducts({ offset: nextOffset, append: true });
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -91,7 +159,7 @@ export default function ProductsPage() {
         unit: "u",
       });
       setStatus("Producto creado");
-      await loadProducts();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo crear");
     } finally {
@@ -148,7 +216,7 @@ export default function ProductsPage() {
 
       setStatus("Producto actualizado");
       handleEditCancel();
-      await loadProducts();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo actualizar");
     } finally {
@@ -168,7 +236,7 @@ export default function ProductsPage() {
         return;
       }
       setStatus("Producto eliminado");
-      await loadProducts();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo eliminar");
     } finally {
@@ -176,35 +244,9 @@ export default function ProductsPage() {
     }
   };
 
-  const totalProducts = items.length;
+  const totalProducts = totalItems;
   const productsWithUnit = items.filter((item) => item.unit).length;
   const productsWithSku = items.filter((item) => item.sku).length;
-
-  const filteredItems = useMemo(() => {
-    const query = normalizeQuery(productQuery);
-    const filtered = items.filter((item) => {
-      if (unitFilter !== "ALL" && item.unit !== unitFilter) {
-        return false;
-      }
-      if (query) {
-        const haystack = normalizeQuery(
-          `${item.name} ${item.sku ?? ""} ${item.brand ?? ""} ${item.model ?? ""}`
-        );
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-
-    filtered.sort((a, b) => {
-      const aName = a.name.toLowerCase();
-      const bName = b.name.toLowerCase();
-      if (aName === bName) return 0;
-      const order = aName > bName ? 1 : -1;
-      return sortOrder === "za" ? -order : order;
-    });
-
-    return filtered;
-  }, [items, productQuery, sortOrder, unitFilter]);
 
   return (
     <div className="space-y-6">
@@ -347,7 +389,7 @@ export default function ProductsPage() {
               Filtros de productos
             </h3>
             <p className="text-xs text-zinc-500">
-              {filteredItems.length} de {items.length} productos
+              {items.length} de {totalItems} productos
             </p>
           </div>
           <button
@@ -406,7 +448,7 @@ export default function ProductsPage() {
           </h3>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-zinc-500">
-              {filteredItems.length} resultados
+              {items.length} de {totalItems}
             </span>
             <select
               className="input cursor-pointer text-xs"
@@ -432,8 +474,8 @@ export default function ProductsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.length ? (
-                filteredItems.map((item) => (
+              {items.length ? (
+                items.map((item) => (
                   <Fragment key={item.id}>
                     <tr className="border-t border-zinc-200/60 transition-colors hover:bg-white/60">
                       <td className="py-3 pr-4 text-zinc-900">
@@ -579,13 +621,25 @@ export default function ProductsPage() {
               ) : (
                 <tr>
                   <td className="py-3 text-sm text-zinc-500" colSpan={6}>
-                    Sin productos por ahora.
+                    {isLoadingList ? "Cargando productos..." : "Sin productos por ahora."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        {hasMore ? (
+          <div className="pt-3">
+            <button
+              type="button"
+              className="btn btn-sky text-xs w-full sm:w-auto"
+              onClick={() => handleLoadMore().catch(() => undefined)}
+              disabled={isLoadingMore || isLoadingList}
+            >
+              {isLoadingMore ? "Cargando..." : "Cargar mas"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

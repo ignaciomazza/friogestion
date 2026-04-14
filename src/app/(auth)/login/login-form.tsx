@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { z } from "zod";
 import { ToastContainer, toast } from "react-toastify";
+import { canAccessDashboard } from "@/lib/auth/rbac";
 import "react-toastify/dist/ReactToastify.css";
 
 const loginSchema = z.object({
@@ -35,15 +36,23 @@ export default function LoginForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
+      const data = (await res.json().catch(() => null)) as
+        | { error?: string; role?: string }
+        | null;
 
       if (!res.ok) {
-        const data = await res.json();
         toast.error(data?.error ?? "No se pudo iniciar sesion");
         return;
       }
 
       toast.success("Bienvenido/a");
-      const redirectTo = searchParams.get("from") ?? "/app";
+      const fromPath = searchParams.get("from");
+      const canOpenDashboard = canAccessDashboard(data?.role ?? null);
+      const defaultPath = canOpenDashboard ? "/app" : "/app/quotes";
+      const redirectTo =
+        fromPath === "/app" && !canOpenDashboard
+          ? "/app/quotes"
+          : fromPath ?? defaultPath;
       router.push(redirectTo);
     } catch {
       toast.error("No se pudo iniciar sesion");

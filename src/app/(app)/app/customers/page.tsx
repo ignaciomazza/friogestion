@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BuildingOffice2Icon,
@@ -33,16 +33,29 @@ type PriceListOption = {
   isActive: boolean;
 };
 
-const normalizeQuery = (value: string) => value.trim().toLowerCase();
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
+const PAGE_SIZE = 100;
+
+type CustomersResponse = {
+  items: CustomerRow[];
+  total: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
 
 export default function CustomersPage() {
   const [items, setItems] = useState<CustomerRow[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [priceLists, setPriceLists] = useState<PriceListOption[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customerQuery, setCustomerQuery] = useState("");
+  const [debouncedCustomerQuery, setDebouncedCustomerQuery] = useState("");
   const [sortOrder, setSortOrder] = useState("az");
+  const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [form, setForm] = useState({
     displayName: "",
     email: "",
@@ -65,13 +78,47 @@ export default function CustomersPage() {
   const [isLookupLoading, setIsLookupLoading] = useState(false);
   const [isEditLookupLoading, setIsEditLookupLoading] = useState(false);
 
-  const loadCustomers = async () => {
-    const res = await fetch("/api/customers", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as CustomerRow[];
-      setItems(data);
-    }
-  };
+  const loadCustomers = useCallback(
+    async ({
+      offset,
+      append,
+    }: {
+      offset: number;
+      append: boolean;
+    }) => {
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingList(true);
+      }
+
+      const params = new URLSearchParams();
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
+      params.set("sort", sortOrder);
+      if (debouncedCustomerQuery.trim()) {
+        params.set("q", debouncedCustomerQuery.trim());
+      }
+
+      try {
+        const res = await fetch(`/api/customers?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as CustomersResponse;
+        setItems((previous) =>
+          append ? [...previous, ...data.items] : data.items,
+        );
+        setTotalItems(data.total);
+        setNextOffset(data.nextOffset);
+        setHasMore(data.hasMore);
+      } finally {
+        setIsLoadingList(false);
+        setIsLoadingMore(false);
+      }
+    },
+    [debouncedCustomerQuery, sortOrder],
+  );
 
   const loadPriceLists = async () => {
     const res = await fetch("/api/price-lists", { cache: "no-store" });
@@ -82,9 +129,29 @@ export default function CustomersPage() {
   };
 
   useEffect(() => {
-    loadCustomers().catch(() => undefined);
     loadPriceLists().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedCustomerQuery(customerQuery);
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [customerQuery]);
+
+  useEffect(() => {
+    loadCustomers({ offset: 0, append: false }).catch(() => undefined);
+  }, [loadCustomers]);
+
+  const reloadFromStart = async () => {
+    await loadCustomers({ offset: 0, append: false });
+  };
+
+  const handleLoadMore = async () => {
+    if (nextOffset === null || isLoadingMore) return;
+    await loadCustomers({ offset: nextOffset, append: true });
+  };
 
   const handleLookupByTaxId = async (target: "new" | "edit") => {
     const source = target === "new" ? form.taxId : editForm.taxId;
@@ -175,7 +242,7 @@ export default function CustomersPage() {
         defaultPriceListId: "",
       });
       setStatus("Cliente creado");
-      await loadCustomers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo crear");
     } finally {
@@ -235,7 +302,7 @@ export default function CustomersPage() {
 
       setStatus("Cliente actualizado");
       handleEditCancel();
-      await loadCustomers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo actualizar");
     } finally {
@@ -255,7 +322,7 @@ export default function CustomersPage() {
         return;
       }
       setStatus("Cliente eliminado");
-      await loadCustomers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo eliminar");
     } finally {
@@ -263,11 +330,12 @@ export default function CustomersPage() {
     }
   };
 
-  const totalCustomers = items.length;
+  const totalCustomers = totalItems;
+  const loadedCustomers = items.length;
   const customersWithPriceList = items.filter(
     (item) => Boolean(item.defaultPriceListId),
   ).length;
-  const customersWithoutPriceList = totalCustomers - customersWithPriceList;
+  const customersWithoutPriceList = loadedCustomers - customersWithPriceList;
   const consumerFinalPriceListCount = items.filter((item) => {
     if (!item.defaultPriceListId) return false;
     const priceList = priceLists.find(
@@ -279,31 +347,6 @@ export default function CustomersPage() {
     () => new Map(priceLists.map((priceList) => [priceList.id, priceList])),
     [priceLists],
   );
-
-  const filteredItems = useMemo(() => {
-    const query = normalizeQuery(customerQuery);
-    const filtered = items.filter((item) => {
-      if (query) {
-        const haystack = normalizeQuery(
-          `${item.displayName} ${item.taxId ?? ""} ${item.email ?? ""} ${
-            item.phone ?? ""
-          }`
-        );
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-
-    filtered.sort((a, b) => {
-      const aName = a.displayName.toLowerCase();
-      const bName = b.displayName.toLowerCase();
-      if (aName === bName) return 0;
-      const order = aName > bName ? 1 : -1;
-      return sortOrder === "za" ? -order : order;
-    });
-
-    return filtered;
-  }, [customerQuery, items, sortOrder]);
 
   return (
     <div className="space-y-6">
@@ -488,7 +531,7 @@ export default function CustomersPage() {
               Filtros de clientes
             </h3>
             <p className="text-xs text-zinc-500">
-              {filteredItems.length} de {items.length} clientes
+              {items.length} de {totalItems} clientes
             </p>
           </div>
           <button
@@ -534,7 +577,7 @@ export default function CustomersPage() {
           </h3>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-zinc-500">
-              {filteredItems.length} resultados
+              {items.length} de {totalItems}
             </span>
             <select
               className="input cursor-pointer text-xs"
@@ -560,8 +603,8 @@ export default function CustomersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.length ? (
-                filteredItems.map((item) => (
+              {items.length ? (
+                items.map((item) => (
                   <Fragment key={item.id}>
                     <tr className="border-t border-zinc-200/60 transition-colors hover:bg-white/60">
                       <td className="py-3 pr-4 text-zinc-900">
@@ -734,13 +777,25 @@ export default function CustomersPage() {
               ) : (
                 <tr>
                   <td className="py-3 text-sm text-zinc-500" colSpan={6}>
-                    Sin clientes por ahora.
+                    {isLoadingList ? "Cargando clientes..." : "Sin clientes por ahora."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        {hasMore ? (
+          <div className="pt-3">
+            <button
+              type="button"
+              className="btn btn-sky text-xs w-full sm:w-auto"
+              onClick={() => handleLoadMore().catch(() => undefined)}
+              disabled={isLoadingList || isLoadingMore}
+            >
+              {isLoadingMore ? "Cargando..." : "Cargar mas"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

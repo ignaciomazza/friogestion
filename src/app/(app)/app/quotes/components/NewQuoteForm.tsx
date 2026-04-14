@@ -27,14 +27,13 @@ type NewQuoteFormProps = {
   consumerFinalThresholdLabel: string;
   priceLists: PriceListOption[];
   selectedPriceListId: string;
-  selectedPriceListName: string | null;
-  customerPriceListName: string | null;
   showPriceListMismatchWarning: boolean;
   onSelectedPriceListChange: (value: string) => void;
   isCustomerOpen: boolean;
   customerMatches: CustomerOption[];
   customerActiveIndex: number;
   hasCustomers: boolean;
+  isCustomerMatchesLoading: boolean;
   onConsumerFinalToggle: (enabled: boolean) => void;
   onCustomerSearchChange: (value: string) => void;
   onCustomerFocus: () => void;
@@ -53,6 +52,7 @@ type NewQuoteFormProps = {
   openProductIndex: number | null;
   productActiveIndex: number;
   getProductMatches: (query: string) => ProductOption[];
+  isProductMatchesLoading: boolean;
   onItemChange: (
     index: number,
     field: keyof QuoteItemForm,
@@ -89,14 +89,13 @@ export function NewQuoteForm({
   consumerFinalThresholdLabel,
   priceLists,
   selectedPriceListId,
-  selectedPriceListName,
-  customerPriceListName,
   showPriceListMismatchWarning,
   onSelectedPriceListChange,
   isCustomerOpen,
   customerMatches,
   customerActiveIndex,
   hasCustomers,
+  isCustomerMatchesLoading,
   onConsumerFinalToggle,
   onCustomerSearchChange,
   onCustomerFocus,
@@ -115,6 +114,7 @@ export function NewQuoteForm({
   openProductIndex,
   productActiveIndex,
   getProductMatches,
+  isProductMatchesLoading,
   onItemChange,
   onOpenProductIndexChange,
   onProductActiveIndexChange,
@@ -240,7 +240,9 @@ export function NewQuoteForm({
                         })
                       ) : (
                         <div className="px-3 py-2 text-xs text-zinc-500">
-                          Sin resultados.
+                          {isCustomerMatchesLoading
+                            ? "Buscando..."
+                            : "Sin resultados."}
                         </div>
                       )
                     ) : (
@@ -315,16 +317,6 @@ export function NewQuoteForm({
                   </option>
                 ))}
               </select>
-              {selectedPriceListName ? (
-                <p className="text-xs text-zinc-500">
-                  Lista aplicada: {selectedPriceListName}
-                </p>
-              ) : null}
-              {customerPriceListName ? (
-                <p className="text-xs text-zinc-500">
-                  Lista del cliente: {customerPriceListName}
-                </p>
-              ) : null}
               {showPriceListMismatchWarning ? (
                 <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
                   Advertencia: la lista seleccionada no coincide con la lista del
@@ -495,7 +487,9 @@ export function NewQuoteForm({
                                       )
                                     ) : (
                                       <div className="px-3 py-2 text-xs text-zinc-500">
-                                        Sin resultados.
+                                        {isProductMatchesLoading
+                                          ? "Buscando..."
+                                          : "Sin resultados."}
                                       </div>
                                     )
                                   ) : (

@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatCurrencyARS, formatCurrencyUSD } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
@@ -80,7 +80,6 @@ type SupplierPaymentRow = {
 };
 
 type SupplierPaymentsPanelProps = {
-  suppliers: SupplierOption[];
   purchases: PurchaseRow[];
   paymentMethods: PaymentMethodOption[];
   accounts: AccountOption[];
@@ -138,7 +137,6 @@ const formatAmountByCurrency = (amount: string | number, currencyCode: string) =
 };
 
 export function SupplierPaymentsPanel({
-  suppliers,
   purchases,
   paymentMethods,
   accounts,
@@ -151,6 +149,8 @@ export function SupplierPaymentsPanel({
   const [supplierSearch, setSupplierSearch] = useState("");
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
   const [supplierActiveIndex, setSupplierActiveIndex] = useState(0);
+  const [supplierMatches, setSupplierMatches] = useState<SupplierOption[]>([]);
+  const [isSupplierMatchesLoading, setIsSupplierMatchesLoading] = useState(false);
   const [paidAt, setPaidAt] = useState(
     new Date().toISOString().slice(0, 10),
   );
@@ -164,23 +164,14 @@ export function SupplierPaymentsPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const supplierMatchesCacheRef = useRef<Map<string, SupplierOption[]>>(
+    new Map(),
+  );
 
   const methodsById = useMemo(
     () => new Map(paymentMethods.map((method) => [method.id, method])),
     [paymentMethods],
   );
-
-  const supplierMatches = useMemo(() => {
-    const query = normalizeQuery(supplierSearch);
-    const list = query
-      ? suppliers.filter((supplier) =>
-          `${supplier.displayName} ${supplier.taxId ?? ""}`
-            .toLowerCase()
-            .includes(query),
-        )
-      : suppliers;
-    return list.slice(0, 8);
-  }, [supplierSearch, suppliers]);
 
   const openPurchases = useMemo(() => {
     if (!supplierId) return [];
@@ -223,14 +214,45 @@ export function SupplierPaymentsPanel({
       setRetentions([]);
       return;
     }
-    const selected = suppliers.find((supplier) => supplier.id === supplierId);
-    if (selected) {
-      setSupplierSearch(formatSupplierLabel(selected));
-    }
     loadPayments(supplierId).catch(() => undefined);
     setAllocations({});
     setRetentions([]);
-  }, [supplierId, suppliers, loadPayments]);
+  }, [supplierId, loadPayments]);
+
+  useEffect(() => {
+    if (!isSupplierOpen) return;
+    const query = normalizeQuery(supplierSearch);
+    const timeoutId = window.setTimeout(async () => {
+      if (supplierMatchesCacheRef.current.has(query)) {
+        setSupplierMatches(supplierMatchesCacheRef.current.get(query) ?? []);
+        return;
+      }
+
+      setIsSupplierMatchesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", "8");
+        params.set("offset", "0");
+        params.set("sort", "az");
+        if (query) {
+          params.set("q", query);
+        }
+        const res = await fetch(`/api/suppliers?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          items: SupplierOption[];
+        };
+        supplierMatchesCacheRef.current.set(query, data.items);
+        setSupplierMatches(data.items);
+      } finally {
+        setIsSupplierMatchesLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isSupplierOpen, supplierSearch]);
 
   const handleSupplierSearchChange = (value: string) => {
     setSupplierSearch(value);
@@ -576,47 +598,45 @@ export function SupplierPaymentsPanel({
                 transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                 className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
               >
-                {suppliers.length ? (
-                  supplierMatches.length ? (
-                    supplierMatches.map((supplier, matchIndex) => {
-                      const isSelected = supplier.id === supplierId;
-                      const isActive = matchIndex === supplierActiveIndex;
-                      return (
-                        <button
-                          key={supplier.id}
-                          type="button"
-                          id={`supplier-payments-option-${supplier.id}`}
-                          role="option"
-                          aria-selected={isSelected}
-                          className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
-                            isActive
+                {supplierMatches.length ? (
+                  supplierMatches.map((supplier, matchIndex) => {
+                    const isSelected = supplier.id === supplierId;
+                    const isActive = matchIndex === supplierActiveIndex;
+                    return (
+                      <button
+                        key={supplier.id}
+                        type="button"
+                        id={`supplier-payments-option-${supplier.id}`}
+                        role="option"
+                        aria-selected={isSelected}
+                        className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                          isActive
+                            ? "bg-white text-sky-900"
+                            : isSelected
                               ? "bg-white text-sky-900"
-                              : isSelected
-                                ? "bg-white text-sky-900"
-                                : "hover:bg-white/70"
-                          }`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            handleSupplierSelect(supplier);
-                          }}
-                        >
-                          <span className="font-medium text-zinc-900">
-                            {supplier.displayName}
-                          </span>
-                          <span className="text-xs text-zinc-500">
-                            {supplier.taxId ?? "Sin CUIT"}
-                          </span>
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <div className="px-3 py-2 text-xs text-zinc-500">
-                      Sin resultados.
-                    </div>
-                  )
+                              : "hover:bg-white/70"
+                        }`}
+                        onMouseDown={(event) => {
+                          event.preventDefault();
+                          handleSupplierSelect(supplier);
+                        }}
+                      >
+                        <span className="font-medium text-zinc-900">
+                          {supplier.displayName}
+                        </span>
+                        <span className="text-xs text-zinc-500">
+                          {supplier.taxId ?? "Sin CUIT"}
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : isSupplierMatchesLoading ? (
+                  <div className="px-3 py-2 text-xs text-zinc-500">
+                    Buscando...
+                  </div>
                 ) : (
                   <div className="px-3 py-2 text-xs text-zinc-500">
-                    No hay proveedores cargados.
+                    Sin resultados.
                   </div>
                 )}
               </motion.div>

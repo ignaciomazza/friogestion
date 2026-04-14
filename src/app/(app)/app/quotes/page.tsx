@@ -34,26 +34,7 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [customers, products, quotes, priceLists, usdRate] =
-    await Promise.all([
-      prisma.customer.findMany({
-        where: { organizationId: membership.organizationId, systemKey: null },
-        orderBy: { createdAt: "desc" },
-        take: 120,
-      }),
-      prisma.product.findMany({
-        where: { organizationId: membership.organizationId },
-        include: {
-          priceItems: {
-            select: {
-              priceListId: true,
-              price: true,
-            },
-          },
-        },
-        orderBy: { createdAt: "desc" },
-        take: 120,
-      }),
+  const [quotes, priceLists, usdRate] = await Promise.all([
       prisma.quote.findMany({
         where: { organizationId: membership.organizationId },
         include: { customer: true, sale: true, priceList: true },
@@ -72,37 +53,12 @@ export default async function QuotesPage() {
         },
         orderBy: { asOf: "desc" },
       }),
-    ]);
+  ]);
 
   return (
-    <QuotesClient
-      initialCustomers={customers.map((customer) => ({
-        id: customer.id,
-        displayName: customer.displayName,
-        legalName: customer.legalName,
-        taxId: customer.taxId,
-        email: customer.email,
-        phone: customer.phone,
-        address: customer.address,
-        type: customer.type,
-        systemKey: customer.systemKey,
-        defaultPriceListId: customer.defaultPriceListId,
-      }))}
-      initialProducts={products.map((product) => ({
-        id: product.id,
-        name: product.name,
-        sku: product.sku,
-        brand: product.brand,
-        model: product.model,
-        unit: product.unit,
-        cost: product.cost?.toString() ?? null,
-        costUsd: product.costUsd?.toString() ?? null,
-        price: product.price?.toString() ?? null,
-        prices: product.priceItems.map((priceItem) => ({
-          priceListId: priceItem.priceListId,
-          price: priceItem.price.toString(),
-        })),
-      }))}
+      <QuotesClient
+      initialCustomers={[]}
+      initialProducts={[]}
       initialQuotes={quotes.map((quote) => ({
         id: quote.id,
         customerName: quote.customer.displayName,

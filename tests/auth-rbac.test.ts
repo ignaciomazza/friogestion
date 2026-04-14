@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   canAccessCashReconciliation,
+  canAccessDashboard,
   canCancelSupplierPayments,
   canManageAdjustments,
   canWrite,
@@ -23,4 +24,8 @@ test("admin-only permissions stay restricted", () => {
   assert.equal(canManageAdjustments("SALES"), false);
   assert.equal(canCancelSupplierPayments("CASHIER"), false);
   assert.equal(canAccessCashReconciliation("VIEWER"), false);
+  assert.equal(canAccessDashboard("OWNER"), true);
+  assert.equal(canAccessDashboard("ADMIN"), true);
+  assert.equal(canAccessDashboard("SALES"), false);
+  assert.equal(canAccessDashboard("DEVELOPER"), false);
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BuildingOffice2Icon,
@@ -26,8 +26,15 @@ type SupplierRow = {
   arcaVerificationMessage?: string | null;
 };
 
-const normalizeQuery = (value: string) => value.trim().toLowerCase();
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
+const PAGE_SIZE = 100;
+
+type SuppliersResponse = {
+  items: SupplierRow[];
+  total: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
 
 const ARCA_STATUS_LABELS: Record<string, string> = {
   MATCH: "Verificado",
@@ -49,10 +56,16 @@ const ARCA_STATUS_STYLES: Record<string, string> = {
 
 export default function SuppliersPage() {
   const [items, setItems] = useState<SupplierRow[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [supplierQuery, setSupplierQuery] = useState("");
+  const [debouncedSupplierQuery, setDebouncedSupplierQuery] = useState("");
   const [sortOrder, setSortOrder] = useState("az");
+  const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [form, setForm] = useState({
     displayName: "",
     legalName: "",
@@ -76,17 +89,68 @@ export default function SuppliersPage() {
   const [isEditLookupLoading, setIsEditLookupLoading] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
 
-  const loadSuppliers = async () => {
-    const res = await fetch("/api/suppliers", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as SupplierRow[];
-      setItems(data);
-    }
-  };
+  const loadSuppliers = useCallback(
+    async ({
+      offset,
+      append,
+    }: {
+      offset: number;
+      append: boolean;
+    }) => {
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingList(true);
+      }
+
+      const params = new URLSearchParams();
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
+      params.set("sort", sortOrder);
+      if (debouncedSupplierQuery.trim()) {
+        params.set("q", debouncedSupplierQuery.trim());
+      }
+
+      try {
+        const res = await fetch(`/api/suppliers?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as SuppliersResponse;
+        setItems((previous) =>
+          append ? [...previous, ...data.items] : data.items,
+        );
+        setTotalItems(data.total);
+        setNextOffset(data.nextOffset);
+        setHasMore(data.hasMore);
+      } finally {
+        setIsLoadingList(false);
+        setIsLoadingMore(false);
+      }
+    },
+    [debouncedSupplierQuery, sortOrder],
+  );
 
   useEffect(() => {
-    loadSuppliers().catch(() => undefined);
-  }, []);
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSupplierQuery(supplierQuery);
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [supplierQuery]);
+
+  useEffect(() => {
+    loadSuppliers({ offset: 0, append: false }).catch(() => undefined);
+  }, [loadSuppliers]);
+
+  const reloadFromStart = async () => {
+    await loadSuppliers({ offset: 0, append: false });
+  };
+
+  const handleLoadMore = async () => {
+    if (nextOffset === null || isLoadingMore) return;
+    await loadSuppliers({ offset: nextOffset, append: true });
+  };
 
   const handleLookupByTaxId = async (target: "new" | "edit") => {
     const source = target === "new" ? form.taxId : editForm.taxId;
@@ -161,7 +225,7 @@ export default function SuppliersPage() {
         return;
       }
       setStatus(`ARCA: ${data.status} - ${data.message}`);
-      await loadSuppliers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo verificar");
     } finally {
@@ -202,7 +266,7 @@ export default function SuppliersPage() {
         address: "",
       });
       setStatus("Proveedor creado");
-      await loadSuppliers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo crear");
     } finally {
@@ -262,7 +326,7 @@ export default function SuppliersPage() {
 
       setStatus("Proveedor actualizado");
       handleEditCancel();
-      await loadSuppliers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo actualizar");
     } finally {
@@ -282,7 +346,7 @@ export default function SuppliersPage() {
         return;
       }
       setStatus("Proveedor eliminado");
-      await loadSuppliers();
+      await reloadFromStart();
     } catch {
       setStatus("No se pudo eliminar");
     } finally {
@@ -290,35 +354,10 @@ export default function SuppliersPage() {
     }
   };
 
-  const totalSuppliers = items.length;
+  const totalSuppliers = totalItems;
   const suppliersWithEmail = items.filter((item) => item.email).length;
   const suppliersWithPhone = items.filter((item) => item.phone).length;
   const suppliersWithTaxId = items.filter((item) => item.taxId).length;
-
-  const filteredItems = useMemo(() => {
-    const query = normalizeQuery(supplierQuery);
-    const filtered = items.filter((item) => {
-      if (query) {
-        const haystack = normalizeQuery(
-          `${item.displayName} ${item.taxId ?? ""} ${item.email ?? ""} ${
-            item.phone ?? ""
-          }`
-        );
-        if (!haystack.includes(query)) return false;
-      }
-      return true;
-    });
-
-    filtered.sort((a, b) => {
-      const aName = a.displayName.toLowerCase();
-      const bName = b.displayName.toLowerCase();
-      if (aName === bName) return 0;
-      const order = aName > bName ? 1 : -1;
-      return sortOrder === "za" ? -order : order;
-    });
-
-    return filtered;
-  }, [items, sortOrder, supplierQuery]);
 
   return (
     <div className="space-y-8">
@@ -495,7 +534,7 @@ export default function SuppliersPage() {
               Filtros de proveedores
             </h3>
             <p className="text-xs text-zinc-500">
-              {filteredItems.length} de {items.length} proveedores
+              {items.length} de {totalItems} proveedores
             </p>
           </div>
           <button
@@ -541,7 +580,7 @@ export default function SuppliersPage() {
           </h3>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-zinc-500">
-              {filteredItems.length} resultados
+              {items.length} de {totalItems}
             </span>
             <select
               className="input cursor-pointer text-xs"
@@ -567,8 +606,8 @@ export default function SuppliersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredItems.length ? (
-                filteredItems.map((item) => (
+              {items.length ? (
+                items.map((item) => (
                   <Fragment key={item.id}>
                     <tr className="border-t border-zinc-200/60 transition-colors hover:bg-white/60">
                       <td className="py-3 pr-4 text-zinc-900">
@@ -769,13 +808,27 @@ export default function SuppliersPage() {
               ) : (
                 <tr>
                   <td className="py-3 text-sm text-zinc-500" colSpan={6}>
-                    Sin proveedores por ahora.
+                    {isLoadingList
+                      ? "Cargando proveedores..."
+                      : "Sin proveedores por ahora."}
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
         </div>
+        {hasMore ? (
+          <div className="pt-3">
+            <button
+              type="button"
+              className="btn btn-sky text-xs w-full sm:w-auto"
+              onClick={() => handleLoadMore().catch(() => undefined)}
+              disabled={isLoadingList || isLoadingMore}
+            >
+              {isLoadingMore ? "Cargando..." : "Cargar mas"}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

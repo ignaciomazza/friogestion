@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon, PlusIcon } from "@/components/icons";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
@@ -72,6 +72,13 @@ type DeliveryNoteRow = {
   observations: string | null;
 };
 
+type CatalogResponse<T> = {
+  items: T[];
+  total: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
+
 const parseDateInput = (value: string) => {
   if (!value) return null;
   const [year, month, day] = value.split("-").map(Number);
@@ -94,6 +101,7 @@ const formatDateInput = (value: Date) => {
 
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
 const CONSUMER_FINAL_IDENTIFICATION_THRESHOLD = 10_000_000;
+const AUTOCOMPLETE_LIMIT = 8;
 
 export default function QuotesClient({
   initialCustomers,
@@ -104,7 +112,13 @@ export default function QuotesClient({
 }: QuotesClientProps) {
   const [customers, setCustomers] =
     useState<CustomerOption[]>(initialCustomers);
-  const [products] = useState<ProductOption[]>(initialProducts);
+  const [products, setProducts] = useState<ProductOption[]>(initialProducts);
+  const [customerMatches, setCustomerMatches] = useState<CustomerOption[]>([]);
+  const [productMatchesByQuery, setProductMatchesByQuery] = useState<
+    Record<string, ProductOption[]>
+  >({});
+  const [isCustomerMatchesLoading, setIsCustomerMatchesLoading] = useState(false);
+  const [isProductMatchesLoading, setIsProductMatchesLoading] = useState(false);
   const [priceLists] = useState<PriceListOption[]>(initialPriceLists);
   const [quotes, setQuotes] = useState<QuoteRow[]>(initialQuotes);
   const [selectedPriceListId, setSelectedPriceListId] = useState(
@@ -171,6 +185,26 @@ export default function QuotesClient({
     quoteId: "",
     observations: "",
   });
+  const quoteFormRef = useRef<HTMLDivElement | null>(null);
+  const customerMatchesCacheRef = useRef<Map<string, CustomerOption[]>>(
+    new Map(),
+  );
+  const productMatchesCacheRef = useRef<Map<string, ProductOption[]>>(
+    new Map(),
+  );
+
+  const bringQuoteFormIntoView = () => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      const container = quoteFormRef.current;
+      if (!container) return;
+      container.scrollIntoView({ behavior: "smooth", block: "start" });
+      const firstField = container.querySelector<
+        HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+      >("input, select, textarea");
+      firstField?.focus();
+    });
+  };
 
   const productMap = useMemo(
     () => new Map(products.map((product) => [product.id, product])),
@@ -209,12 +243,26 @@ export default function QuotesClient({
     selectedCustomer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON
   );
 
-  const loadCustomers = async () => {
-    const res = await fetch("/api/customers", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as CustomerOption[];
-      setCustomers(data);
-    }
+  const upsertCustomers = (nextCustomers: CustomerOption[]) => {
+    if (!nextCustomers.length) return;
+    setCustomers((previous) => {
+      const byId = new Map(previous.map((customer) => [customer.id, customer]));
+      for (const customer of nextCustomers) {
+        byId.set(customer.id, customer);
+      }
+      return Array.from(byId.values());
+    });
+  };
+
+  const upsertProducts = (nextProducts: ProductOption[]) => {
+    if (!nextProducts.length) return;
+    setProducts((previous) => {
+      const byId = new Map(previous.map((product) => [product.id, product]));
+      for (const product of nextProducts) {
+        byId.set(product.id, product);
+      }
+      return Array.from(byId.values());
+    });
   };
 
   const loadQuotes = async () => {
@@ -236,6 +284,88 @@ export default function QuotesClient({
   useEffect(() => {
     loadDeliveryNotes().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!isCustomerOpen || isConsumerFinalAnonymous || isResolvingConsumerFinal) {
+      return;
+    }
+    const query = normalizeQuery(customerSearch);
+    const timeoutId = window.setTimeout(async () => {
+      if (customerMatchesCacheRef.current.has(query)) {
+        setCustomerMatches(customerMatchesCacheRef.current.get(query) ?? []);
+        return;
+      }
+
+      setIsCustomerMatchesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", String(AUTOCOMPLETE_LIMIT));
+        params.set("offset", "0");
+        params.set("sort", "az");
+        if (query) {
+          params.set("q", query);
+        }
+        const res = await fetch(`/api/customers?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as CatalogResponse<CustomerOption>;
+        customerMatchesCacheRef.current.set(query, data.items);
+        setCustomerMatches(data.items);
+        upsertCustomers(data.items);
+      } finally {
+        setIsCustomerMatchesLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [
+    customerSearch,
+    isConsumerFinalAnonymous,
+    isCustomerOpen,
+    isResolvingConsumerFinal,
+  ]);
+
+  useEffect(() => {
+    if (openProductIndex === null) return;
+    const query = normalizeQuery(items[openProductIndex]?.productSearch ?? "");
+    const timeoutId = window.setTimeout(async () => {
+      if (productMatchesCacheRef.current.has(query)) {
+        const cached = productMatchesCacheRef.current.get(query) ?? [];
+        setProductMatchesByQuery((previous) =>
+          previous[query] ? previous : { ...previous, [query]: cached },
+        );
+        return;
+      }
+
+      setIsProductMatchesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", String(AUTOCOMPLETE_LIMIT));
+        params.set("offset", "0");
+        params.set("sort", "az");
+        params.set("includePrices", "1");
+        if (query) {
+          params.set("q", query);
+        }
+        const res = await fetch(`/api/products?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as CatalogResponse<ProductOption>;
+        productMatchesCacheRef.current.set(query, data.items);
+        setProductMatchesByQuery((previous) => ({
+          ...previous,
+          [query]: data.items,
+        }));
+        upsertProducts(data.items);
+      } finally {
+        setIsProductMatchesLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [items, openProductIndex]);
 
   const resolvePreferredPriceListId = (customer: CustomerOption | null) => {
     if (customer?.defaultPriceListId) {
@@ -309,6 +439,7 @@ export default function QuotesClient({
   };
 
   const handleSelectCustomer = (customer: CustomerOption) => {
+    upsertCustomers([customer]);
     const isAnonymousConsumerFinal =
       customer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
     setCustomerId(customer.id);
@@ -361,6 +492,7 @@ export default function QuotesClient({
   };
 
   const handleSelectProduct = (index: number, product: ProductOption) => {
+    upsertProducts([product]);
     const suggestedPrice = resolveSuggestedProductPrice({
       prices: product.prices ?? [],
       productCost: product.cost,
@@ -519,32 +651,9 @@ export default function QuotesClient({
     return filtered;
   }, [dateFrom, dateTo, expiryFilter, quoteQuery, quotes, sortOrder]);
 
-  const customerMatches = (() => {
-    const query = normalizeQuery(customerSearch);
-    const list = query
-      ? customers.filter((customer) =>
-          `${customer.displayName} ${customer.taxId ?? ""} ${
-            customer.email ?? ""
-          }`
-            .toLowerCase()
-            .includes(query),
-        )
-      : customers;
-    return list.slice(0, 8);
-  })();
-
   const getProductMatches = (query: string) => {
     const normalized = normalizeQuery(query);
-    const list = normalized
-      ? products.filter((product) =>
-          `${product.name} ${product.sku ?? ""} ${product.brand ?? ""} ${
-            product.model ?? ""
-          }`
-            .toLowerCase()
-            .includes(normalized),
-        )
-      : products;
-    return list.slice(0, 8);
+    return productMatchesByQuery[normalized] ?? [];
   };
 
   const deliveryQuoteMatches = (() => {
@@ -824,6 +933,8 @@ export default function QuotesClient({
         return;
       }
       const detail = (await res.json()) as QuoteDetail;
+      upsertCustomers([detail.customer]);
+      upsertProducts(detail.items.map((item) => item.product));
       const isAnonymousConsumerFinal =
         detail.customer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
       setEditingId(detail.id);
@@ -849,6 +960,8 @@ export default function QuotesClient({
           taxRate: item.taxRate ?? "21",
         })),
       );
+      setQuoteView("new");
+      bringQuoteFormIntoView();
     } catch {
       setTableStatus("No se pudo cargar");
     } finally {
@@ -1059,12 +1172,36 @@ export default function QuotesClient({
           address: customerForm.address || undefined,
         }),
       });
+      const data = (await res.json()) as
+        | CustomerOption
+        | { error?: string };
       if (!res.ok) {
-        const data = await res.json();
-        setCustomerStatus(data?.error ?? "No se pudo crear");
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : null;
+        setCustomerStatus(errorMessage ?? "No se pudo crear");
         return;
       }
-      setCustomerStatus("Cliente creado");
+
+      const createdCustomer = data as CustomerOption;
+      upsertCustomers([createdCustomer]);
+      setCustomerId(createdCustomer.id);
+      setCustomerSearch(formatCustomerLabel(createdCustomer));
+      setSelectedPriceListId(resolvePreferredPriceListId(createdCustomer));
+      const isAnonymousConsumerFinal =
+        createdCustomer.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
+      setIsConsumerFinalAnonymous(isAnonymousConsumerFinal);
+      setConsumerFinalCustomer(isAnonymousConsumerFinal ? createdCustomer : null);
+      setIsCustomerOpen(false);
+      setCustomerActiveIndex(0);
+      setShowCustomerForm(false);
+      customerMatchesCacheRef.current.clear();
+      setCustomerMatches([createdCustomer]);
+      setCustomerStatus("Cliente creado y seleccionado.");
       setCustomerForm({
         displayName: "",
         defaultPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
@@ -1073,7 +1210,6 @@ export default function QuotesClient({
         taxId: "",
         address: "",
       });
-      await loadCustomers();
     } catch {
       setCustomerStatus("No se pudo crear");
     } finally {
@@ -1189,65 +1325,78 @@ export default function QuotesClient({
             isSubmitting={isCreatingCustomer}
             isLookupLoading={isCustomerLookupLoading}
             show={showCustomerForm}
+            autoFocusName={showCustomerForm}
             onToggle={() => setShowCustomerForm((prev) => !prev)}
             onFormChange={handleCustomerFieldChange}
             onLookupByTaxId={handleLookupCustomerByTaxId}
             onSubmit={handleSubmitCustomer}
           />
 
-          <NewQuoteForm
-            customerSearch={customerSearch}
-            customerId={customerId}
-            isConsumerFinalAnonymous={isConsumerFinalAnonymous}
-            isResolvingConsumerFinal={isResolvingConsumerFinal}
-            showConsumerFinalThresholdWarning={consumerFinalThresholdReached}
-            consumerFinalThresholdLabel={consumerFinalThresholdLabel}
-            priceLists={priceLists}
-            selectedPriceListId={selectedPriceListId}
-            selectedPriceListName={selectedPriceList?.name ?? null}
-            customerPriceListName={customerDefaultPriceList?.name ?? null}
-            showPriceListMismatchWarning={isPriceListMismatch}
-            onSelectedPriceListChange={handleSelectedPriceListChange}
-            isCustomerOpen={isCustomerOpen}
-            customerMatches={customerMatches}
-            customerActiveIndex={customerActiveIndex}
-            hasCustomers={customers.length > 0}
-            onConsumerFinalToggle={handleConsumerFinalToggle}
-            onCustomerSearchChange={handleCustomerSearchChange}
-            onCustomerFocus={handleCustomerFocus}
-            onCustomerBlur={handleCustomerBlur}
-            onCustomerKeyDown={handleCustomerKeyDown}
-            onCustomerSelect={handleSelectCustomer}
-            validUntil={validUntil}
-            onValidUntilChange={setValidUntil}
-            extraType={extraType}
-            extraValue={extraValue}
-            onExtraTypeChange={setExtraType}
-            onExtraValueChange={setExtraValue}
-            items={items}
-            productMap={productMap}
-            hasProducts={products.length > 0}
-            openProductIndex={openProductIndex}
-            productActiveIndex={productActiveIndex}
-            getProductMatches={getProductMatches}
-            onItemChange={handleItemChange}
-            onOpenProductIndexChange={setOpenProductIndex}
-            onProductActiveIndexChange={setProductActiveIndex}
-            onProductKeyDown={handleProductKeyDown}
-            onSelectProduct={handleSelectProduct}
-            onRemoveItem={handleRemoveItem}
-            onAddItem={handleAddItem}
-            subtotal={subtotal}
-            taxesTotal={taxesTotal}
-            extraAmount={extraAmount}
-            total={total}
-            isSubmitting={isSubmitting}
-            status={status}
-            onSubmit={handleSubmit}
-            onSubmitAndCreateSale={handleSubmitAndCreateSale}
-            showSubmitAndCreateSale={!editingId}
-            submitLabel={editingId ? "Guardar cambios" : "Guardar presupuesto"}
-          />
+          <div ref={quoteFormRef}>
+            <NewQuoteForm
+              customerSearch={customerSearch}
+              customerId={customerId}
+              isConsumerFinalAnonymous={isConsumerFinalAnonymous}
+              isResolvingConsumerFinal={isResolvingConsumerFinal}
+              showConsumerFinalThresholdWarning={consumerFinalThresholdReached}
+              consumerFinalThresholdLabel={consumerFinalThresholdLabel}
+              priceLists={priceLists}
+              selectedPriceListId={selectedPriceListId}
+              showPriceListMismatchWarning={isPriceListMismatch}
+              onSelectedPriceListChange={handleSelectedPriceListChange}
+              isCustomerOpen={isCustomerOpen}
+              customerMatches={customerMatches}
+              customerActiveIndex={customerActiveIndex}
+              hasCustomers={
+                customerSearch.trim()
+                  ? true
+                  : customerMatches.length > 0 ||
+                    customers.length > 0 ||
+                    isCustomerMatchesLoading
+              }
+              isCustomerMatchesLoading={isCustomerMatchesLoading}
+              onConsumerFinalToggle={handleConsumerFinalToggle}
+              onCustomerSearchChange={handleCustomerSearchChange}
+              onCustomerFocus={handleCustomerFocus}
+              onCustomerBlur={handleCustomerBlur}
+              onCustomerKeyDown={handleCustomerKeyDown}
+              onCustomerSelect={handleSelectCustomer}
+              validUntil={validUntil}
+              onValidUntilChange={setValidUntil}
+              extraType={extraType}
+              extraValue={extraValue}
+              onExtraTypeChange={setExtraType}
+              onExtraValueChange={setExtraValue}
+              items={items}
+              productMap={productMap}
+              hasProducts={
+                products.length > 0 ||
+                Object.keys(productMatchesByQuery).length > 0 ||
+                isProductMatchesLoading
+              }
+              openProductIndex={openProductIndex}
+              productActiveIndex={productActiveIndex}
+              getProductMatches={getProductMatches}
+              isProductMatchesLoading={isProductMatchesLoading}
+              onItemChange={handleItemChange}
+              onOpenProductIndexChange={setOpenProductIndex}
+              onProductActiveIndexChange={setProductActiveIndex}
+              onProductKeyDown={handleProductKeyDown}
+              onSelectProduct={handleSelectProduct}
+              onRemoveItem={handleRemoveItem}
+              onAddItem={handleAddItem}
+              subtotal={subtotal}
+              taxesTotal={taxesTotal}
+              extraAmount={extraAmount}
+              total={total}
+              isSubmitting={isSubmitting}
+              status={status}
+              onSubmit={handleSubmit}
+              onSubmitAndCreateSale={handleSubmitAndCreateSale}
+              showSubmitAndCreateSale={!editingId}
+              submitLabel={editingId ? "Guardar cambios" : "Guardar presupuesto"}
+            />
+          </div>
         </div>
       ) : null}
 

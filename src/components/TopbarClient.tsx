@@ -25,7 +25,7 @@ import {
   XMarkIcon,
 } from "@/components/icons";
 import { cn } from "@/lib/cn";
-import { ADMIN_ROLES } from "@/lib/auth/rbac";
+import { ADMIN_ROLES, DASHBOARD_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
 import { STOCK_PAGE_ENABLED } from "@/lib/features";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
@@ -75,7 +75,14 @@ const notifySidebar = () => {
 const NAV_SECTIONS: NavSection[] = [
   {
     title: "General",
-    items: [{ href: "/app", label: "Inicio", Icon: HomeIcon }],
+    items: [
+      {
+        href: "/app",
+        label: "Inicio",
+        Icon: HomeIcon,
+        roles: [...DASHBOARD_ROLES],
+      },
+    ],
   },
   {
     title: "Comercial",

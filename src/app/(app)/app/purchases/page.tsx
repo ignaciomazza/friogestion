@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent, KeyboardEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import { canCancelSupplierPayments } from "@/lib/auth/rbac";
@@ -104,8 +104,15 @@ function MiniToggle({
 }
 
 export default function PurchasesPage() {
-  const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
-  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [supplierMatches, setSupplierMatches] = useState<SupplierOption[]>([]);
+  const [productMatchesByQuery, setProductMatchesByQuery] = useState<
+    Record<string, ProductOption[]>
+  >({});
+  const [selectedProductsById, setSelectedProductsById] = useState<
+    Record<string, ProductOption>
+  >({});
+  const [isSupplierMatchesLoading, setIsSupplierMatchesLoading] = useState(false);
+  const [isProductMatchesLoading, setIsProductMatchesLoading] = useState(false);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>(
     [],
@@ -168,55 +175,24 @@ export default function PurchasesPage() {
   const [revalidatingPurchaseId, setRevalidatingPurchaseId] = useState<
     string | null
   >(null);
-
-  const productMap = useMemo(
-    () => new Map(products.map((product) => [product.id, product])),
-    [products],
+  const supplierMatchesCacheRef = useRef<Map<string, SupplierOption[]>>(
+    new Map(),
+  );
+  const productMatchesCacheRef = useRef<Map<string, ProductOption[]>>(
+    new Map(),
   );
 
-  const supplierMatches = useMemo(() => {
-    const normalized = normalizeQuery(supplierSearch);
-    const list = normalized
-      ? suppliers.filter((supplier) =>
-          `${supplier.displayName} ${supplier.taxId ?? ""}`
-            .toLowerCase()
-            .includes(normalized),
-        )
-      : suppliers;
-    return list.slice(0, 8);
-  }, [supplierSearch, suppliers]);
+  const productMap = useMemo(
+    () => new Map(Object.values(selectedProductsById).map((product) => [product.id, product])),
+    [selectedProductsById],
+  );
 
   const getProductMatches = (value: string) => {
     const normalized = normalizeQuery(value);
-    const list = normalized
-      ? products.filter((product) =>
-          `${product.name} ${product.sku ?? ""} ${product.brand ?? ""} ${
-            product.model ?? ""
-          }`
-            .toLowerCase()
-            .includes(normalized),
-        )
-      : products;
-    return list.slice(0, 8);
+    return productMatchesByQuery[normalized] ?? [];
   };
 
   const arcaEnabled = hasInvoice;
-
-  const loadSuppliers = async () => {
-    const res = await fetch("/api/suppliers", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as SupplierOption[];
-      setSuppliers(data);
-    }
-  };
-
-  const loadProducts = async () => {
-    const res = await fetch("/api/products", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as ProductOption[];
-      setProducts(data);
-    }
-  };
 
   const loadPurchases = async () => {
     const res = await fetch("/api/purchases", { cache: "no-store" });
@@ -268,11 +244,87 @@ export default function PurchasesPage() {
   };
 
   useEffect(() => {
-    loadSuppliers().catch(() => undefined);
-    loadProducts().catch(() => undefined);
     loadPurchases().catch(() => undefined);
     loadFinance().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!isSupplierOpen) return;
+    const normalized = normalizeQuery(supplierSearch);
+    const timeoutId = window.setTimeout(async () => {
+      if (supplierMatchesCacheRef.current.has(normalized)) {
+        setSupplierMatches(supplierMatchesCacheRef.current.get(normalized) ?? []);
+        return;
+      }
+
+      setIsSupplierMatchesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", "8");
+        params.set("offset", "0");
+        params.set("sort", "az");
+        if (normalized) {
+          params.set("q", normalized);
+        }
+        const res = await fetch(`/api/suppliers?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          items: SupplierOption[];
+        };
+        supplierMatchesCacheRef.current.set(normalized, data.items);
+        setSupplierMatches(data.items);
+      } finally {
+        setIsSupplierMatchesLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [isSupplierOpen, supplierSearch]);
+
+  useEffect(() => {
+    if (openProductIndex === null) return;
+    const normalized = normalizeQuery(
+      stockAdjustments[openProductIndex]?.productSearch ?? "",
+    );
+    const timeoutId = window.setTimeout(async () => {
+      if (productMatchesCacheRef.current.has(normalized)) {
+        const cached = productMatchesCacheRef.current.get(normalized) ?? [];
+        setProductMatchesByQuery((previous) =>
+          previous[normalized] ? previous : { ...previous, [normalized]: cached },
+        );
+        return;
+      }
+
+      setIsProductMatchesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("limit", "8");
+        params.set("offset", "0");
+        params.set("sort", "az");
+        if (normalized) {
+          params.set("q", normalized);
+        }
+        const res = await fetch(`/api/products?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          items: ProductOption[];
+        };
+        productMatchesCacheRef.current.set(normalized, data.items);
+        setProductMatchesByQuery((previous) => ({
+          ...previous,
+          [normalized]: data.items,
+        }));
+      } finally {
+        setIsProductMatchesLoading(false);
+      }
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [openProductIndex, stockAdjustments]);
 
   const handleSupplierSearchChange = (value: string) => {
     setSupplierSearch(value);
@@ -352,6 +404,10 @@ export default function PurchasesPage() {
       };
       return next;
     });
+    setSelectedProductsById((previous) => ({
+      ...previous,
+      [product.id]: product,
+    }));
     setOpenProductIndex(null);
   };
 
@@ -784,47 +840,45 @@ export default function PurchasesPage() {
                         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
                         className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
                       >
-                        {suppliers.length ? (
-                          supplierMatches.length ? (
-                            supplierMatches.map((supplier, matchIndex) => {
-                              const isSelected = supplier.id === supplierId;
-                              const isActive = matchIndex === supplierActiveIndex;
-                              return (
-                                <button
-                                  key={supplier.id}
-                                  type="button"
-                                  id={`purchase-supplier-option-${supplier.id}`}
-                                  role="option"
-                                  aria-selected={isSelected}
-                                  className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
-                                    isActive
+                        {supplierMatches.length ? (
+                          supplierMatches.map((supplier, matchIndex) => {
+                            const isSelected = supplier.id === supplierId;
+                            const isActive = matchIndex === supplierActiveIndex;
+                            return (
+                              <button
+                                key={supplier.id}
+                                type="button"
+                                id={`purchase-supplier-option-${supplier.id}`}
+                                role="option"
+                                aria-selected={isSelected}
+                                className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                                  isActive
+                                    ? "bg-white text-sky-900"
+                                    : isSelected
                                       ? "bg-white text-sky-900"
-                                      : isSelected
-                                        ? "bg-white text-sky-900"
-                                        : "hover:bg-white/70"
-                                  }`}
-                                  onMouseDown={(event) => {
-                                    event.preventDefault();
-                                    handleSupplierSelect(supplier);
-                                  }}
-                                >
-                                  <span className="font-medium text-zinc-900">
-                                    {supplier.displayName}
-                                  </span>
-                                  <span className="text-xs text-zinc-500">
-                                    {supplier.taxId ?? "Sin CUIT"}
-                                  </span>
-                                </button>
-                              );
-                            })
-                          ) : (
-                            <div className="px-3 py-2 text-xs text-zinc-500">
-                              Sin resultados.
-                            </div>
-                          )
+                                      : "hover:bg-white/70"
+                                }`}
+                                onMouseDown={(event) => {
+                                  event.preventDefault();
+                                  handleSupplierSelect(supplier);
+                                }}
+                              >
+                                <span className="font-medium text-zinc-900">
+                                  {supplier.displayName}
+                                </span>
+                                <span className="text-xs text-zinc-500">
+                                  {supplier.taxId ?? "Sin CUIT"}
+                                </span>
+                              </button>
+                            );
+                          })
+                        ) : isSupplierMatchesLoading ? (
+                          <div className="px-3 py-2 text-xs text-zinc-500">
+                            Buscando...
+                          </div>
                         ) : (
                           <div className="px-3 py-2 text-xs text-zinc-500">
-                            No hay proveedores cargados.
+                            Sin resultados.
                           </div>
                         )}
                       </motion.div>
@@ -1187,48 +1241,45 @@ export default function PurchasesPage() {
                                 }}
                                 className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
                               >
-                                {products.length ? (
-                                  matches.length ? (
-                                    matches.map((product, matchIndex) => {
-                                      const isSelected = product.id === item.productId;
-                                      const isActive =
-                                        matchIndex === productActiveIndex;
-                                      return (
-                                        <button
-                                          key={product.id}
-                                          type="button"
-                                          id={`stock-adjustment-option-${index}-${product.id}`}
-                                          role="option"
-                                          aria-selected={isSelected}
-                                          className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
-                                            isActive
+                                {matches.length ? (
+                                  matches.map((product, matchIndex) => {
+                                    const isSelected = product.id === item.productId;
+                                    const isActive = matchIndex === productActiveIndex;
+                                    return (
+                                      <button
+                                        key={product.id}
+                                        type="button"
+                                        id={`stock-adjustment-option-${index}-${product.id}`}
+                                        role="option"
+                                        aria-selected={isSelected}
+                                        className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                                          isActive
+                                            ? "bg-white text-sky-900"
+                                            : isSelected
                                               ? "bg-white text-sky-900"
-                                              : isSelected
-                                                ? "bg-white text-sky-900"
-                                                : "hover:bg-white/70"
-                                          }`}
-                                          onMouseDown={(event) => {
-                                            event.preventDefault();
-                                            handleSelectStockProduct(index, product);
-                                          }}
-                                        >
-                                          <span className="font-medium text-zinc-900">
-                                            {formatProductLabel(product)}
-                                          </span>
-                                          <span className="text-xs text-zinc-500">
-                                            {formatUnit(product.unit ?? null)}
-                                          </span>
-                                        </button>
-                                      );
-                                    })
-                                  ) : (
-                                    <div className="px-3 py-2 text-xs text-zinc-500">
-                                      Sin resultados.
-                                    </div>
-                                  )
+                                              : "hover:bg-white/70"
+                                        }`}
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          handleSelectStockProduct(index, product);
+                                        }}
+                                      >
+                                        <span className="font-medium text-zinc-900">
+                                          {formatProductLabel(product)}
+                                        </span>
+                                        <span className="text-xs text-zinc-500">
+                                          {formatUnit(product.unit ?? null)}
+                                        </span>
+                                      </button>
+                                    );
+                                  })
+                                ) : isProductMatchesLoading ? (
+                                  <div className="px-3 py-2 text-xs text-zinc-500">
+                                    Buscando...
+                                  </div>
                                 ) : (
                                   <div className="px-3 py-2 text-xs text-zinc-500">
-                                    No hay productos.
+                                    Sin resultados.
                                   </div>
                                 )}
                               </motion.div>
@@ -1281,7 +1332,6 @@ export default function PurchasesPage() {
       ) : (
         <>
           <SupplierPaymentsPanel
-            suppliers={suppliers}
             purchases={purchases}
             paymentMethods={paymentMethods}
             accounts={accounts}

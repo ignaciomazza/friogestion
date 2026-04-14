@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -178,6 +178,7 @@ export default function StockPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
+  const [productFormStatus, setProductFormStatus] = useState<string | null>(null);
   const [productForm, setProductForm] = useState({
     name: "",
     sku: "",
@@ -185,6 +186,8 @@ export default function StockPage() {
     model: "",
     unit: "",
   });
+  const productNameInputRef = useRef<HTMLInputElement | null>(null);
+  const productSearchInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!STOCK_PAGE_ENABLED) {
@@ -258,6 +261,11 @@ export default function StockPage() {
     if (!STOCK_PAGE_ENABLED) return;
     loadStock().catch(() => undefined);
   }, [loadStock]);
+
+  useEffect(() => {
+    if (!showProductForm) return;
+    productNameInputRef.current?.focus();
+  }, [showProductForm]);
 
   const filteredProducts = useMemo(() => {
     const normalized = normalizeQuery(query);
@@ -459,7 +467,7 @@ export default function StockPage() {
     if (!productForm.name.trim()) return;
 
     setIsCreatingProduct(true);
-    setStatus(null);
+    setProductFormStatus(null);
     try {
       const res = await fetch("/api/products", {
         method: "POST",
@@ -474,7 +482,7 @@ export default function StockPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setStatus(data?.error ?? "No se pudo crear producto");
+        setProductFormStatus(data?.error ?? "No se pudo crear producto");
         return;
       }
       setProductForm({
@@ -486,9 +494,12 @@ export default function StockPage() {
       });
       setShowProductForm(false);
       await loadStock();
-      setStatus("Producto creado");
+      setProductFormStatus("Producto creado.");
+      window.setTimeout(() => {
+        productSearchInputRef.current?.focus();
+      }, 0);
     } catch {
-      setStatus("No se pudo crear producto");
+      setProductFormStatus("No se pudo crear producto");
     } finally {
       setIsCreatingProduct(false);
     }
@@ -556,7 +567,10 @@ export default function StockPage() {
         <button
           type="button"
           className="w-full rounded-2xl bg-white/30 px-3 py-2 text-left transition hover:bg-white/50"
-          onClick={() => setShowProductForm((prev) => !prev)}
+          onClick={() => {
+            setProductFormStatus(null);
+            setShowProductForm((prev) => !prev);
+          }}
           aria-expanded={showProductForm}
           aria-controls="stock-product-form"
         >
@@ -596,6 +610,7 @@ export default function StockPage() {
               >
                 <input
                   className="input"
+                  ref={productNameInputRef}
                   value={productForm.name}
                   onChange={(event) =>
                     setProductForm((previous) => ({
@@ -668,6 +683,19 @@ export default function StockPage() {
             </motion.div>
           ) : null}
         </AnimatePresence>
+        {productFormStatus ? (
+          <p
+            className={`mt-2 text-xs ${
+              productFormStatus.toLowerCase().includes("no se pudo")
+                ? "text-rose-700"
+                : "text-emerald-700"
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {productFormStatus}
+          </p>
+        ) : null}
       </div>
 
       <div className="card space-y-4 p-6">
@@ -677,6 +705,7 @@ export default function StockPage() {
           </h2>
           <input
             className="input w-full max-w-sm"
+            ref={productSearchInputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Buscar por nombre o codigo"

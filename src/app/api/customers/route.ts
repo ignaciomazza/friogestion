@@ -53,17 +53,71 @@ const ensureDefaultPriceList = async (
   return priceList;
 };
 
+const DEFAULT_PAGE_SIZE = 100;
+const MAX_PAGE_SIZE = 200;
+
+const parseLimit = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PAGE_SIZE;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 1) return 1;
+  if (normalized > MAX_PAGE_SIZE) return MAX_PAGE_SIZE;
+  return normalized;
+};
+
+const parseOffset = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) return 0;
+  return normalized;
+};
+
+const parseSort = (value: string | null) => (value === "za" ? "za" : "az");
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const customers = await prisma.customer.findMany({
-      where: { organizationId, systemKey: null },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
+    const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const limit = parseLimit(req.nextUrl.searchParams.get("limit"));
+    const offset = parseOffset(req.nextUrl.searchParams.get("offset"));
+    const sort = parseSort(req.nextUrl.searchParams.get("sort"));
 
-    return NextResponse.json(
-      customers.map((customer) => ({
+    const where: Prisma.CustomerWhereInput = {
+      organizationId,
+      systemKey: null,
+      ...(query
+        ? {
+            OR: [
+              { displayName: { contains: query, mode: "insensitive" } },
+              { taxId: { contains: query, mode: "insensitive" } },
+              { email: { contains: query, mode: "insensitive" } },
+              { phone: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const orderBy: Prisma.CustomerOrderByWithRelationInput[] = [
+      { displayName: sort === "za" ? "desc" : "asc" },
+      { createdAt: "desc" },
+    ];
+
+    const [total, customers] = await prisma.$transaction([
+      prisma.customer.count({ where }),
+      prisma.customer.findMany({
+        where,
+        orderBy,
+        skip: offset,
+        take: limit,
+      }),
+    ]);
+
+    const nextOffset = offset + customers.length;
+    const hasMore = nextOffset < total;
+
+    return NextResponse.json({
+      items: customers.map((customer) => ({
         id: customer.id,
         displayName: customer.displayName,
         legalName: customer.legalName,
@@ -74,8 +128,11 @@ export async function GET(req: NextRequest) {
         type: customer.type,
         systemKey: customer.systemKey,
         defaultPriceListId: customer.defaultPriceListId,
-      }))
-    );
+      })),
+      total,
+      nextOffset: hasMore ? nextOffset : null,
+      hasMore,
+    });
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

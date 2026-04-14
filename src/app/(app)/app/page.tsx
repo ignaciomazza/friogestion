@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
 import { prisma } from "@/lib/prisma";
 import { DashboardView } from "@/components/dashboard/DashboardView";
+import { canAccessDashboard } from "@/lib/auth/rbac";
 
 type SaleRow = {
   id: string;
@@ -55,6 +56,24 @@ export default async function AppDashboardPage() {
 
   if (!payload.activeOrgId) {
     redirect("/login");
+  }
+
+  const membership = await prisma.membership.findUnique({
+    where: {
+      organizationId_userId: {
+        organizationId: payload.activeOrgId,
+        userId: payload.userId,
+      },
+    },
+    select: { role: true },
+  });
+
+  if (!membership) {
+    redirect("/login");
+  }
+
+  if (!canAccessDashboard(membership.role)) {
+    redirect("/app/quotes");
   }
 
   const now = new Date();

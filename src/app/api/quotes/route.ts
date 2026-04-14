@@ -652,7 +652,12 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    await prisma.quote.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      await tx.quoteItem.deleteMany({
+        where: { quoteId: id },
+      });
+      await tx.quote.delete({ where: { id } });
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (isAuthError(error)) {
