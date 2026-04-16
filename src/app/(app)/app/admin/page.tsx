@@ -8,7 +8,7 @@ import { getAfipClient } from "@/lib/afip/client";
 import { describeArcaJob } from "@/lib/arca/errors";
 import { hasValidSecretsKey } from "@/lib/crypto/secrets";
 
-const ALLOWED_ROLES = ["OWNER", "ADMIN"];
+const ALLOWED_ROLES = ["OWNER", "ADMIN", "SALES"];
 
 export default async function AdminPage() {
   const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
@@ -50,6 +50,41 @@ export default async function AdminPage() {
 
   if (!ALLOWED_ROLES.includes(activeMembership.role)) {
     redirect("/app");
+  }
+
+  const activeOrg = {
+    id: activeMembership.organization.id,
+    name: activeMembership.organization.name,
+    adjustStockOnQuoteConfirm:
+      activeMembership.organization.adjustStockOnQuoteConfirm,
+  };
+
+  if (activeMembership.role === "SALES") {
+    return (
+      <AdminClient
+        role={activeMembership.role}
+        activeOrg={activeOrg}
+        users={[]}
+        afipStatus={{
+          ok: false,
+          env: "prod",
+          missing: [],
+          missingOptional: [],
+          clientReady: false,
+          helpLinks: [],
+        }}
+        arcaStatus={{
+          secretsKeyValid: false,
+          config: null,
+          job: null,
+          jobInfo: null,
+        }}
+        paymentMethods={[]}
+        accounts={[]}
+        currencies={[]}
+        priceLists={[]}
+      />
+    );
   }
 
   const [
@@ -111,12 +146,8 @@ export default async function AdminPage() {
 
   return (
     <AdminClient
-      activeOrg={{
-        id: activeMembership.organization.id,
-        name: activeMembership.organization.name,
-        adjustStockOnQuoteConfirm:
-          activeMembership.organization.adjustStockOnQuoteConfirm,
-      }}
+      role={activeMembership.role}
+      activeOrg={activeOrg}
       users={orgUsers.map((membership) => ({
         id: membership.user.id,
         email: membership.user.email,

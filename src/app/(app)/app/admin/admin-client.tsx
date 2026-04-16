@@ -91,6 +91,7 @@ type PriceListRow = {
 };
 
 type AdminClientProps = {
+  role: string;
   activeOrg: {
     id: string;
     name: string;
@@ -310,6 +311,7 @@ const Spinner = ({ className = "h-3.5 w-3.5" }: { className?: string }) => (
 );
 
 export default function AdminClient({
+  role,
   activeOrg,
   users,
   afipStatus,
@@ -320,6 +322,7 @@ export default function AdminClient({
   priceLists: initialPriceLists,
 }: AdminClientProps) {
   const router = useRouter();
+  const isSalesLimitedAdmin = role === "SALES";
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
   const [userRole, setUserRole] = useState<
@@ -700,9 +703,10 @@ export default function AdminClient({
   }, []);
 
   useEffect(() => {
+    if (isSalesLimitedAdmin) return;
     if (arcaConfigStatus !== "CONNECTED") return;
     loadAfipSalesPoints().catch(() => undefined);
-  }, [arcaConfigStatus, loadAfipSalesPoints]);
+  }, [arcaConfigStatus, isSalesLimitedAdmin, loadAfipSalesPoints]);
 
   useEffect(() => {
     const services = normalizeArcaServices(
@@ -1299,26 +1303,36 @@ export default function AdminClient({
           Administracion y configuracion
         </h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Configura moneda, integra ARCA y gestiona usuarios.
+          {isSalesLimitedAdmin
+            ? "Acceso limitado: solo cotizacion y moneda."
+            : "Configura moneda, integra ARCA y gestiona usuarios."}
         </p>
-        <div className="mt-4 flex items-center gap-2">
-          <div className="flex justify-end items-center gap-2 flex-auto">
-            <span
-              className={`text-xs ${
-                afipReady ? "text-zinc-500" : "text-rose-600"
-              }`}
-            >
-              {afipHint}
-            </span>
-            <div className="pill glass  text-xs">
-              ARCA {afipReady ? "Listo" : "Pendiente"}
-              {afipStatus.clientReady ? " · cliente listo" : ""}
-            </div>
+        <div className="mt-4">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {isSalesLimitedAdmin ? (
+              <div className="pill border border-emerald-200 bg-white text-xs text-emerald-800">
+                Perfil vendedor: acceso solo a cotizacion y moneda
+              </div>
+            ) : (
+              <>
+                <span
+                  className={`text-xs ${
+                    afipReady ? "text-zinc-500" : "text-rose-600"
+                  }`}
+                >
+                  {afipHint}
+                </span>
+                <div className="pill glass  text-xs">
+                  ARCA {afipReady ? "Listo" : "Pendiente"}
+                  {afipStatus.clientReady ? " · cliente listo" : ""}
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
 
-      {STOCK_ENABLED ? (
+      {!isSalesLimitedAdmin && STOCK_ENABLED ? (
         <Section
           title="Ventas y stock"
           subtitle="Define si las ventas confirmadas desde presupuestos descuentan stock."
@@ -1570,11 +1584,13 @@ export default function AdminClient({
         </div>
       </Section>
 
-      <Section
-        title="Listas de precios"
-        subtitle="Administra listas para clientes y productos."
-        icon={<DocumentTextIcon className="size-4" />}
-      >
+      {!isSalesLimitedAdmin ? (
+        <>
+          <Section
+            title="Listas de precios"
+            subtitle="Administra listas para clientes y productos."
+            icon={<DocumentTextIcon className="size-4" />}
+          >
         <div className="space-y-5">
           <form
             onSubmit={handleCreatePriceList}
@@ -1818,13 +1834,13 @@ export default function AdminClient({
             </table>
           </div>
         </div>
-      </Section>
+          </Section>
 
-      <Section
-        title="Metodos de pago"
-        subtitle="Configura medios de cobro y su estado."
-        icon={<CurrencyDollarIcon className="size-4" />}
-      >
+          <Section
+            title="Metodos de pago"
+            subtitle="Configura medios de cobro y su estado."
+            icon={<CurrencyDollarIcon className="size-4" />}
+          >
         <div className="space-y-5">
           <form onSubmit={handleCreateMethod} className="flex flex-wrap items-end gap-3">
             <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-56">
@@ -1967,13 +1983,13 @@ export default function AdminClient({
             )}
           </div>
         </div>
-      </Section>
+          </Section>
 
-      <Section
-        title="Cuentas"
-        subtitle="Cuentas operativas en ARS/USD."
-        icon={<BuildingOffice2Icon className="size-4" />}
-      >
+          <Section
+            title="Cuentas"
+            subtitle="Cuentas operativas en ARS/USD."
+            icon={<BuildingOffice2Icon className="size-4" />}
+          >
         <div className="space-y-5">
           <form onSubmit={handleCreateAccount} className="flex flex-wrap items-end gap-3">
             <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-56">
@@ -2124,13 +2140,13 @@ export default function AdminClient({
             )}
           </div>
         </div>
-      </Section>
+          </Section>
 
-      <Section
-        title="ARCA (prueba basica)"
-        subtitle="Consulta el ultimo comprobante emitido (wsfe)."
-        icon={<DocumentTextIcon className="size-4" />}
-      >
+          <Section
+            title="ARCA (prueba basica)"
+            subtitle="Consulta el ultimo comprobante emitido (wsfe)."
+            icon={<DocumentTextIcon className="size-4" />}
+          >
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -2429,13 +2445,13 @@ export default function AdminClient({
             </div>
           </Details>
         </div>
-      </Section>
+          </Section>
 
-      <Section
-        title="Conexion ARCA"
-        subtitle="Conecta ARCA paso a paso para generar certificado y autorizar servicios."
-        icon={<Cog6ToothIcon className="size-4" />}
-      >
+          <Section
+            title="Conexion ARCA"
+            subtitle="Conecta ARCA paso a paso para generar certificado y autorizar servicios."
+            icon={<Cog6ToothIcon className="size-4" />}
+          >
         <div className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -2901,14 +2917,14 @@ export default function AdminClient({
             </Details>
           ) : null}
         </div>
-      </Section>
+          </Section>
 
-      <div className="space-y-6">
-        <Section
-          title="Usuarios"
-          subtitle={`Gestiona roles para ${activeOrg.name}`}
-          icon={<UsersIcon className="size-4" />}
-        >
+          <div className="space-y-6">
+            <Section
+              title="Usuarios"
+              subtitle={`Gestiona roles para ${activeOrg.name}`}
+              icon={<UsersIcon className="size-4" />}
+            >
           <div className="space-y-4">
             <ul className="space-y-2 text-sm">
               {users.map((user) => (
@@ -3086,8 +3102,10 @@ export default function AdminClient({
               </div>
             </Details>
           </div>
-        </Section>
-      </div>
+            </Section>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

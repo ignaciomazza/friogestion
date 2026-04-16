@@ -738,7 +738,7 @@ export function NewQuoteForm({
               onClick={onSubmitAndCreateSale}
             >
               <PlusIcon className="size-4" />
-              {isSubmitting ? "Guardando..." : "Guardar y crear venta"}
+              {isSubmitting ? "Guardando..." : "Guardar y confirmar venta"}
             </button>
           ) : null}
         </div>

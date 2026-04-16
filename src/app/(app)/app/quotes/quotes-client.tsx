@@ -4,6 +4,12 @@ import type { FormEvent, KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon, PlusIcon } from "@/components/icons";
+import { MoneyInput } from "@/components/inputs/MoneyInput";
+import { formatCurrencyARS } from "@/lib/format";
+import {
+  normalizeDecimalInput,
+  normalizeIntegerInput,
+} from "@/lib/input-format";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   inferFiscalTaxProfileFromArcaTaxStatus,
@@ -78,6 +84,47 @@ type DeliveryNoteRow = {
   observations: string | null;
 };
 
+type PaymentMethodOption = {
+  id: string;
+  name: string;
+  type: string;
+  requiresAccount: boolean;
+  requiresApproval: boolean;
+  requiresDoubleCheck: boolean;
+  isActive?: boolean;
+};
+
+type AccountOption = {
+  id: string;
+  name: string;
+  type: string;
+  currencyCode: string;
+  isActive?: boolean;
+};
+
+type CurrencyOption = {
+  id: string;
+  code: string;
+  name: string;
+  symbol?: string | null;
+  isDefault: boolean;
+};
+
+type ConfirmSaleOrigin = "table" | "form" | null;
+type ConfirmReceiptLine = {
+  paymentMethodId: string;
+  accountId: string;
+  currencyCode: string;
+  amount: string;
+  fxRateUsed: string;
+};
+type ConfirmReceiptMode = "SIMPLE" | "INSTALLMENTS";
+type ConfirmInstallmentsForm = {
+  installmentsCount: string;
+  interestRate: string;
+  startDate: string;
+};
+
 type CatalogResponse<T> = {
   items: T[];
   total: number;
@@ -108,6 +155,79 @@ const formatDateInput = (value: Date) => {
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
 const CONSUMER_FINAL_IDENTIFICATION_THRESHOLD = 10_000_000;
 const AUTOCOMPLETE_LIMIT = 8;
+const round2 = (value: number) => Math.round(value * 100) / 100;
+const toSafeNumber = (value: string | number | null | undefined) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+const buildConfirmReceiptLine = ({
+  paymentMethods,
+  currencies,
+  latestUsdRate,
+  amount,
+}: {
+  paymentMethods: PaymentMethodOption[];
+  currencies: CurrencyOption[];
+  latestUsdRate: string | null;
+  amount: string;
+}): ConfirmReceiptLine => {
+  const defaultMethod = paymentMethods[0]?.id ?? "";
+  const defaultCurrency =
+    currencies.find((currency) => currency.isDefault)?.code ??
+    currencies[0]?.code ??
+    "ARS";
+
+  return {
+    paymentMethodId: defaultMethod,
+    accountId: "",
+    currencyCode: defaultCurrency,
+    amount,
+    fxRateUsed: defaultCurrency === "ARS" ? "" : latestUsdRate ?? "",
+  };
+};
+
+const buildConfirmInstallmentsForm = (): ConfirmInstallmentsForm => ({
+  installmentsCount: "3",
+  interestRate: "",
+  startDate: new Date().toISOString().slice(0, 10),
+});
+
+function MiniToggle({
+  checked,
+  label,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="inline-flex items-center gap-2 text-xs text-zinc-700">
+      <button
+        type="button"
+        role="switch"
+        aria-label={label}
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+          checked
+            ? "border-sky-300 bg-sky-100"
+            : "border-zinc-300 bg-zinc-100"
+        } ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+      >
+        <span
+          className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+            checked ? "translate-x-4" : "translate-x-0.5"
+          }`}
+        />
+      </button>
+      <span>{label}</span>
+    </div>
+  );
+}
 
 export default function QuotesClient({
   initialCustomers,
@@ -188,6 +308,37 @@ export default function QuotesClient({
   const [deliveryQuoteSearch, setDeliveryQuoteSearch] = useState("");
   const [isDeliveryQuoteOpen, setIsDeliveryQuoteOpen] = useState(false);
   const [deliveryQuoteActiveIndex, setDeliveryQuoteActiveIndex] = useState(0);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>(
+    [],
+  );
+  const [accounts, setAccounts] = useState<AccountOption[]>([]);
+  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
+  const [latestUsdRateForReceipts, setLatestUsdRateForReceipts] = useState<
+    string | null
+  >(initialLatestUsdRate);
+  const [isFinanceCatalogLoading, setIsFinanceCatalogLoading] = useState(false);
+  const [quoteToConfirmSale, setQuoteToConfirmSale] = useState<QuoteDetail | null>(
+    null,
+  );
+  const [confirmSaleOrigin, setConfirmSaleOrigin] =
+    useState<ConfirmSaleOrigin>(null);
+  const [confirmSaleStatus, setConfirmSaleStatus] = useState<string | null>(null);
+  const [isConfirmingSale, setIsConfirmingSale] = useState(false);
+  const [registerReceiptOnConfirm, setRegisterReceiptOnConfirm] =
+    useState(true);
+  const [confirmReceiptMode, setConfirmReceiptMode] =
+    useState<ConfirmReceiptMode>("SIMPLE");
+  const [confirmReceiptLine, setConfirmReceiptLine] = useState<ConfirmReceiptLine>(
+    () =>
+      buildConfirmReceiptLine({
+        paymentMethods: [],
+        currencies: [],
+        latestUsdRate: initialLatestUsdRate,
+        amount: "",
+      }),
+  );
+  const [confirmInstallmentsForm, setConfirmInstallmentsForm] =
+    useState<ConfirmInstallmentsForm>(buildConfirmInstallmentsForm);
   const [deliveryForm, setDeliveryForm] = useState({
     quoteId: "",
     observations: "",
@@ -199,6 +350,8 @@ export default function QuotesClient({
   const productMatchesCacheRef = useRef<Map<string, ProductOption[]>>(
     new Map(),
   );
+  const financeCatalogLoadedRef = useRef(false);
+  const financeCatalogPromiseRef = useRef<Promise<boolean> | null>(null);
 
   const bringQuoteFormIntoView = () => {
     if (typeof window === "undefined") return;
@@ -249,6 +402,23 @@ export default function QuotesClient({
   const isSelectedAnonymousConsumerFinal = Boolean(
     selectedCustomer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON
   );
+  const paymentMethodById = useMemo(
+    () => new Map(paymentMethods.map((method) => [method.id, method])),
+    [paymentMethods],
+  );
+  const selectedConfirmPaymentMethod = paymentMethodById.get(
+    confirmReceiptLine.paymentMethodId,
+  );
+  const confirmReceiptRequiresAccount = Boolean(
+    selectedConfirmPaymentMethod?.requiresAccount,
+  );
+  const confirmCurrencyAccounts = useMemo(
+    () =>
+      accounts.filter(
+        (account) => account.currencyCode === confirmReceiptLine.currencyCode,
+      ),
+    [accounts, confirmReceiptLine.currencyCode],
+  );
 
   const upsertCustomers = (nextCustomers: CustomerOption[]) => {
     if (!nextCustomers.length) return;
@@ -288,9 +458,378 @@ export default function QuotesClient({
     }
   };
 
+  const setOriginStatus = (origin: ConfirmSaleOrigin, message: string) => {
+    if (origin === "form") {
+      setStatus(message);
+      return;
+    }
+    setTableStatus(message);
+  };
+
+  const closeConfirmSaleModal = (force = false) => {
+    if (!force && isConfirmingSale) return;
+    setQuoteToConfirmSale(null);
+    setConfirmSaleOrigin(null);
+    setConfirmSaleStatus(null);
+    setRegisterReceiptOnConfirm(true);
+    setConfirmReceiptMode("SIMPLE");
+    setConfirmInstallmentsForm(buildConfirmInstallmentsForm());
+    setConfirmReceiptLine(
+      buildConfirmReceiptLine({
+        paymentMethods,
+        currencies,
+        latestUsdRate: latestUsdRateForReceipts,
+        amount: "",
+      }),
+    );
+    setBusyId(null);
+  };
+
+  const ensureFinanceCatalogs = async () => {
+    if (financeCatalogLoadedRef.current) return true;
+    if (financeCatalogPromiseRef.current) return financeCatalogPromiseRef.current;
+
+    const loadPromise = (async () => {
+      setIsFinanceCatalogLoading(true);
+      try {
+        const [methodsRes, accountsRes, currenciesRes, ratesRes] =
+          await Promise.all([
+            fetch("/api/payment-methods", { cache: "no-store" }),
+            fetch("/api/accounts", { cache: "no-store" }),
+            fetch("/api/currencies", { cache: "no-store" }),
+            fetch("/api/config/exchange-rate", { cache: "no-store" }),
+          ]);
+
+        if (methodsRes.ok) {
+          const methods = (await methodsRes.json()) as PaymentMethodOption[];
+          setPaymentMethods(methods.filter((method) => method.isActive !== false));
+        }
+        if (accountsRes.ok) {
+          const accountsData = (await accountsRes.json()) as AccountOption[];
+          setAccounts(accountsData.filter((account) => account.isActive !== false));
+        }
+        if (currenciesRes.ok) {
+          const currenciesData = (await currenciesRes.json()) as CurrencyOption[];
+          setCurrencies(currenciesData);
+        }
+        if (ratesRes.ok) {
+          const rates = (await ratesRes.json()) as Array<{
+            baseCode: string;
+            quoteCode: string;
+            rate: string | number;
+          }>;
+          const usdRate = rates.find(
+            (rate) => rate.baseCode === "USD" && rate.quoteCode === "ARS",
+          );
+          if (usdRate) {
+            setLatestUsdRateForReceipts(usdRate.rate.toString());
+          }
+        }
+
+        financeCatalogLoadedRef.current =
+          methodsRes.ok && accountsRes.ok && currenciesRes.ok;
+        return financeCatalogLoadedRef.current;
+      } catch {
+        return false;
+      } finally {
+        setIsFinanceCatalogLoading(false);
+        financeCatalogPromiseRef.current = null;
+      }
+    })();
+
+    financeCatalogPromiseRef.current = loadPromise;
+    return loadPromise;
+  };
+
+  const fetchQuoteDetail = async (quoteId: string) => {
+    const res = await fetch(`/api/quotes?id=${quoteId}`, {
+      cache: "no-store",
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      return {
+        detail: null,
+        error:
+          typeof data?.error === "string" ? data.error : "No se pudo cargar",
+      };
+    }
+
+    return { detail: data as QuoteDetail, error: null };
+  };
+
+  const openConfirmSaleModal = async ({
+    quoteId,
+    origin,
+  }: {
+    quoteId: string;
+    origin: Exclude<ConfirmSaleOrigin, null>;
+  }) => {
+    if (origin === "form") {
+      setStatus(null);
+    } else {
+      setTableStatus(null);
+    }
+
+    setConfirmSaleStatus(null);
+    setRegisterReceiptOnConfirm(true);
+    setConfirmReceiptMode("SIMPLE");
+    setConfirmInstallmentsForm(buildConfirmInstallmentsForm());
+
+    const { detail, error } = await fetchQuoteDetail(quoteId);
+    if (!detail) {
+      setOriginStatus(origin, error ?? "No se pudo cargar");
+      return false;
+    }
+
+    upsertCustomers([detail.customer]);
+    upsertProducts(detail.items.map((item) => item.product));
+    setQuoteToConfirmSale(detail);
+    setConfirmSaleOrigin(origin);
+    void ensureFinanceCatalogs();
+    setConfirmReceiptLine(
+      buildConfirmReceiptLine({
+        paymentMethods,
+        currencies,
+        latestUsdRate: latestUsdRateForReceipts,
+        amount: toSafeNumber(detail.total).toFixed(2),
+      }),
+    );
+    return true;
+  };
+
+  const handleConfirmSaleFromModal = async () => {
+    if (!quoteToConfirmSale) return;
+
+    const paymentMethod = paymentMethodById.get(confirmReceiptLine.paymentMethodId);
+    const receiptAmount = toSafeNumber(confirmReceiptLine.amount);
+    const receiptFxRate = toSafeNumber(confirmReceiptLine.fxRateUsed);
+    const normalizedCurrencyCode = (
+      confirmReceiptLine.currencyCode || "ARS"
+    ).toUpperCase();
+    const installmentsCount = Number(confirmInstallmentsForm.installmentsCount || 0);
+    const interestRate = toSafeNumber(confirmInstallmentsForm.interestRate);
+    const shouldCreateReceipt =
+      registerReceiptOnConfirm &&
+      (confirmReceiptMode === "SIMPLE" || receiptAmount > 0);
+
+    if (registerReceiptOnConfirm) {
+      if (!paymentMethods.length || !currencies.length) {
+        setConfirmSaleStatus(
+          "No hay configuracion financiera suficiente para registrar cobro.",
+        );
+        return;
+      }
+      if (confirmReceiptMode === "SIMPLE" && receiptAmount <= 0) {
+        setConfirmSaleStatus("Ingresa un importe de cobro valido.");
+        return;
+      }
+      if (confirmReceiptMode === "INSTALLMENTS") {
+        if (!Number.isInteger(installmentsCount) || installmentsCount <= 0) {
+          setConfirmSaleStatus("Revisa la cantidad de cuotas.");
+          return;
+        }
+        if (!confirmInstallmentsForm.startDate) {
+          setConfirmSaleStatus("Completa la fecha de primera cuota.");
+          return;
+        }
+      }
+      if (receiptAmount < 0) {
+        setConfirmSaleStatus("El importe no puede ser negativo.");
+        return;
+      }
+      if (shouldCreateReceipt && !paymentMethod) {
+        setConfirmSaleStatus("Selecciona un metodo de cobro.");
+        return;
+      }
+      if (
+        shouldCreateReceipt &&
+        confirmReceiptRequiresAccount &&
+        !confirmReceiptLine.accountId
+      ) {
+        setConfirmSaleStatus("Selecciona una cuenta para el metodo elegido.");
+        return;
+      }
+      if (
+        shouldCreateReceipt &&
+        normalizedCurrencyCode !== "ARS" &&
+        receiptFxRate <= 0
+      ) {
+        setConfirmSaleStatus("Completa la cotizacion para la moneda elegida.");
+        return;
+      }
+    }
+
+    setConfirmSaleStatus(null);
+    setBusyId(quoteToConfirmSale.id);
+    setIsConfirmingSale(true);
+    try {
+      const res = await fetch("/api/quotes/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: quoteToConfirmSale.id,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setConfirmSaleStatus(
+          typeof data?.error === "string" ? data.error : "No se pudo confirmar",
+        );
+        return;
+      }
+
+      const saleId = typeof data?.id === "string" ? data.id : null;
+      if (!saleId) {
+        setConfirmSaleStatus("Venta creada sin identificador valido.");
+        return;
+      }
+
+      let financingSaved = false;
+      if (registerReceiptOnConfirm && confirmReceiptMode === "INSTALLMENTS") {
+        const principalFromAmount =
+          receiptAmount > 0
+            ? normalizedCurrencyCode === "ARS"
+              ? receiptAmount
+              : receiptAmount * receiptFxRate
+            : 0;
+        const principalAmount =
+          principalFromAmount > 0
+            ? principalFromAmount
+            : toSafeNumber(data?.total ?? quoteToConfirmSale.total);
+
+        if (principalAmount <= 0) {
+          setOriginStatus(
+            confirmSaleOrigin,
+            "Venta creada, pero no se pudo calcular principal para cuotas.",
+          );
+          closeConfirmSaleModal(true);
+          await Promise.all([loadQuotes(), loadDeliveryNotes()]);
+          return;
+        }
+
+        const planRes = await fetch("/api/installments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            saleId,
+            type: "CARD",
+            installmentsCount,
+            interestRate,
+            startDate: confirmInstallmentsForm.startDate,
+            frequency: "MONTHLY",
+            principalAmount,
+          }),
+        });
+        const planData = await planRes.json().catch(() => null);
+        if (!planRes.ok) {
+          setOriginStatus(
+            confirmSaleOrigin,
+            `Venta creada, pero no se pudo guardar cuotas: ${
+              typeof planData?.error === "string" ? planData.error : "error desconocido"
+            }`,
+          );
+          closeConfirmSaleModal(true);
+          await Promise.all([loadQuotes(), loadDeliveryNotes()]);
+          return;
+        }
+        financingSaved = true;
+      }
+
+      let receiptSaved = false;
+      if (shouldCreateReceipt) {
+        const receiptRes = await fetch("/api/receipts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            saleId,
+            lines: [
+              {
+                paymentMethodId: confirmReceiptLine.paymentMethodId,
+                accountId: confirmReceiptLine.accountId || undefined,
+                currencyCode: normalizedCurrencyCode,
+                amount: receiptAmount,
+                fxRateUsed:
+                  normalizedCurrencyCode === "ARS" ? undefined : receiptFxRate,
+              },
+            ],
+          }),
+        });
+        const receiptData = await receiptRes.json().catch(() => null);
+        if (!receiptRes.ok) {
+          setOriginStatus(
+            confirmSaleOrigin,
+            financingSaved
+              ? `Venta y plan de cuotas creados, pero no se pudo registrar el cobro: ${
+                  typeof receiptData?.error === "string"
+                    ? receiptData.error
+                    : "error desconocido"
+                }`
+              : `Venta creada, pero no se pudo registrar el cobro: ${
+                  typeof receiptData?.error === "string"
+                    ? receiptData.error
+                    : "error desconocido"
+                }`,
+          );
+          closeConfirmSaleModal(true);
+          await Promise.all([loadQuotes(), loadDeliveryNotes()]);
+          return;
+        }
+        receiptSaved = true;
+      }
+
+      await Promise.all([loadQuotes(), loadDeliveryNotes()]);
+
+      setOriginStatus(
+        confirmSaleOrigin,
+        !registerReceiptOnConfirm
+          ? "Venta creada"
+          : confirmReceiptMode === "INSTALLMENTS"
+            ? receiptSaved
+              ? "Venta creada, plan de cuotas y cobro registrados"
+              : "Venta creada y plan de cuotas registrado"
+            : "Venta creada y cobro registrado",
+      );
+      closeConfirmSaleModal(true);
+    } catch {
+      setConfirmSaleStatus("No se pudo confirmar");
+    } finally {
+      setIsConfirmingSale(false);
+      setBusyId(null);
+    }
+  };
+
   useEffect(() => {
     loadDeliveryNotes().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!quoteToConfirmSale) return;
+    if (!paymentMethods.length || !currencies.length) return;
+
+    setConfirmReceiptLine((previous) => {
+      const keepMethod = paymentMethods.some(
+        (method) => method.id === previous.paymentMethodId,
+      );
+      const keepCurrency = currencies.some(
+        (currency) => currency.code === previous.currencyCode,
+      );
+      if (keepMethod && keepCurrency) return previous;
+
+      const next = buildConfirmReceiptLine({
+        paymentMethods,
+        currencies,
+        latestUsdRate: latestUsdRateForReceipts,
+        amount:
+          previous.amount || toSafeNumber(quoteToConfirmSale.total).toFixed(2),
+      });
+      return next;
+    });
+  }, [
+    quoteToConfirmSale,
+    paymentMethods,
+    currencies,
+    latestUsdRateForReceipts,
+  ]);
 
   useEffect(() => {
     if (!isCustomerOpen || isConsumerFinalAnonymous || isResolvingConsumerFinal) {
@@ -867,7 +1406,7 @@ export default function QuotesClient({
       return;
     }
     if (mode === "saveAndCreateSale" && editingId) {
-      setStatus("Guardar y crear venta solo aplica para nuevos presupuestos");
+      setStatus("Guardar y confirmar venta solo aplica para nuevos presupuestos");
       return;
     }
     if (isPriceListMismatch) {
@@ -930,25 +1469,12 @@ export default function QuotesClient({
           return;
         }
 
-        const confirmRes = await fetch("/api/quotes/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: quoteId,
-          }),
-        });
-        const confirmData = await confirmRes.json();
-        if (!confirmRes.ok) {
-          const errorMessage =
-            confirmData?.error ?? "Presupuesto creado pero no se pudo crear la venta.";
-          setStatus(`Presupuesto creado pero no se pudo crear la venta: ${errorMessage}`);
-          resetForm();
-          await loadQuotes();
-          return;
-        }
-        setStatus("Presupuesto guardado y venta creada");
         resetForm();
-        await Promise.all([loadQuotes(), loadDeliveryNotes()]);
+        await loadQuotes();
+        await openConfirmSaleModal({
+          quoteId,
+          origin: "form",
+        });
         return;
       }
 
@@ -1041,28 +1567,15 @@ export default function QuotesClient({
   };
 
   const handleConfirmSale = async (quote: QuoteRow) => {
-    if (!window.confirm("Confirmar y crear venta?")) return;
     setTableStatus(null);
     setBusyId(quote.id);
     try {
-      const res = await fetch("/api/quotes/confirm", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: quote.id,
-        }),
+      await openConfirmSaleModal({
+        quoteId: quote.id,
+        origin: "table",
       });
-
-      if (!res.ok) {
-        const data = await res.json();
-        setTableStatus(data?.error ?? "No se pudo confirmar");
-        return;
-      }
-
-      setTableStatus("Venta creada");
-      await Promise.all([loadQuotes(), loadDeliveryNotes()]);
     } catch {
-      setTableStatus("No se pudo confirmar");
+      setTableStatus("No se pudo cargar la confirmacion");
     } finally {
       setBusyId(null);
     }
@@ -1351,6 +1864,23 @@ export default function QuotesClient({
     setDateFrom(formatDateInput(start));
     setDateTo(formatDateInput(end));
   };
+
+  const confirmPreviewItems = (quoteToConfirmSale?.items ?? []).map((item) => {
+    return {
+      id: `${item.productId}-${item.qty}-${item.unitPrice}`,
+      productName: item.product.name,
+    };
+  });
+
+  const confirmPreviewSubtotal = round2(toSafeNumber(quoteToConfirmSale?.subtotal));
+  const confirmPreviewIva = round2(toSafeNumber(quoteToConfirmSale?.taxes));
+  const confirmPreviewExtra = round2(toSafeNumber(quoteToConfirmSale?.extraAmount));
+  const confirmPreviewTotal = round2(
+    toSafeNumber(quoteToConfirmSale?.total) ||
+      confirmPreviewSubtotal + confirmPreviewIva + confirmPreviewExtra,
+  );
+  const confirmExtraLabel =
+    confirmPreviewExtra === 0 ? "Ajuste" : confirmPreviewExtra > 0 ? "Recargo" : "Descuento";
 
   return (
     <div className="space-y-8">
@@ -1903,6 +2433,314 @@ export default function QuotesClient({
           </div>
           {tableStatus ? <p className="text-xs text-zinc-500">{tableStatus}</p> : null}
         </>
+      ) : null}
+
+      {quoteToConfirmSale ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
+          <div className="card w-full max-w-3xl space-y-4 p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-zinc-900">
+                  Confirmar venta
+                </h3>
+              </div>
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={() => closeConfirmSaleModal()}
+                disabled={isConfirmingSale}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
+              <p className="text-sm font-semibold text-zinc-900">
+                {quoteToConfirmSale.customerName}
+              </p>
+              {confirmPreviewItems.length ? (
+                <div className="mt-2 space-y-1 text-xs text-zinc-700">
+                  {confirmPreviewItems.map((item) => (
+                    <p key={item.id}>{item.productName}</p>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="mt-3 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 text-xs text-zinc-700">
+                <p className="flex flex-wrap items-center gap-3">
+                  <span>
+                    Neto:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(confirmPreviewSubtotal)}
+                    </span>
+                  </span>
+                  <span>
+                    IVA:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(confirmPreviewIva)}
+                    </span>
+                  </span>
+                  <span>
+                    {confirmExtraLabel}:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(confirmPreviewExtra)}
+                    </span>
+                  </span>
+                  <span>
+                    Total:{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {formatCurrencyARS(confirmPreviewTotal)}
+                    </span>
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            <MiniToggle
+              checked={registerReceiptOnConfirm}
+              onChange={setRegisterReceiptOnConfirm}
+              disabled={isConfirmingSale}
+              label="Registrar cobro ahora"
+            />
+
+            {registerReceiptOnConfirm ? (
+              <div className="space-y-3 rounded-xl border border-dashed border-sky-200 bg-white p-3">
+                <div className="field-stack">
+                  <span className="input-label">Modo</span>
+                  <div className="segmented-toggle w-56">
+                    <span
+                      className={`segmented-toggle-indicator ${
+                        confirmReceiptMode === "INSTALLMENTS"
+                          ? "translate-x-full"
+                          : "translate-x-0"
+                      }`}
+                      aria-hidden
+                    />
+                    <button
+                      type="button"
+                      className={`segmented-toggle-item ${
+                        confirmReceiptMode === "SIMPLE"
+                          ? "segmented-toggle-item-active"
+                          : ""
+                      }`}
+                      onClick={() => setConfirmReceiptMode("SIMPLE")}
+                      aria-pressed={confirmReceiptMode === "SIMPLE"}
+                    >
+                      Simple
+                    </button>
+                    <button
+                      type="button"
+                      className={`segmented-toggle-item ${
+                        confirmReceiptMode === "INSTALLMENTS"
+                          ? "segmented-toggle-item-active"
+                          : ""
+                      }`}
+                      onClick={() => setConfirmReceiptMode("INSTALLMENTS")}
+                      aria-pressed={confirmReceiptMode === "INSTALLMENTS"}
+                    >
+                      Cuotas
+                    </button>
+                  </div>
+                </div>
+
+                {confirmReceiptMode === "INSTALLMENTS" ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="field-stack">
+                      <span className="input-label">Cuotas</span>
+                      <input
+                        className="input text-xs"
+                        inputMode="numeric"
+                        value={confirmInstallmentsForm.installmentsCount}
+                        onChange={(event) =>
+                          setConfirmInstallmentsForm((prev) => ({
+                            ...prev,
+                            installmentsCount: normalizeIntegerInput(event.target.value),
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="field-stack">
+                      <span className="input-label">Interes (%)</span>
+                      <input
+                        className="input text-xs"
+                        inputMode="decimal"
+                        value={confirmInstallmentsForm.interestRate}
+                        onChange={(event) =>
+                          setConfirmInstallmentsForm((prev) => ({
+                            ...prev,
+                            interestRate: normalizeDecimalInput(event.target.value, 2),
+                          }))
+                        }
+                        placeholder="0,00"
+                      />
+                    </label>
+                    <label className="field-stack">
+                      <span className="input-label">Primera cuota</span>
+                      <input
+                        type="date"
+                        className="input text-xs"
+                        value={confirmInstallmentsForm.startDate}
+                        onChange={(event) =>
+                          setConfirmInstallmentsForm((prev) => ({
+                            ...prev,
+                            startDate: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                ) : null}
+
+                {isFinanceCatalogLoading ? (
+                  <p className="text-xs text-zinc-500">
+                    Cargando metodos, cuentas y monedas...
+                  </p>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <label className="field-stack">
+                      <span className="input-label">Metodo</span>
+                      <select
+                        className="input text-xs"
+                        value={confirmReceiptLine.paymentMethodId}
+                        onChange={(event) => {
+                          const methodId = event.target.value;
+                          const method = paymentMethodById.get(methodId);
+                          setConfirmReceiptLine((prev) => ({
+                            ...prev,
+                            paymentMethodId: methodId,
+                            accountId: method?.requiresAccount ? prev.accountId : "",
+                          }));
+                        }}
+                      >
+                        <option value="">Seleccionar</option>
+                        {paymentMethods.map((method) => (
+                          <option key={method.id} value={method.id}>
+                            {method.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="field-stack">
+                      <span className="input-label">Moneda</span>
+                      <select
+                        className="input text-xs"
+                        value={confirmReceiptLine.currencyCode}
+                        onChange={(event) => {
+                          const currencyCode = event.target.value;
+                          setConfirmReceiptLine((prev) => ({
+                            ...prev,
+                            currencyCode,
+                            accountId: "",
+                            fxRateUsed:
+                              currencyCode === "ARS"
+                                ? ""
+                                : prev.fxRateUsed || latestUsdRateForReceipts || "",
+                          }));
+                        }}
+                      >
+                        {currencies.map((currency) => (
+                          <option key={currency.id} value={currency.code}>
+                            {currency.code}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {confirmReceiptRequiresAccount ? (
+                      <label className="field-stack">
+                        <span className="input-label">Cuenta</span>
+                        <select
+                          className="input text-xs"
+                          value={confirmReceiptLine.accountId}
+                          onChange={(event) =>
+                            setConfirmReceiptLine((prev) => ({
+                              ...prev,
+                              accountId: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Seleccionar</option>
+                          {confirmCurrencyAccounts.map((account) => (
+                            <option key={account.id} value={account.id}>
+                              {account.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+
+                    <label className="field-stack">
+                      <span className="input-label">Importe</span>
+                      <MoneyInput
+                        className="input text-xs"
+                        value={confirmReceiptLine.amount}
+                        onValueChange={(nextValue) =>
+                          setConfirmReceiptLine((prev) => ({
+                            ...prev,
+                            amount: nextValue,
+                          }))
+                        }
+                        placeholder="0,00"
+                        maxDecimals={2}
+                      />
+                    </label>
+
+                    {confirmReceiptLine.currencyCode !== "ARS" ? (
+                      <label className="field-stack">
+                        <span className="input-label">Cotizacion</span>
+                        <input
+                          className="input text-xs"
+                          inputMode="decimal"
+                          value={confirmReceiptLine.fxRateUsed}
+                          onChange={(event) =>
+                            setConfirmReceiptLine((prev) => ({
+                              ...prev,
+                              fxRateUsed: normalizeDecimalInput(
+                                event.target.value,
+                                6,
+                              ),
+                            }))
+                          }
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {confirmSaleStatus ? (
+              <p className="text-xs text-zinc-500">{confirmSaleStatus}</p>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={() => closeConfirmSaleModal()}
+                disabled={isConfirmingSale}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn btn-emerald text-xs"
+                onClick={handleConfirmSaleFromModal}
+                disabled={
+                  isConfirmingSale ||
+                  (registerReceiptOnConfirm && isFinanceCatalogLoading)
+                }
+              >
+                {isConfirmingSale
+                  ? "Confirmando..."
+                  : registerReceiptOnConfirm
+                    ? "Confirmar venta y cobro"
+                    : "Confirmar venta"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

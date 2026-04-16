@@ -51,6 +51,7 @@ type NavSection = {
 };
 
 const SIDEBAR_STORAGE_KEY = "friogestion-sidebar-collapsed";
+const ADMIN_ENTRY_ROLES = [...ADMIN_ROLES, "SALES"] as const;
 
 let cachedSidebarCollapsed = false;
 const sidebarListeners = new Set<() => void>();
@@ -137,7 +138,7 @@ const NAV_SECTIONS: NavSection[] = [
         href: "/app/admin",
         label: "Administracion",
         Icon: Cog6ToothIcon,
-        roles: [...ADMIN_ROLES],
+        roles: [...ADMIN_ENTRY_ROLES],
       },
       {
         href: "/app/developer",

@@ -110,10 +110,10 @@ export function SalesRecentTable({
 
   const handleDeleteSale = async (sale: SaleRow) => {
     if (sale.billingStatus === "BILLED") {
-      setTableStatus("Solo se pueden eliminar ventas no facturadas");
+      setTableStatus("Solo se pueden cancelar ventas no facturadas");
       return;
     }
-    if (!window.confirm("Seguro quiere eliminar esta Venta?")) return;
+    if (!window.confirm("Seguro quiere cancelar esta venta?")) return;
     setTableStatus(null);
     setDeletingSaleId(sale.id);
     try {
@@ -122,10 +122,10 @@ export function SalesRecentTable({
       });
       if (!res.ok) {
         const data = await res.json();
-        setTableStatus(data?.error ?? "No se pudo eliminar");
+        setTableStatus(data?.error ?? "No se pudo cancelar");
         return;
       }
-      setTableStatus("Venta eliminada");
+      setTableStatus("Venta cancelada");
       setExpandedId((prev) => (prev === sale.id ? null : prev));
       setReceiptsBySale((prev) => {
         const next = { ...prev };
@@ -139,7 +139,7 @@ export function SalesRecentTable({
       });
       await onReceiptsUpdated();
     } catch {
-      setTableStatus("No se pudo eliminar");
+      setTableStatus("No se pudo cancelar");
     } finally {
       setDeletingSaleId(null);
     }
@@ -314,8 +314,8 @@ export function SalesRecentTable({
                               }
                             >
                               {deletingSaleId === sale.id
-                                ? "Eliminando..."
-                                : "Eliminar"}
+                                ? "Cancelando..."
+                                : "Cancelar"}
                             </button>
                           ) : null}
                         </div>

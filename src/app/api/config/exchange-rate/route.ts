@@ -7,6 +7,8 @@ import { ADMIN_ROLES } from "@/lib/auth/rbac";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
+const EXCHANGE_RATE_WRITE_ROLES = [...ADMIN_ROLES, "SALES"] as const;
+
 const rateSchema = z.object({
   baseCode: z.string().min(1),
   quoteCode: z.string().min(1),
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...ADMIN_ROLES]);
+    const { membership } = await requireRole(req, [...EXCHANGE_RATE_WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = rateSchema.parse(await req.json());
 

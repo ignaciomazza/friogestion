@@ -479,6 +479,7 @@ export async function DELETE(req: NextRequest) {
       where: { id, organizationId },
       select: {
         id: true,
+        quoteId: true,
         billingStatus: true,
         fiscalInvoice: { select: { id: true } },
         receipts: { select: { id: true }, take: 1 },
@@ -538,6 +539,16 @@ export async function DELETE(req: NextRequest) {
       await tx.currentAccountEntry.deleteMany({
         where: { organizationId, saleId: id, sourceType: "SALE" },
       });
+      if (existing.quoteId) {
+        await tx.quote.updateMany({
+          where: {
+            id: existing.quoteId,
+            organizationId,
+            status: "ACCEPTED",
+          },
+          data: { status: "SENT" },
+        });
+      }
       await tx.saleItem.deleteMany({
         where: { saleId: id },
       });
@@ -564,6 +575,6 @@ export async function DELETE(req: NextRequest) {
       );
     }
     logServerError("api.sales.delete", error);
-    return NextResponse.json({ error: "No se pudo eliminar" }, { status: 400 });
+    return NextResponse.json({ error: "No se pudo cancelar" }, { status: 400 });
   }
 }
