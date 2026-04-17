@@ -137,6 +137,17 @@
     @apply overflow-x-auto overflow-y-visible;
   }
 
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
   .reveal-motion {
     @apply overflow-hidden px-1 pb-1 -mx-1 -mb-1;
   }

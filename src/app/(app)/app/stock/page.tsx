@@ -1,7 +1,7 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -51,7 +51,23 @@ type RowDraft = {
   warning: string | null;
 };
 
-const normalizeQuery = (value: string) => value.trim().toLowerCase();
+type StockListResponse = {
+  products: StockProduct[];
+  priceLists: PriceListOption[];
+  total: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+};
+
+type LoadStockOptions = {
+  offset?: number;
+  append?: boolean;
+  limit?: number;
+  searchQuery?: string;
+};
+
+const DEFAULT_STOCK_PAGE_SIZE = 60;
+const SEARCH_DEBOUNCE_MS = 260;
 
 const normalizeMoney = (value: string) => normalizeDecimalInput(value, 2);
 const normalizePercent = (value: string) => normalizeDecimalInput(value, 4);
@@ -168,14 +184,32 @@ const derivePercentagesFromPrices = (
   return derived;
 };
 
+const mergeProductsById = (current: StockProduct[], incoming: StockProduct[]) => {
+  if (!current.length) return incoming;
+  if (!incoming.length) return current;
+  const seen = new Set(current.map((product) => product.id));
+  const merged = [...current];
+  for (const product of incoming) {
+    if (seen.has(product.id)) continue;
+    seen.add(product.id);
+    merged.push(product);
+  }
+  return merged;
+};
+
 export default function StockPage() {
   const router = useRouter();
   const [products, setProducts] = useState<StockProduct[]>([]);
   const [priceLists, setPriceLists] = useState<PriceListOption[]>([]);
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [status, setStatus] = useState<string | null>(null);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [hasMoreProducts, setHasMoreProducts] = useState(false);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [productFormStatus, setProductFormStatus] = useState<string | null>(null);
@@ -188,6 +222,7 @@ export default function StockPage() {
   });
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const stockRequestIdRef = useRef(0);
 
   useEffect(() => {
     if (!STOCK_PAGE_ENABLED) {
@@ -230,55 +265,98 @@ export default function StockPage() {
     return nextRows;
   };
 
-  const loadStock = useCallback(async () => {
-    if (!STOCK_PAGE_ENABLED) return;
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/stock", { cache: "no-store" });
-      if (!res.ok) {
-        setStatus("No se pudo cargar stock");
-        return;
+  const loadStock = useCallback(
+    async ({
+      offset = 0,
+      append = false,
+      limit = DEFAULT_STOCK_PAGE_SIZE,
+      searchQuery = "",
+    }: LoadStockOptions = {}) => {
+      if (!STOCK_PAGE_ENABLED) return;
+
+      const requestId = ++stockRequestIdRef.current;
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingMore(false);
+        setIsLoading(true);
       }
 
-      const data = (await res.json()) as {
-        products: StockProduct[];
-        priceLists: PriceListOption[];
-      };
+      try {
+        const searchParams = new URLSearchParams();
+        searchParams.set("limit", String(limit));
+        searchParams.set("offset", String(offset));
+        if (searchQuery) {
+          searchParams.set("q", searchQuery);
+        }
 
-      setProducts(data.products);
-      setPriceLists(data.priceLists);
-      setRows((previous) =>
-        hydrateRows(data.products, data.priceLists, previous),
-      );
-    } catch {
-      setStatus("No se pudo cargar stock");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+        const res = await fetch(`/api/stock?${searchParams.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          if (requestId === stockRequestIdRef.current) {
+            setStatus("No se pudo cargar stock");
+          }
+          return;
+        }
+
+        const data = (await res.json()) as StockListResponse;
+        if (requestId !== stockRequestIdRef.current) {
+          return;
+        }
+
+        setPriceLists(data.priceLists);
+        setTotalProducts(data.total);
+        setHasMoreProducts(data.hasMore);
+        setNextOffset(data.nextOffset);
+        setProducts((previousProducts) => {
+          const nextProducts = append
+            ? mergeProductsById(previousProducts, data.products)
+            : data.products;
+          setRows((previousRows) =>
+            hydrateRows(nextProducts, data.priceLists, previousRows),
+          );
+          return nextProducts;
+        });
+      } catch {
+        if (requestId === stockRequestIdRef.current) {
+          setStatus("No se pudo cargar stock");
+        }
+      } finally {
+        if (requestId === stockRequestIdRef.current) {
+          if (append) {
+            setIsLoadingMore(false);
+          } else {
+            setIsLoading(false);
+          }
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!STOCK_PAGE_ENABLED) return;
-    loadStock().catch(() => undefined);
-  }, [loadStock]);
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [query]);
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+    loadStock({
+      offset: 0,
+      append: false,
+      searchQuery: debouncedQuery,
+    }).catch(() => undefined);
+  }, [loadStock, debouncedQuery]);
 
   useEffect(() => {
     if (!showProductForm) return;
     productNameInputRef.current?.focus();
   }, [showProductForm]);
 
-  const filteredProducts = useMemo(() => {
-    const normalized = normalizeQuery(query);
-    return products.filter((product) => {
-      if (!normalized) return true;
-      const haystack = normalizeQuery(
-        `${product.name} ${product.sku ?? ""} ${product.brand ?? ""} ${product.model ?? ""}`,
-      );
-      return haystack.includes(normalized);
-    });
-  }, [products, query]);
-
-  const totalProducts = products.length;
   const totalStock = products.reduce((sum, product) => {
     const parsed = Number(product.stock ?? 0);
     return Number.isFinite(parsed) ? sum + parsed : sum;
@@ -350,6 +428,15 @@ export default function StockPage() {
         },
       };
     });
+  };
+
+  const handleLoadMore = () => {
+    if (nextOffset === null || isLoading || isLoadingMore) return;
+    loadStock({
+      offset: nextOffset,
+      append: true,
+      searchQuery: debouncedQuery,
+    }).catch(() => undefined);
   };
 
   const saveRow = async (productId: string) => {
@@ -454,7 +541,12 @@ export default function StockPage() {
         adjustmentQty: "",
       });
       setStatus(`Guardado ${product.name}`);
-      await loadStock();
+      await loadStock({
+        offset: 0,
+        append: false,
+        limit: Math.max(DEFAULT_STOCK_PAGE_SIZE, products.length),
+        searchQuery: debouncedQuery,
+      });
     } catch {
       setStatus("No se pudo guardar");
     } finally {
@@ -493,7 +585,12 @@ export default function StockPage() {
         unit: "",
       });
       setShowProductForm(false);
-      await loadStock();
+      await loadStock({
+        offset: 0,
+        append: false,
+        limit: Math.max(DEFAULT_STOCK_PAGE_SIZE, products.length + 1),
+        searchQuery: debouncedQuery,
+      });
       setProductFormStatus("Producto creado.");
       window.setTimeout(() => {
         productSearchInputRef.current?.focus();
@@ -525,14 +622,21 @@ export default function StockPage() {
           }`}
         >
           <div className="card border !border-sky-200 p-3 !bg-white">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-start justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-sky-700">
                 <CubeIcon className="size-3.5" />
                 Productos
               </span>
-              <p className="text-base font-semibold text-zinc-900">
-                {totalProducts}
-              </p>
+              <div className="text-right">
+                <p className="text-base font-semibold text-zinc-900">
+                  {totalProducts}
+                </p>
+                {totalProducts > products.length ? (
+                  <p className="text-[11px] text-zinc-500">
+                    Cargados {products.length}
+                  </p>
+                ) : null}
+              </div>
             </div>
           </div>
           <div className="card border !border-emerald-200 p-3 !bg-white">
@@ -549,7 +653,7 @@ export default function StockPage() {
             <div className="card border !border-amber-200 p-3 !bg-white">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs font-medium text-amber-700">
-                  Stock total
+                  Stock cargado
                 </span>
                 <p className="text-base font-semibold text-zinc-900">
                   {totalStock.toLocaleString("es-AR", {
@@ -732,7 +836,7 @@ export default function StockPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map((product) => {
+              {products.map((product) => {
                 const derivedPercentages = derivePercentagesFromPrices(
                   product,
                   priceLists,
@@ -940,7 +1044,7 @@ export default function StockPage() {
                   </tr>
                 );
               })}
-              {!filteredProducts.length ? (
+              {!products.length ? (
                 <tr>
                   <td
                     className="py-4 text-sm text-zinc-500"
@@ -954,6 +1058,19 @@ export default function StockPage() {
           </table>
         </div>
       </div>
+
+      {hasMoreProducts ? (
+        <div className="flex justify-center">
+          <button
+            type="button"
+            className="btn"
+            disabled={isLoading || isLoadingMore || nextOffset === null}
+            onClick={handleLoadMore}
+          >
+            {isLoadingMore ? "Cargando..." : "Cargar mas"}
+          </button>
+        </div>
+      ) : null}
 
       {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
     </div>

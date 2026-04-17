@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
@@ -8,6 +9,9 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { aggregateStockByProduct } from "@/lib/stock-balance";
 import { STOCK_ENABLED } from "@/lib/features";
+
+const DEFAULT_STOCK_PAGE_SIZE = 60;
+const MAX_STOCK_PAGE_SIZE = 200;
 
 const stockPatchSchema = z.object({
   productId: z.string().min(1),
@@ -28,31 +32,60 @@ const stockPatchSchema = z.object({
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const [products, priceLists, priceItems, movements] = await Promise.all([
+    const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const requestedLimit = Number(req.nextUrl.searchParams.get("limit") ?? "");
+    const requestedOffset = Number(req.nextUrl.searchParams.get("offset") ?? "");
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(Math.trunc(requestedLimit), 1), MAX_STOCK_PAGE_SIZE)
+      : DEFAULT_STOCK_PAGE_SIZE;
+    const offset = Number.isFinite(requestedOffset)
+      ? Math.max(Math.trunc(requestedOffset), 0)
+      : 0;
+
+    const productWhere: Prisma.ProductWhereInput = { organizationId };
+    if (query) {
+      productWhere.OR = [
+        { name: { contains: query } },
+        { sku: { contains: query } },
+        { brand: { contains: query } },
+        { model: { contains: query } },
+      ];
+    }
+
+    const [total, products, priceLists] = await Promise.all([
+      prisma.product.count({ where: productWhere }),
       prisma.product.findMany({
-        where: { organizationId },
-        orderBy: [{ name: "asc" }, { createdAt: "desc" }],
+        where: productWhere,
+        orderBy: [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+        skip: offset,
+        take: limit,
       }),
       prisma.priceList.findMany({
         where: { organizationId, isActive: true },
         orderBy: [{ isDefault: "desc" }, { name: "asc" }],
       }),
-      prisma.priceListItem.findMany({
-        where: {
-          priceList: {
-            organizationId,
-            isActive: true,
-          },
-        },
-        select: {
-          productId: true,
-          priceListId: true,
-          price: true,
-        },
-      }),
-      STOCK_ENABLED
+    ]);
+    const productIds = products.map((product) => product.id);
+    const [priceItems, movements] = await Promise.all([
+      productIds.length
+        ? prisma.priceListItem.findMany({
+            where: {
+              productId: { in: productIds },
+              priceList: {
+                organizationId,
+                isActive: true,
+              },
+            },
+            select: {
+              productId: true,
+              priceListId: true,
+              price: true,
+            },
+          })
+        : Promise.resolve([]),
+      STOCK_ENABLED && productIds.length
         ? prisma.stockMovement.findMany({
-            where: { organizationId },
+            where: { organizationId, productId: { in: productIds } },
             select: { productId: true, type: true, qty: true },
           })
         : Promise.resolve([]),
@@ -75,7 +108,14 @@ export async function GET(req: NextRequest) {
       pricesByProduct.set(item.productId, current);
     }
 
+    const hasMore = offset + products.length < total;
+
     return NextResponse.json({
+      total,
+      limit,
+      offset,
+      hasMore,
+      nextOffset: hasMore ? offset + products.length : null,
       priceLists: priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,

@@ -447,7 +447,7 @@ export default function TopbarClient({
               </button>
             </div>
 
-            <nav className="mt-3 flex-1 space-y-4 overflow-y-auto pr-1">
+            <nav className="no-scrollbar mt-3 flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
               {renderSections(false, true, () => setIsMobileOpen(false))}
             </nav>
 
@@ -455,11 +455,19 @@ export default function TopbarClient({
         </div>
       ) : null}
 
+      <div
+        aria-hidden="true"
+        className={cn(
+          "hidden lg:block lg:transition-[width] lg:duration-500 lg:ease-[cubic-bezier(0.22,1,0.36,1)]",
+          isSidebarExpanded ? "lg:w-64" : "lg:w-[4.5rem]"
+        )}
+      />
+
       <aside
         onMouseEnter={handleSidebarMouseEnter}
         onMouseLeave={handleSidebarMouseLeave}
         className={cn(
-          "hidden overflow-x-hidden lg:flex lg:sticky lg:top-4 lg:h-[calc(100vh-2rem)] lg:flex-col lg:gap-3 rounded-3xl border border-zinc-200/70 bg-white/65 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.28)] backdrop-blur-xl transition-[width,box-shadow,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "hidden overflow-x-hidden lg:fixed lg:left-[max(1rem,calc(50%-840px))] lg:top-4 lg:z-20 lg:flex lg:h-[calc(100svh-2rem)] lg:flex-col lg:gap-3 rounded-3xl border border-zinc-200/70 bg-white/65 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.28)] backdrop-blur-xl transition-[width,box-shadow,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
           isSidebarExpanded ? "lg:w-64" : "lg:w-[4.5rem]"
         )}
       >
@@ -497,7 +505,7 @@ export default function TopbarClient({
           </button>
         </div>
 
-        <nav className="flex-1 space-y-4 overflow-y-auto pr-1">
+        <nav className="no-scrollbar flex-1 space-y-4 overflow-x-hidden overflow-y-auto pr-1">
           {renderSections(isSidebarCompact, isSidebarExpanded)}
         </nav>
 
