@@ -5,6 +5,10 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { FiscalPdfDocument } from "@/lib/pdf/fiscal";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import {
+  CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  normalizeCustomerFiscalTaxProfile,
+} from "@/lib/customers/fiscal-profile";
 
 export const runtime = "nodejs";
 
@@ -59,12 +63,22 @@ export async function GET(
       logoUrl: config?.logoUrl ?? null,
       logoFilename: config?.logoFilename ?? null,
     });
+    const receiverFiscalProfile = normalizeCustomerFiscalTaxProfile(
+      creditNote.sale?.customer.fiscalTaxProfile
+    );
+    const receiverFiscalCondition = receiverFiscalProfile
+      ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[receiverFiscalProfile]
+      : null;
+    const iva = Number(voucherData.ImpIVA ?? 0);
+    const otherTaxes = Number(voucherData.ImpTrib ?? 0);
 
     const items = creditNote.sale?.items.map((item) => ({
       description: item.product.name,
       qty: Number(item.qty),
       unitPrice: Number(item.unitPrice),
       total: Number(item.total),
+      taxRate: item.taxRate ? Number(item.taxRate) : null,
+      taxAmount: item.taxAmount ? Number(item.taxAmount) : null,
     }));
 
     const doc = (
@@ -74,12 +88,19 @@ export async function GET(
           issuer: {
             name: creditNote.organization.name,
             legalName: creditNote.organization.legalName ?? undefined,
-            taxId: creditNote.organization.taxId ?? undefined,
+            taxId:
+              creditNote.organization.taxId ??
+              config?.taxIdRepresentado ??
+              undefined,
           },
           receiver: {
             name: creditNote.sale?.customer.displayName ?? "-",
+            legalName: creditNote.sale?.customer.legalName ?? undefined,
             taxId: creditNote.sale?.customer.taxId ?? undefined,
             address: creditNote.sale?.customer.address ?? undefined,
+            email: creditNote.sale?.customer.email ?? undefined,
+            phone: creditNote.sale?.customer.phone ?? undefined,
+            fiscalCondition: receiverFiscalCondition ?? undefined,
           },
           voucher: {
             pointOfSale: creditNote.pointOfSale,
@@ -91,8 +112,9 @@ export async function GET(
             currencyCode,
             total: Number(voucherData.ImpTotal ?? 0),
             net: Number(voucherData.ImpNeto ?? 0),
-            iva: Number(voucherData.ImpIVA ?? 0),
+            iva,
             exempt: Number(voucherData.ImpOpEx ?? 0),
+            otherTaxes,
             serviceDates:
               payload && typeof payload === "object"
                 ? (payload.serviceDates as {
@@ -103,6 +125,11 @@ export async function GET(
                 : null,
           },
           items: items ?? [],
+          transparency: {
+            enabled: receiverFiscalProfile === "CONSUMIDOR_FINAL",
+            ivaContained: iva,
+            otherNationalIndirectTaxes: otherTaxes,
+          },
           logoSrc,
           qrBase64:
             payload && typeof payload === "object"

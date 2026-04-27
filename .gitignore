@@ -40,3 +40,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+# juani
+clientes.PDF
+provedores.PDF
+import-data.json
+extract-refrigeracion-victoria.py
+import-refrigeracion-victoria.ts
