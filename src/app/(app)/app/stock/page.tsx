@@ -1,13 +1,12 @@
 "use client";
 
-import type { FormEvent, MouseEvent } from "react";
+import type { FocusEvent, FormEvent, MouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   CalculatorIcon,
   CheckIcon,
-  CubeIcon,
   MinusIcon,
   PlusIcon,
 } from "@/components/icons";
@@ -56,6 +55,14 @@ type RowDraft = {
 type ProductTooltip = {
   id: string;
   name: string;
+  x: number;
+  y: number;
+};
+
+type TaxTooltip = {
+  id: string;
+  title: string;
+  base: number;
   x: number;
   y: number;
 };
@@ -131,11 +138,20 @@ const pricePreviewNumberFormatter = new Intl.NumberFormat("es-AR", {
   maximumFractionDigits: 2,
 });
 
+const IVA_21_MULTIPLIER = 1.21;
+
 const formatPricePreview = (value: number | null | undefined) => {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-";
   }
   return `$${pricePreviewNumberFormatter.format(value)}`;
+};
+
+const formatPriceWithIva21Preview = (value: number | null | undefined) => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  return formatPricePreview(normalizePriceNumber(value * IVA_21_MULTIPLIER));
 };
 
 const formatUsdPreview = (value: number | null | undefined) => {
@@ -232,6 +248,19 @@ const getTooltipPosition = (event: MouseEvent<HTMLElement>) => ({
   y: Math.max(12, Math.min(event.clientY + 18, window.innerHeight - 88)),
 });
 
+const getTaxTooltipPosition = (event: MouseEvent<HTMLElement>) => ({
+  x: Math.max(12, Math.min(event.clientX + 16, window.innerWidth - 260)),
+  y: Math.max(12, Math.min(event.clientY + 18, window.innerHeight - 132)),
+});
+
+const getTaxTooltipFocusPosition = (event: FocusEvent<HTMLElement>) => {
+  const rect = event.currentTarget.getBoundingClientRect();
+  return {
+    x: Math.max(12, Math.min(rect.left, window.innerWidth - 260)),
+    y: Math.max(12, Math.min(rect.bottom + 10, window.innerHeight - 132)),
+  };
+};
+
 export default function StockPage() {
   const router = useRouter();
   const [products, setProducts] = useState<StockProduct[]>([]);
@@ -254,6 +283,7 @@ export default function StockPage() {
   const [productTooltip, setProductTooltip] = useState<ProductTooltip | null>(
     null,
   );
+  const [taxTooltip, setTaxTooltip] = useState<TaxTooltip | null>(null);
   const [productForm, setProductForm] = useState({
     name: "",
     sku: "",
@@ -278,6 +308,44 @@ export default function StockPage() {
       id: product.id,
       name: product.name,
       ...getTooltipPosition(event),
+    });
+  };
+
+  const updateTaxTooltip = (
+    id: string,
+    title: string,
+    value: number | null | undefined,
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+      setTaxTooltip(null);
+      return;
+    }
+
+    setTaxTooltip({
+      id,
+      title,
+      base: value,
+      ...getTaxTooltipPosition(event),
+    });
+  };
+
+  const focusTaxTooltip = (
+    id: string,
+    title: string,
+    value: number | null | undefined,
+    event: FocusEvent<HTMLElement>,
+  ) => {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+      setTaxTooltip(null);
+      return;
+    }
+
+    setTaxTooltip({
+      id,
+      title,
+      base: value,
+      ...getTaxTooltipFocusPosition(event),
     });
   };
 
@@ -705,64 +773,45 @@ export default function StockPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-zinc-900">Stock</h1>
-        <p className="mt-2 text-sm text-zinc-600">
-          Ajusta costo ARS/USD y precios por lista en una sola grilla.
-        </p>
-      </div>
-
-      <div className="table-scroll pb-1">
-        <div
-          className={`grid min-w-[680px] gap-2 ${
-            STOCK_ACCOUNTING_ENABLED ? "grid-cols-3" : "grid-cols-2"
-          }`}
-        >
-          <div className="card border !border-sky-200 p-3 !bg-white">
-            <div className="flex items-start justify-between gap-2">
-              <span className="flex items-center gap-2 text-xs font-medium text-sky-700">
-                <CubeIcon className="size-3.5" />
-                Productos
-              </span>
-              <div className="text-right">
-                <p className="text-base font-semibold text-zinc-900">
-                  {totalProducts}
-                </p>
-                {totalProducts > products.length ? (
-                  <p className="text-[11px] text-zinc-500">
-                    Cargados {products.length}
-                  </p>
-                ) : null}
-              </div>
-            </div>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-zinc-900">Stock</h1>
+          <p className="mt-2 text-sm text-zinc-600">
+            Ajusta costo ARS/USD y precios por lista en una sola grilla.
+          </p>
+        </div>
+        <div className="shrink-0 rounded-lg border border-sky-200 bg-sky-50/70 px-2.5 py-1.5 text-right">
+          <div className="flex items-baseline justify-end gap-1.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
+              Productos
+            </p>
+            <p className="text-sm font-semibold tabular-nums text-sky-950">
+              {totalProducts}
+            </p>
           </div>
-          <div className="card border !border-emerald-200 p-3 !bg-white">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-emerald-700">
-                Listas activas
-              </span>
-              <p className="text-base font-semibold text-zinc-900">
-                {priceLists.length}
-              </p>
-            </div>
-          </div>
-          {STOCK_ACCOUNTING_ENABLED ? (
-            <div className="card border !border-amber-200 p-3 !bg-white">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-amber-700">
-                  Stock cargado
-                </span>
-                <p className="text-base font-semibold text-zinc-900">
-                  {totalStock.toLocaleString("es-AR", {
-                    minimumFractionDigits: 0,
-                    maximumFractionDigits: 3,
-                  })}
-                </p>
-              </div>
-            </div>
+          {totalProducts > products.length ? (
+            <p className="-mt-0.5 text-[10px] text-sky-700/80">
+              Cargados {products.length}
+            </p>
           ) : null}
         </div>
       </div>
+
+      {STOCK_ACCOUNTING_ENABLED ? (
+        <div className="max-w-xs rounded-xl border border-amber-200 bg-white px-3 py-2">
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-xs font-medium text-amber-700">
+              Stock cargado
+            </span>
+            <p className="text-sm font-semibold tabular-nums text-zinc-900">
+              {totalStock.toLocaleString("es-AR", {
+                minimumFractionDigits: 0,
+                maximumFractionDigits: 3,
+              })}
+            </p>
+          </div>
+        </div>
+      ) : null}
 
       <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
         <button
@@ -920,7 +969,7 @@ export default function StockPage() {
                 <th className="w-[108px] py-2 pr-2">Costo ARS</th>
                 <th className="w-[108px] py-2 pr-2">Costo USD</th>
                 {priceLists.map((priceList) => (
-                  <th key={priceList.id} className="w-[108px] py-2 pr-2">
+                  <th key={priceList.id} className="w-[132px] py-2 pr-2">
                     Precio {priceList.name}
                   </th>
                 ))}
@@ -960,6 +1009,7 @@ export default function StockPage() {
                 const originalCostUsd = parseNumber(product.costUsd ?? null);
                 const currentCostUsd = parseNumber(draft.costUsd);
                 const costUsdChanged = originalCostUsd !== currentCostUsd;
+                const hasCurrentCostUsd = currentCostUsd !== null;
                 const computedPrices = calculatePricesFromPercentages(
                   currentCost,
                   draft.percentages,
@@ -1047,13 +1097,49 @@ export default function StockPage() {
                         >
                           <div className="flex items-center gap-2 pr-1 text-[11px]">
                             <span className="text-zinc-400">Unit.</span>
-                            <span className="font-semibold tabular-nums text-zinc-800">
-                              ARS {formatPricePreview(currentCost)}
+                            <span
+                              className="cursor-help whitespace-nowrap font-semibold tabular-nums text-zinc-800 outline-none"
+                              onMouseEnter={(event) =>
+                                updateTaxTooltip(
+                                  `${product.id}-cost-ars`,
+                                  "Costo unitario",
+                                  currentCost,
+                                  event,
+                                )
+                              }
+                              onMouseMove={(event) =>
+                                updateTaxTooltip(
+                                  `${product.id}-cost-ars`,
+                                  "Costo unitario",
+                                  currentCost,
+                                  event,
+                                )
+                              }
+                              onMouseLeave={() => setTaxTooltip(null)}
+                              onFocus={(event) =>
+                                focusTaxTooltip(
+                                  `${product.id}-cost-ars`,
+                                  "Costo unitario",
+                                  currentCost,
+                                  event,
+                                )
+                              }
+                              onBlur={() => setTaxTooltip(null)}
+                              tabIndex={0}
+                            >
+                              ARS {formatPriceWithIva21Preview(currentCost)}
+                              <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                c/IVA 21
+                              </span>
                             </span>
-                            <span className="text-zinc-300">/</span>
-                            <span className="font-semibold tabular-nums text-zinc-600">
-                              {formatUsdPreview(currentCostUsd)}
-                            </span>
+                            {hasCurrentCostUsd ? (
+                              <>
+                                <span className="text-zinc-300">/</span>
+                                <span className="font-semibold tabular-nums text-zinc-600">
+                                  {formatUsdPreview(currentCostUsd)}
+                                </span>
+                              </>
+                            ) : null}
                           </div>
                           <div className="flex items-center gap-1 rounded-full bg-white p-0.5 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.9)]">
                             <button
@@ -1098,13 +1184,45 @@ export default function StockPage() {
                             return (
                               <div
                                 key={`${product.id}-${priceList.id}-calculator`}
-                                className="flex min-w-[116px] items-center justify-between gap-2 rounded-full bg-white px-3 py-1.5 shadow-[inset_0_0_0_1px_rgba(212,212,216,0.95),0_8px_22px_-20px_rgba(39,39,42,0.45)]"
+                                className="flex min-w-[154px] items-center justify-between gap-2 rounded-full bg-white px-3 py-1.5 shadow-[inset_0_0_0_1px_rgba(212,212,216,0.95),0_8px_22px_-20px_rgba(39,39,42,0.45)]"
                               >
                                 <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
                                   {priceList.name}
                                 </span>
-                                <span className="text-sm font-semibold tabular-nums text-zinc-900">
-                                  {formatPricePreview(finalPrice)}
+                                <span
+                                  className="cursor-help whitespace-nowrap text-sm font-semibold tabular-nums text-zinc-900 outline-none"
+                                  onMouseEnter={(event) =>
+                                    updateTaxTooltip(
+                                      `${product.id}-${priceList.id}-total`,
+                                      `${priceList.name} total`,
+                                      finalPrice,
+                                      event,
+                                    )
+                                  }
+                                  onMouseMove={(event) =>
+                                    updateTaxTooltip(
+                                      `${product.id}-${priceList.id}-total`,
+                                      `${priceList.name} total`,
+                                      finalPrice,
+                                      event,
+                                    )
+                                  }
+                                  onMouseLeave={() => setTaxTooltip(null)}
+                                  onFocus={(event) =>
+                                    focusTaxTooltip(
+                                      `${product.id}-${priceList.id}-total`,
+                                      `${priceList.name} total`,
+                                      finalPrice,
+                                      event,
+                                    )
+                                  }
+                                  onBlur={() => setTaxTooltip(null)}
+                                  tabIndex={0}
+                                >
+                                  {formatPriceWithIva21Preview(finalPrice)}
+                                  <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                    c/IVA 21
+                                  </span>
                                 </span>
                               </div>
                             );
@@ -1152,7 +1270,7 @@ export default function StockPage() {
                             key={`${product.id}-${priceList.id}`}
                             className="py-3 pr-2 align-top"
                           >
-                            <div className="w-24 space-y-1">
+                            <div className="w-32 space-y-1">
                               <MoneyInput
                                 className="input no-spinner w-full px-2 text-right tabular-nums"
                                 value={draft.percentages[priceList.id] ?? ""}
@@ -1167,8 +1285,42 @@ export default function StockPage() {
                                 maxDecimals={4}
                                 suffix="%"
                               />
-                              <p className="min-h-4 text-right text-[11px] font-medium tabular-nums text-zinc-600">
-                                {formatPricePreview(computedPrices[priceList.id])}
+                              <p
+                                className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
+                                onMouseEnter={(event) =>
+                                  updateTaxTooltip(
+                                    `${product.id}-${priceList.id}-unit`,
+                                    `Precio ${priceList.name}`,
+                                    computedPrices[priceList.id],
+                                    event,
+                                  )
+                                }
+                                onMouseMove={(event) =>
+                                  updateTaxTooltip(
+                                    `${product.id}-${priceList.id}-unit`,
+                                    `Precio ${priceList.name}`,
+                                    computedPrices[priceList.id],
+                                    event,
+                                  )
+                                }
+                                onMouseLeave={() => setTaxTooltip(null)}
+                                onFocus={(event) =>
+                                  focusTaxTooltip(
+                                    `${product.id}-${priceList.id}-unit`,
+                                    `Precio ${priceList.name}`,
+                                    computedPrices[priceList.id],
+                                    event,
+                                  )
+                                }
+                                onBlur={() => setTaxTooltip(null)}
+                                tabIndex={0}
+                              >
+                                {formatPriceWithIva21Preview(
+                                  computedPrices[priceList.id],
+                                )}
+                                <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                  c/IVA 21
+                                </span>
                               </p>
                             </div>
                           </td>
@@ -1235,7 +1387,7 @@ export default function StockPage() {
                         ) : null}
                       </>
                     )}
-                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right align-top">
+                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right align-top hover:z-30 focus-within:z-30">
                       <div className="flex min-h-10 items-center justify-end gap-2">
                         <div className="group relative">
                           <button
@@ -1255,7 +1407,7 @@ export default function StockPage() {
                           >
                             <CalculatorIcon className="size-4" />
                           </button>
-                          <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                          <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
                             Simulador
                           </span>
                         </div>
@@ -1306,22 +1458,83 @@ export default function StockPage() {
           <motion.div
             key={productTooltip.id}
             className="pointer-events-none fixed left-0 top-0 z-50 max-w-xs rounded-xl border border-zinc-400 bg-white px-3 py-2 text-xs font-medium leading-snug text-zinc-950 shadow-[0_18px_50px_-24px_rgba(24,24,27,0.65)]"
-            initial={{ opacity: 0, scale: 0.96 }}
+            initial={{
+              opacity: 0,
+              scale: 0.98,
+              x: productTooltip.x,
+              y: productTooltip.y,
+            }}
             animate={{
               opacity: 1,
               scale: 1,
               x: productTooltip.x,
               y: productTooltip.y,
             }}
-            exit={{ opacity: 0, scale: 0.96 }}
+            exit={{ opacity: 0, scale: 0.98 }}
             transition={{
               opacity: { duration: 0.12 },
               scale: { duration: 0.12 },
-              x: { type: "spring", stiffness: 520, damping: 38, mass: 0.4 },
-              y: { type: "spring", stiffness: 520, damping: 38, mass: 0.4 },
+              x: { duration: 0 },
+              y: { duration: 0 },
             }}
           >
             {productTooltip.name}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {taxTooltip ? (
+          <motion.div
+            key={taxTooltip.id}
+            className="pointer-events-none fixed left-0 top-0 z-[60] w-56 rounded-xl border border-zinc-300 bg-white px-3 py-2.5 text-xs text-zinc-900 shadow-[0_18px_50px_-24px_rgba(24,24,27,0.7)]"
+            initial={{
+              opacity: 0,
+              scale: 0.98,
+              x: taxTooltip.x,
+              y: taxTooltip.y,
+            }}
+            animate={{
+              opacity: 1,
+              scale: 1,
+              x: taxTooltip.x,
+              y: taxTooltip.y,
+            }}
+            exit={{ opacity: 0, scale: 0.98 }}
+            transition={{
+              opacity: { duration: 0.12 },
+              scale: { duration: 0.12 },
+              x: { duration: 0 },
+              y: { duration: 0 },
+            }}
+          >
+            <p className="mb-2 truncate text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+              {taxTooltip.title}
+            </p>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-zinc-500">Exento</span>
+                <span className="font-semibold tabular-nums">
+                  {formatPricePreview(taxTooltip.base)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-zinc-500">IVA 10.5%</span>
+                <span className="font-semibold tabular-nums">
+                  {formatPricePreview(
+                    normalizePriceNumber(taxTooltip.base * 1.105),
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-zinc-500">IVA 21%</span>
+                <span className="font-semibold tabular-nums">
+                  {formatPricePreview(
+                    normalizePriceNumber(taxTooltip.base * IVA_21_MULTIPLIER),
+                  )}
+                </span>
+              </div>
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
