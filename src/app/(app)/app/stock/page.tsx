@@ -1,10 +1,11 @@
 "use client";
 
-import type { FormEvent } from "react";
+import type { FormEvent, MouseEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  CalculatorIcon,
   CheckIcon,
   CubeIcon,
   MinusIcon,
@@ -47,8 +48,16 @@ type RowDraft = {
   costUsd: string;
   percentages: Record<string, string>;
   adjustmentQty: string;
+  calculatorQty: string;
   isSaving: boolean;
   warning: string | null;
+};
+
+type ProductTooltip = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
 };
 
 type StockListResponse = {
@@ -71,6 +80,8 @@ const SEARCH_DEBOUNCE_MS = 260;
 
 const normalizeMoney = (value: string) => normalizeDecimalInput(value, 2);
 const normalizePercent = (value: string) => normalizeDecimalInput(value, 4);
+const normalizeCalculatorQuantity = (value: string) =>
+  normalizeDecimalInput(value, 3);
 
 const normalizeSignedQuantity = (value: string) => {
   const trimmed = value.trim();
@@ -113,6 +124,25 @@ const formatStock = (value: string | number) => {
     minimumFractionDigits: 0,
     maximumFractionDigits: 3,
   });
+};
+
+const pricePreviewNumberFormatter = new Intl.NumberFormat("es-AR", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+const formatPricePreview = (value: number | null | undefined) => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  return `$${pricePreviewNumberFormatter.format(value)}`;
+};
+
+const formatUsdPreview = (value: number | null | undefined) => {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "USD -";
+  }
+  return `USD ${pricePreviewNumberFormatter.format(value)}`;
 };
 
 const formatUnit = (unit: string | null) => {
@@ -197,6 +227,11 @@ const mergeProductsById = (current: StockProduct[], incoming: StockProduct[]) =>
   return merged;
 };
 
+const getTooltipPosition = (event: MouseEvent<HTMLElement>) => ({
+  x: Math.max(12, Math.min(event.clientX + 16, window.innerWidth - 320)),
+  y: Math.max(12, Math.min(event.clientY + 18, window.innerHeight - 88)),
+});
+
 export default function StockPage() {
   const router = useRouter();
   const [products, setProducts] = useState<StockProduct[]>([]);
@@ -213,6 +248,12 @@ export default function StockPage() {
   const [showProductForm, setShowProductForm] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
   const [productFormStatus, setProductFormStatus] = useState<string | null>(null);
+  const [calculatorRows, setCalculatorRows] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [productTooltip, setProductTooltip] = useState<ProductTooltip | null>(
+    null,
+  );
   const [productForm, setProductForm] = useState({
     name: "",
     sku: "",
@@ -223,6 +264,22 @@ export default function StockPage() {
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
   const stockRequestIdRef = useRef(0);
+
+  const updateProductTooltip = (
+    product: StockProduct,
+    event: MouseEvent<HTMLElement>,
+  ) => {
+    if (event.currentTarget.scrollWidth <= event.currentTarget.clientWidth) {
+      setProductTooltip(null);
+      return;
+    }
+
+    setProductTooltip({
+      id: product.id,
+      name: product.name,
+      ...getTooltipPosition(event),
+    });
+  };
 
   useEffect(() => {
     if (!STOCK_PAGE_ENABLED) {
@@ -257,6 +314,7 @@ export default function StockPage() {
         costUsd: previousDraft?.costUsd ?? product.costUsd ?? "",
         percentages: nextPercentages,
         adjustmentQty: previousDraft?.adjustmentQty ?? "",
+        calculatorQty: previousDraft?.calculatorQty ?? "1",
         isSaving: false,
         warning: previousDraft?.warning ?? null,
       };
@@ -371,6 +429,7 @@ export default function StockPage() {
           costUsd: "",
           percentages: {},
           adjustmentQty: "",
+          calculatorQty: "1",
           isSaving: false,
           warning: null,
         }),
@@ -390,6 +449,7 @@ export default function StockPage() {
         costUsd: "",
         percentages: {},
         adjustmentQty: "",
+        calculatorQty: "1",
         isSaving: false,
         warning: null,
       };
@@ -413,6 +473,7 @@ export default function StockPage() {
         costUsd: "",
         percentages: {},
         adjustmentQty: "",
+        calculatorQty: "1",
         isSaving: false,
         warning: null,
       };
@@ -425,6 +486,42 @@ export default function StockPage() {
         [productId]: {
           ...current,
           adjustmentQty: formatSignedQuantity(next),
+        },
+      };
+    });
+  };
+
+  const toggleCalculatorRow = (productId: string) => {
+    setCalculatorRows((previous) => {
+      const next = new Set(previous);
+      if (next.has(productId)) {
+        next.delete(productId);
+      } else {
+        next.add(productId);
+      }
+      return next;
+    });
+  };
+
+  const nudgeCalculatorQuantity = (productId: string, step: number) => {
+    setRows((previous) => {
+      const current = previous[productId] ?? {
+        cost: "",
+        costUsd: "",
+        percentages: {},
+        adjustmentQty: "",
+        calculatorQty: "1",
+        isSaving: false,
+        warning: null,
+      };
+      const parsedCurrent = parseNumber(current.calculatorQty) ?? 0;
+      const next = Math.max(0, parsedCurrent + step);
+
+      return {
+        ...previous,
+        [productId]: {
+          ...current,
+          calculatorQty: formatSignedQuantity(next) || "0",
         },
       };
     });
@@ -830,7 +927,7 @@ export default function StockPage() {
                 {STOCK_ACCOUNTING_ENABLED ? (
                   <th className="w-[220px] py-2 pr-2">Stock</th>
                 ) : null}
-                <th className="sticky right-0 z-20 w-[110px] bg-white/95 py-2 pr-2 text-right">
+                <th className="sticky right-0 z-20 w-[158px] bg-white/95 py-2 pr-2 text-right">
                   Guardar
                 </th>
               </tr>
@@ -846,6 +943,7 @@ export default function StockPage() {
                   costUsd: product.costUsd ?? "",
                   percentages: derivedPercentages,
                   adjustmentQty: "",
+                  calculatorQty: "1",
                   isSaving: false,
                   warning: null,
                 };
@@ -867,6 +965,10 @@ export default function StockPage() {
                   draft.percentages,
                   priceLists,
                 );
+                const calculatorActive = calculatorRows.has(product.id);
+                const calculatorQuantity = parseNumber(draft.calculatorQty);
+                const calculatorColSpan =
+                  priceLists.length + 2 + (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
                 const hasPercentagesWithoutCost =
                   currentCost === null &&
                   priceLists.some(
@@ -907,11 +1009,23 @@ export default function StockPage() {
                 return (
                   <tr
                     key={product.id}
-                    className="border-t border-zinc-200/60 align-middle transition-colors hover:bg-white/60"
+                    className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                   >
-                    <td className="py-3 pr-2">
-                      <div className="flex max-w-[220px] items-center gap-2 whitespace-nowrap">
-                        <p className="truncate text-sm font-medium text-zinc-900">
+                    <td className="py-3 pr-2 align-top">
+                      <div
+                        className="flex min-h-10 max-w-[220px] min-w-0 items-center gap-2 whitespace-nowrap"
+                      >
+                        <p
+                          className="min-w-0 truncate text-sm font-medium text-zinc-900"
+                          onMouseEnter={(event) =>
+                            updateProductTooltip(product, event)
+                          }
+                          onMouseMove={(event) =>
+                            updateProductTooltip(product, event)
+                          }
+                          onMouseLeave={() => setProductTooltip(null)}
+                          aria-label={product.name}
+                        >
                           {product.name}
                         </p>
                         <p className="truncate text-[11px] text-zinc-500">
@@ -920,126 +1034,241 @@ export default function StockPage() {
                         </p>
                       </div>
                     </td>
-                    <td className="py-3 pr-2">
-                      <div className="w-24">
-                        <MoneyInput
-                          className="input no-spinner w-full px-2 text-right tabular-nums"
-                          value={draft.cost}
-                          onValueChange={(nextValue) =>
-                            updateRow(product.id, {
-                              cost: normalizeMoney(nextValue),
-                            })
-                          }
-                          placeholder="0,00"
-                          maxDecimals={2}
-                          prefix="$"
-                        />
-                      </div>
-                    </td>
-                    <td className="py-3 pr-2">
-                      <div className="w-24">
-                        <MoneyInput
-                          className="input no-spinner w-full px-2 text-right tabular-nums"
-                          value={draft.costUsd}
-                          onValueChange={(nextValue) =>
-                            updateRow(product.id, {
-                              costUsd: normalizeMoney(nextValue),
-                            })
-                          }
-                          placeholder="0,00"
-                          maxDecimals={2}
-                          prefix="USD "
-                        />
-                      </div>
-                    </td>
-                    {priceLists.map((priceList) => (
-                      <td key={`${product.id}-${priceList.id}`} className="py-3 pr-2">
-                        <div className="w-24">
-                          <MoneyInput
-                            className="input no-spinner w-full px-2 text-right tabular-nums"
-                            value={draft.percentages[priceList.id] ?? ""}
-                            onValueChange={(nextValue) =>
-                              updateRowPercentage(
-                                product.id,
-                                priceList.id,
-                                normalizePercent(nextValue),
-                              )
-                            }
-                            placeholder="0"
-                            maxDecimals={4}
-                            suffix="%"
-                          />
-                        </div>
-                      </td>
-                    ))}
-                    {STOCK_ACCOUNTING_ENABLED ? (
-                      <td className="py-3 pr-2">
-                        <div className="flex items-center gap-2 whitespace-nowrap">
-                          <span className="font-semibold text-zinc-800">
-                            {formatStock(product.stock)}
-                          </span>
-                          <button
-                            type="button"
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
-                            onClick={() => nudgeStockAdjustment(product.id, -1)}
-                            aria-label="Restar una unidad"
-                          >
-                            <MinusIcon className="size-3.5" />
-                          </button>
-                          <input
-                            className="input w-20 text-right tabular-nums"
-                            inputMode="decimal"
-                            value={draft.adjustmentQty}
-                            onChange={(event) =>
-                              updateRow(product.id, {
-                                adjustmentQty: normalizeSignedQuantity(
-                                  event.target.value,
-                                ),
-                              })
-                            }
-                            placeholder="+/-"
-                          />
-                          <button
-                            type="button"
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
-                            onClick={() => nudgeStockAdjustment(product.id, 1)}
-                            aria-label="Sumar una unidad"
-                          >
-                            <PlusIcon className="size-3.5" />
-                          </button>
-                          <span
-                            className={`text-[11px] font-semibold ${adjustmentClass}`}
-                          >
-                            {adjustmentLabel}
-                          </span>
-                          <span className="text-zinc-500">=</span>
-                          <span
-                            className={`font-semibold ${
-                              isProjectedNegative
-                                ? "text-amber-700"
-                                : "text-emerald-700"
-                            }`}
-                          >
-                            {formatStock(projectedStock)}
-                          </span>
-                        </div>
-                        {draft.warning ? (
-                          <p className="mt-1 text-[11px] text-amber-700">
-                            {draft.warning}
-                          </p>
-                        ) : null}
-                      </td>
-                    ) : null}
-                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right">
-                      <button
-                        type="button"
-                        className="btn btn-emerald text-xs"
-                        disabled={draft.isSaving || isLoading || !hasRowChanges}
-                        onClick={() => saveRow(product.id)}
+                    {calculatorActive ? (
+                      <td
+                        className="py-3 pr-2 align-top"
+                        colSpan={calculatorColSpan}
                       >
-                        <CheckIcon className="size-4" />
-                        {draft.isSaving ? "Guardando..." : "Guardar"}
-                      </button>
+                        <motion.div
+                          initial={{ opacity: 0, y: -4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.18, ease: "easeOut" }}
+                          className="flex min-h-[3.75rem] flex-wrap items-center gap-4"
+                        >
+                          <div className="flex items-center gap-2 pr-1 text-[11px]">
+                            <span className="text-zinc-400">Unit.</span>
+                            <span className="font-semibold tabular-nums text-zinc-800">
+                              ARS {formatPricePreview(currentCost)}
+                            </span>
+                            <span className="text-zinc-300">/</span>
+                            <span className="font-semibold tabular-nums text-zinc-600">
+                              {formatUsdPreview(currentCostUsd)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 rounded-full bg-white p-0.5 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.9)]">
+                            <button
+                              type="button"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
+                              onClick={() => nudgeCalculatorQuantity(product.id, -1)}
+                              aria-label="Restar cantidad"
+                            >
+                              <MinusIcon className="size-3.5" />
+                            </button>
+                            <MoneyInput
+                              className="h-7 w-16 bg-transparent px-1 text-center text-xs font-semibold tabular-nums text-zinc-900 outline-none"
+                              value={draft.calculatorQty}
+                              onValueChange={(nextValue) =>
+                                updateRow(product.id, {
+                                  calculatorQty:
+                                    normalizeCalculatorQuantity(nextValue),
+                                })
+                              }
+                              placeholder="1"
+                              maxDecimals={3}
+                              aria-label="Cantidad"
+                            />
+                            <button
+                              type="button"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
+                              onClick={() => nudgeCalculatorQuantity(product.id, 1)}
+                              aria-label="Sumar cantidad"
+                            >
+                              <PlusIcon className="size-3.5" />
+                            </button>
+                          </div>
+                          {priceLists.map((priceList) => {
+                            const unitPrice = computedPrices[priceList.id];
+                            const finalPrice =
+                              unitPrice !== null && calculatorQuantity !== null
+                                ? normalizePriceNumber(
+                                    unitPrice * calculatorQuantity,
+                                  )
+                                : null;
+
+                            return (
+                              <div
+                                key={`${product.id}-${priceList.id}-calculator`}
+                                className="flex min-w-[116px] items-center justify-between gap-2 rounded-full bg-white px-3 py-1.5 shadow-[inset_0_0_0_1px_rgba(212,212,216,0.95),0_8px_22px_-20px_rgba(39,39,42,0.45)]"
+                              >
+                                <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
+                                  {priceList.name}
+                                </span>
+                                <span className="text-sm font-semibold tabular-nums text-zinc-900">
+                                  {formatPricePreview(finalPrice)}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </motion.div>
+                      </td>
+                    ) : (
+                      <>
+                        <td className="py-3 pr-2 align-top">
+                          <div className="w-24 space-y-1">
+                            <MoneyInput
+                              className="input no-spinner w-full px-2 text-right tabular-nums"
+                              value={draft.cost}
+                              onValueChange={(nextValue) =>
+                                updateRow(product.id, {
+                                  cost: normalizeMoney(nextValue),
+                                })
+                              }
+                              placeholder="0,00"
+                              maxDecimals={2}
+                              prefix="$"
+                            />
+                            <span aria-hidden="true" className="block min-h-4" />
+                          </div>
+                        </td>
+                        <td className="py-3 pr-2 align-top">
+                          <div className="w-24 space-y-1">
+                            <MoneyInput
+                              className="input no-spinner w-full px-2 text-right tabular-nums"
+                              value={draft.costUsd}
+                              onValueChange={(nextValue) =>
+                                updateRow(product.id, {
+                                  costUsd: normalizeMoney(nextValue),
+                                })
+                              }
+                              placeholder="0,00"
+                              maxDecimals={2}
+                              prefix="USD "
+                            />
+                            <span aria-hidden="true" className="block min-h-4" />
+                          </div>
+                        </td>
+                        {priceLists.map((priceList) => (
+                          <td
+                            key={`${product.id}-${priceList.id}`}
+                            className="py-3 pr-2 align-top"
+                          >
+                            <div className="w-24 space-y-1">
+                              <MoneyInput
+                                className="input no-spinner w-full px-2 text-right tabular-nums"
+                                value={draft.percentages[priceList.id] ?? ""}
+                                onValueChange={(nextValue) =>
+                                  updateRowPercentage(
+                                    product.id,
+                                    priceList.id,
+                                    normalizePercent(nextValue),
+                                  )
+                                }
+                                placeholder="0"
+                                maxDecimals={4}
+                                suffix="%"
+                              />
+                              <p className="min-h-4 text-right text-[11px] font-medium tabular-nums text-zinc-600">
+                                {formatPricePreview(computedPrices[priceList.id])}
+                              </p>
+                            </div>
+                          </td>
+                        ))}
+                        {STOCK_ACCOUNTING_ENABLED ? (
+                          <td className="py-3 pr-2 align-top">
+                            <div className="flex min-h-10 items-center gap-2 whitespace-nowrap">
+                              <span className="font-semibold text-zinc-800">
+                                {formatStock(product.stock)}
+                              </span>
+                              <button
+                                type="button"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                                onClick={() =>
+                                  nudgeStockAdjustment(product.id, -1)
+                                }
+                                aria-label="Restar una unidad"
+                              >
+                                <MinusIcon className="size-3.5" />
+                              </button>
+                              <input
+                                className="input w-20 text-right tabular-nums"
+                                inputMode="decimal"
+                                value={draft.adjustmentQty}
+                                onChange={(event) =>
+                                  updateRow(product.id, {
+                                    adjustmentQty: normalizeSignedQuantity(
+                                      event.target.value,
+                                    ),
+                                  })
+                                }
+                                placeholder="+/-"
+                              />
+                              <button
+                                type="button"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                                onClick={() => nudgeStockAdjustment(product.id, 1)}
+                                aria-label="Sumar una unidad"
+                              >
+                                <PlusIcon className="size-3.5" />
+                              </button>
+                              <span
+                                className={`text-[11px] font-semibold ${adjustmentClass}`}
+                              >
+                                {adjustmentLabel}
+                              </span>
+                              <span className="text-zinc-500">=</span>
+                              <span
+                                className={`font-semibold ${
+                                  isProjectedNegative
+                                    ? "text-amber-700"
+                                    : "text-emerald-700"
+                                }`}
+                              >
+                                {formatStock(projectedStock)}
+                              </span>
+                            </div>
+                            {draft.warning ? (
+                              <p className="mt-1 text-[11px] text-amber-700">
+                                {draft.warning}
+                              </p>
+                            ) : null}
+                          </td>
+                        ) : null}
+                      </>
+                    )}
+                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right align-top">
+                      <div className="flex min-h-10 items-center justify-end gap-2">
+                        <div className="group relative">
+                          <button
+                            type="button"
+                            className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-zinc-700 transition ${
+                              calculatorActive
+                                ? "border-sky-200 bg-sky-50 text-sky-700 shadow-[0_8px_20px_-18px_rgba(2,132,199,0.65)]"
+                                : "border-zinc-200 bg-white hover:bg-zinc-50"
+                            }`}
+                            onClick={() => toggleCalculatorRow(product.id)}
+                            aria-label={
+                              calculatorActive
+                                ? "Cerrar simulador"
+                                : "Abrir simulador"
+                            }
+                            aria-pressed={calculatorActive}
+                          >
+                            <CalculatorIcon className="size-4" />
+                          </button>
+                          <span className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                            Simulador
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-emerald h-10 text-xs"
+                          disabled={draft.isSaving || isLoading || !hasRowChanges}
+                          onClick={() => saveRow(product.id)}
+                        >
+                          <CheckIcon className="size-4" />
+                          {draft.isSaving ? "Guardando..." : "Guardar"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -1071,6 +1300,31 @@ export default function StockPage() {
           </button>
         </div>
       ) : null}
+
+      <AnimatePresence>
+        {productTooltip ? (
+          <motion.div
+            key={productTooltip.id}
+            className="pointer-events-none fixed left-0 top-0 z-50 max-w-xs rounded-xl border border-zinc-400 bg-white px-3 py-2 text-xs font-medium leading-snug text-zinc-950 shadow-[0_18px_50px_-24px_rgba(24,24,27,0.65)]"
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{
+              opacity: 1,
+              scale: 1,
+              x: productTooltip.x,
+              y: productTooltip.y,
+            }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{
+              opacity: { duration: 0.12 },
+              scale: { duration: 0.12 },
+              x: { type: "spring", stiffness: 520, damping: 38, mass: 0.4 },
+              y: { type: "spring", stiffness: 520, damping: 38, mass: 0.4 },
+            }}
+          >
+            {productTooltip.name}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
 
       {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
     </div>
