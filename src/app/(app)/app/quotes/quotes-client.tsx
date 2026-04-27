@@ -1,9 +1,14 @@
 "use client";
 
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Cog6ToothIcon, PlusIcon } from "@/components/icons";
+import {
+  CheckIcon,
+  Cog6ToothIcon,
+  ExclamationTriangleIcon,
+  PlusIcon,
+} from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
 import {
@@ -12,7 +17,9 @@ import {
 } from "@/lib/input-format";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  CUSTOMER_FISCAL_TAX_PROFILE_VALUES,
   inferFiscalTaxProfileFromArcaTaxStatus,
+  normalizeCustomerFiscalTaxProfile,
   type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
@@ -51,6 +58,14 @@ type CustomerFormState = {
   phone: string;
   taxId: string;
   address: string;
+};
+
+type CustomerArcaValidation = {
+  status: "idle" | "loading" | "ok" | "warning" | "error";
+  message: string | null;
+  suggestedFiscalTaxProfile: CustomerFiscalTaxProfile | null;
+  source: string | null;
+  checkedAt: string | null;
 };
 
 type QuoteDetail = QuoteRow & {
@@ -229,6 +244,44 @@ function MiniToggle({
   );
 }
 
+function InlineDataNotice({
+  tone = "amber",
+  title,
+  message,
+  children,
+}: {
+  tone?: "amber" | "rose" | "zinc";
+  title: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  const toneClass =
+    tone === "rose"
+      ? "border-rose-200 text-rose-800"
+      : tone === "zinc"
+        ? "border-zinc-200 text-zinc-700"
+        : "border-amber-200 text-amber-800";
+
+  return (
+    <div className={`rounded-xl border bg-white px-3 py-2 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <ExclamationTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide">
+              {title}
+            </span>
+            <span className="text-xs leading-relaxed text-zinc-600">
+              {message}
+            </span>
+          </div>
+          {children ? <div className="mt-2">{children}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function QuotesClient({
   initialCustomers,
   initialProducts,
@@ -299,6 +352,26 @@ export default function QuotesClient({
   const [customerStatus, setCustomerStatus] = useState<string | null>(null);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [isCustomerLookupLoading, setIsCustomerLookupLoading] = useState(false);
+  const [selectedCustomerTaxId, setSelectedCustomerTaxId] = useState("");
+  const [selectedCustomerFiscalTaxProfile, setSelectedCustomerFiscalTaxProfile] =
+    useState<CustomerFiscalTaxProfile>("CONSUMIDOR_FINAL");
+  const [selectedCustomerDataStatus, setSelectedCustomerDataStatus] = useState<
+    string | null
+  >(null);
+  const [isUpdatingSelectedCustomer, setIsUpdatingSelectedCustomer] =
+    useState(false);
+  const [
+    isValidatingSelectedCustomerArca,
+    setIsValidatingSelectedCustomerArca,
+  ] = useState(false);
+  const [customerArcaValidation, setCustomerArcaValidation] =
+    useState<CustomerArcaValidation>({
+      status: "idle",
+      message: null,
+      suggestedFiscalTaxProfile: null,
+      source: null,
+      checkedAt: null,
+    });
   const [showCustomerForm, setShowCustomerForm] = useState(false);
   const [quoteView, setQuoteView] = useState<"list" | "new">("new");
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNoteRow[]>([]);
@@ -419,6 +492,10 @@ export default function QuotesClient({
       ),
     [accounts, confirmReceiptLine.currencyCode],
   );
+  const selectedCustomerIdForValidation = selectedCustomer?.id ?? null;
+  const selectedCustomerTaxIdForValidation = selectedCustomer?.taxId ?? null;
+  const selectedCustomerFiscalProfileForValidation =
+    selectedCustomer?.fiscalTaxProfile ?? null;
 
   const upsertCustomers = (nextCustomers: CustomerOption[]) => {
     if (!nextCustomers.length) return;
@@ -873,6 +950,139 @@ export default function QuotesClient({
   ]);
 
   useEffect(() => {
+    if (!selectedCustomer || isSelectedAnonymousConsumerFinal) {
+      setSelectedCustomerTaxId("");
+      setSelectedCustomerFiscalTaxProfile("CONSUMIDOR_FINAL");
+      setSelectedCustomerDataStatus(null);
+      setCustomerArcaValidation({
+        status: "idle",
+        message: null,
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    setSelectedCustomerTaxId(normalizeTaxId(selectedCustomer.taxId ?? ""));
+    setSelectedCustomerFiscalTaxProfile(
+      normalizeCustomerFiscalTaxProfile(selectedCustomer.fiscalTaxProfile) ??
+        "CONSUMIDOR_FINAL",
+    );
+    setSelectedCustomerDataStatus(null);
+  }, [isSelectedAnonymousConsumerFinal, selectedCustomer]);
+
+  useEffect(() => {
+    if (!selectedCustomerIdForValidation || isSelectedAnonymousConsumerFinal) {
+      return;
+    }
+
+    const taxId = normalizeTaxId(selectedCustomerTaxIdForValidation ?? "");
+    if (!taxId) {
+      setCustomerArcaValidation({
+        status: "warning",
+        message: "El cliente no tiene CUIT cargado.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setCustomerArcaValidation((previous) => ({
+        ...previous,
+        status: "loading",
+        message: "Validando CUIT en ARCA...",
+      }));
+
+      try {
+        const res = await fetch("/api/arca/taxpayer-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taxId }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (!res.ok) {
+          setCustomerArcaValidation({
+            status: "error",
+            message: data?.error ?? "No se pudo validar CUIT en ARCA.",
+            suggestedFiscalTaxProfile: null,
+            source: null,
+            checkedAt: null,
+          });
+          return;
+        }
+
+        const arcaTaxStatus =
+          typeof data?.taxpayer?.taxStatus === "string"
+            ? data.taxpayer.taxStatus
+            : null;
+        const suggestedFiscalTaxProfile =
+          inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
+        const currentProfile = normalizeCustomerFiscalTaxProfile(
+          selectedCustomerFiscalProfileForValidation,
+        );
+        const source = typeof data?.source === "string" ? data.source : null;
+        const checkedAt =
+          typeof data?.checkedAt === "string" ? data.checkedAt : null;
+
+        if (!suggestedFiscalTaxProfile) {
+          setCustomerArcaValidation({
+            status: "warning",
+            message: "ARCA no devolvio condicion fiscal clara.",
+            suggestedFiscalTaxProfile: null,
+            source,
+            checkedAt,
+          });
+          return;
+        }
+
+        if (currentProfile && suggestedFiscalTaxProfile !== currentProfile) {
+          setCustomerArcaValidation({
+            status: "warning",
+            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y la ficha tiene ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.`,
+            suggestedFiscalTaxProfile,
+            source,
+            checkedAt,
+          });
+          return;
+        }
+
+        setCustomerArcaValidation({
+          status: "ok",
+          message: "CUIT validado con ARCA.",
+          suggestedFiscalTaxProfile,
+          source,
+          checkedAt,
+        });
+      } catch {
+        if (cancelled) return;
+        setCustomerArcaValidation({
+          status: "error",
+          message: "No se pudo validar CUIT en ARCA.",
+          suggestedFiscalTaxProfile: null,
+          source: null,
+          checkedAt: null,
+        });
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    isSelectedAnonymousConsumerFinal,
+    selectedCustomerIdForValidation,
+    selectedCustomerTaxIdForValidation,
+    selectedCustomerFiscalProfileForValidation,
+  ]);
+
+  useEffect(() => {
     if (openProductIndex === null) return;
     const query = normalizeQuery(items[openProductIndex]?.productSearch ?? "");
     const timeoutId = window.setTimeout(async () => {
@@ -1134,6 +1344,209 @@ export default function QuotesClient({
     applyPriceListAndRefreshItems({
       nextPriceListId,
       customerPriceListId: selectedCustomer?.defaultPriceListId ?? null,
+    });
+  };
+
+  const updateSelectedCustomer = async ({
+    taxId,
+    fiscalTaxProfile,
+    defaultPriceListId,
+  }: {
+    taxId?: string;
+    fiscalTaxProfile?: CustomerFiscalTaxProfile;
+    defaultPriceListId?: string | null;
+  }) => {
+    if (!selectedCustomer || isSelectedAnonymousConsumerFinal) return;
+
+    setSelectedCustomerDataStatus(null);
+    setIsUpdatingSelectedCustomer(true);
+    try {
+      const nextTaxId =
+        taxId !== undefined
+          ? normalizeTaxId(taxId)
+          : normalizeTaxId(selectedCustomer.taxId ?? "");
+      const nextFiscalTaxProfile =
+        fiscalTaxProfile ??
+        normalizeCustomerFiscalTaxProfile(selectedCustomer.fiscalTaxProfile) ??
+        "CONSUMIDOR_FINAL";
+
+      const res = await fetch("/api/customers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: selectedCustomer.id,
+          displayName: selectedCustomer.displayName,
+          defaultPriceListId:
+            defaultPriceListId === undefined
+              ? selectedCustomer.defaultPriceListId ?? undefined
+              : defaultPriceListId || undefined,
+          email: selectedCustomer.email ?? undefined,
+          phone: selectedCustomer.phone ?? undefined,
+          taxId: nextTaxId || undefined,
+          address: selectedCustomer.address ?? undefined,
+          fiscalTaxProfile: nextFiscalTaxProfile,
+        }),
+      });
+      const data = (await res.json()) as CustomerOption | { error?: string };
+      if (!res.ok) {
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "No se pudo actualizar cliente";
+        setSelectedCustomerDataStatus(errorMessage);
+        return;
+      }
+
+      const updatedCustomer = data as CustomerOption;
+      upsertCustomers([updatedCustomer]);
+      setCustomerSearch(formatCustomerLabel(updatedCustomer));
+      setSelectedCustomerTaxId(normalizeTaxId(updatedCustomer.taxId ?? ""));
+      setSelectedCustomerFiscalTaxProfile(
+        normalizeCustomerFiscalTaxProfile(updatedCustomer.fiscalTaxProfile) ??
+          "CONSUMIDOR_FINAL",
+      );
+      setSelectedCustomerDataStatus("Ficha actualizada.");
+    } catch {
+      setSelectedCustomerDataStatus("No se pudo actualizar cliente");
+    } finally {
+      setIsUpdatingSelectedCustomer(false);
+    }
+  };
+
+  const handleSaveSelectedCustomerFiscalData = async () => {
+    await updateSelectedCustomer({
+      taxId: selectedCustomerTaxId,
+      fiscalTaxProfile: selectedCustomerFiscalTaxProfile,
+    });
+  };
+
+  const handleValidateSelectedCustomerArca = async () => {
+    const taxId = normalizeTaxId(selectedCustomerTaxId);
+    if (!taxId) {
+      setCustomerArcaValidation({
+        status: "warning",
+        message: "Ingresa un CUIT para validar en ARCA.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    setSelectedCustomerDataStatus(null);
+    setIsValidatingSelectedCustomerArca(true);
+    setCustomerArcaValidation({
+      status: "loading",
+      message: "Validando CUIT en ARCA...",
+      suggestedFiscalTaxProfile: null,
+      source: null,
+      checkedAt: null,
+    });
+
+    try {
+      const res = await fetch("/api/arca/taxpayer-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taxId }),
+      });
+      const data = await res.json();
+      const source = typeof data?.source === "string" ? data.source : null;
+      const checkedAt =
+        typeof data?.checkedAt === "string" ? data.checkedAt : null;
+
+      if (!res.ok) {
+        setCustomerArcaValidation({
+          status: "error",
+          message: data?.error ?? "No se pudo validar CUIT en ARCA.",
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      if (data?.taxpayer?.status === "NO_ENCONTRADO") {
+        setCustomerArcaValidation({
+          status: "warning",
+          message: "ARCA no encontro el CUIT cargado.",
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      const arcaTaxStatus =
+        typeof data?.taxpayer?.taxStatus === "string"
+          ? data.taxpayer.taxStatus
+          : null;
+      const suggestedFiscalTaxProfile =
+        inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
+
+      if (!suggestedFiscalTaxProfile) {
+        setCustomerArcaValidation({
+          status: "warning",
+          message: "ARCA no devolvio condicion fiscal clara.",
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      if (suggestedFiscalTaxProfile !== selectedCustomerFiscalTaxProfile) {
+        setCustomerArcaValidation({
+          status: "warning",
+          message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y la ficha tiene ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[selectedCustomerFiscalTaxProfile]}.`,
+          suggestedFiscalTaxProfile,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      setCustomerArcaValidation({
+        status: "ok",
+        message: "CUIT validado con ARCA.",
+        suggestedFiscalTaxProfile,
+        source,
+        checkedAt,
+      });
+      setSelectedCustomerDataStatus("CUIT validado con ARCA.");
+    } catch {
+      setCustomerArcaValidation({
+        status: "error",
+        message: "No se pudo validar CUIT en ARCA.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+    } finally {
+      setIsValidatingSelectedCustomerArca(false);
+    }
+  };
+
+  const handleApplyCustomerArcaSuggestion = async () => {
+    if (!customerArcaValidation.suggestedFiscalTaxProfile) return;
+    setSelectedCustomerFiscalTaxProfile(
+      customerArcaValidation.suggestedFiscalTaxProfile,
+    );
+    await updateSelectedCustomer({
+      fiscalTaxProfile: customerArcaValidation.suggestedFiscalTaxProfile,
+    });
+  };
+
+  const handleSaveSelectedCustomerPriceList = async () => {
+    const nextFiscalTaxProfile = selectedPriceList?.isConsumerFinal
+      ? "CONSUMIDOR_FINAL"
+      : normalizeCustomerFiscalTaxProfile(selectedCustomer?.fiscalTaxProfile) ??
+        selectedCustomerFiscalTaxProfile;
+    await updateSelectedCustomer({
+      defaultPriceListId: selectedPriceListId || null,
+      fiscalTaxProfile: nextFiscalTaxProfile,
     });
   };
 
@@ -1408,19 +1821,6 @@ export default function QuotesClient({
     if (mode === "saveAndCreateSale" && editingId) {
       setStatus("Guardar y confirmar venta solo aplica para nuevos presupuestos");
       return;
-    }
-    if (isPriceListMismatch) {
-      const customerPriceListName =
-        customerDefaultPriceList?.name ?? "lista del cliente";
-      const currentPriceListName = selectedPriceList?.name ?? "otra lista";
-      const shouldContinue = window.confirm(
-        `El cliente tiene asignada la lista "${customerPriceListName}" ` +
-          `pero estas usando "${currentPriceListName}". Queres continuar?`,
-      );
-      if (!shouldContinue) {
-        setStatus("Operacion cancelada");
-        return;
-      }
     }
     if (!confirmConsumerFinalThreshold()) {
       setStatus("Operacion cancelada");
@@ -1881,6 +2281,120 @@ export default function QuotesClient({
   );
   const confirmExtraLabel =
     confirmPreviewExtra === 0 ? "Ajuste" : confirmPreviewExtra > 0 ? "Recargo" : "Descuento";
+  const selectedCustomerProfile = normalizeCustomerFiscalTaxProfile(
+    selectedCustomer?.fiscalTaxProfile,
+  );
+  const shouldShowCustomerDataNotice = Boolean(
+    selectedCustomer &&
+      !isSelectedAnonymousConsumerFinal &&
+      (!selectedCustomer.taxId ||
+        !selectedCustomerProfile ||
+        customerArcaValidation.status === "loading" ||
+        customerArcaValidation.status === "warning" ||
+        customerArcaValidation.status === "error"),
+  );
+  const customerDataNoticeTone =
+    customerArcaValidation.status === "error" ? "rose" : "amber";
+  const customerDataNoticeMessage = !selectedCustomer?.taxId
+    ? "Falta CUIT para validar y facturar con menos friccion."
+    : !selectedCustomerProfile
+      ? "Falta condicion fiscal en la ficha del cliente."
+      : customerArcaValidation.message ??
+        "Revisa los datos fiscales antes de confirmar.";
+  const customerDataNotice = shouldShowCustomerDataNotice ? (
+    <InlineDataNotice
+      tone={customerDataNoticeTone}
+      title="Datos fiscales"
+      message={customerDataNoticeMessage}
+    >
+      <div className="grid gap-2 sm:grid-cols-[minmax(120px,0.8fr)_minmax(150px,1fr)_auto]">
+        <input
+          className="input h-8 text-xs"
+          value={selectedCustomerTaxId}
+          onChange={(event) =>
+            setSelectedCustomerTaxId(normalizeTaxId(event.target.value))
+          }
+          placeholder="CUIT"
+          inputMode="numeric"
+        />
+        <select
+          className="input h-8 cursor-pointer text-xs"
+          value={selectedCustomerFiscalTaxProfile}
+          onChange={(event) =>
+            setSelectedCustomerFiscalTaxProfile(
+              event.target.value as CustomerFiscalTaxProfile,
+            )
+          }
+        >
+          {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+            <option key={profile} value={profile}>
+              {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
+            </option>
+          ))}
+        </select>
+        <div className="flex flex-wrap gap-1.5">
+          {customerArcaValidation.suggestedFiscalTaxProfile ? (
+            <button
+              type="button"
+              className="btn h-8 px-2 text-[11px]"
+              onClick={handleApplyCustomerArcaSuggestion}
+              disabled={isUpdatingSelectedCustomer}
+            >
+              Aplicar ARCA
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleValidateSelectedCustomerArca}
+            disabled={
+              isUpdatingSelectedCustomer || isValidatingSelectedCustomerArca
+            }
+          >
+            {isValidatingSelectedCustomerArca
+              ? "Validando..."
+              : "Validar ARCA"}
+          </button>
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleSaveSelectedCustomerFiscalData}
+            disabled={
+              isUpdatingSelectedCustomer || isValidatingSelectedCustomerArca
+            }
+          >
+            {isUpdatingSelectedCustomer ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </div>
+      {selectedCustomerDataStatus ? (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {selectedCustomerDataStatus}
+        </p>
+      ) : null}
+    </InlineDataNotice>
+  ) : null;
+  const priceListNotice = isPriceListMismatch ? (
+    <InlineDataNotice
+      title="Lista distinta"
+      message={`La ficha usa ${customerDefaultPriceList?.name ?? "otra lista"} y este presupuesto usa ${selectedPriceList?.name ?? "la lista seleccionada"}.`}
+    >
+      <button
+        type="button"
+        className="btn h-8 px-2 text-[11px]"
+        onClick={handleSaveSelectedCustomerPriceList}
+        disabled={isUpdatingSelectedCustomer}
+      >
+        <CheckIcon className="size-3.5" />
+        {isUpdatingSelectedCustomer ? "Guardando..." : "Guardar en cliente"}
+      </button>
+      {selectedCustomerDataStatus ? (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {selectedCustomerDataStatus}
+        </p>
+      ) : null}
+    </InlineDataNotice>
+  ) : null;
 
   return (
     <div className="space-y-8">
@@ -1958,7 +2472,8 @@ export default function QuotesClient({
               consumerFinalThresholdLabel={consumerFinalThresholdLabel}
               priceLists={priceLists}
               selectedPriceListId={selectedPriceListId}
-              showPriceListMismatchWarning={isPriceListMismatch}
+              customerDataNotice={customerDataNotice}
+              priceListNotice={priceListNotice}
               onSelectedPriceListChange={handleSelectedPriceListChange}
               isCustomerOpen={isCustomerOpen}
               customerMatches={customerMatches}

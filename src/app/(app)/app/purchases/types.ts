@@ -12,7 +12,11 @@ export type ProductOption = {
 export type SupplierOption = {
   id: string;
   displayName: string;
+  legalName?: string | null;
   taxId: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address?: string | null;
   arcaVerificationStatus?: string | null;
   arcaVerificationCheckedAt?: string | null;
   arcaVerificationMessage?: string | null;

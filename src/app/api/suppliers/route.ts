@@ -30,6 +30,9 @@ const supplierUpdateSchema = z.object({
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 
+const normalizeTaxId = (value?: string | null) =>
+  value?.replace(/\D/g, "") ?? "";
+
 const parseLimit = (value: string | null) => {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return DEFAULT_PAGE_SIZE;
@@ -168,7 +171,7 @@ export async function PATCH(req: NextRequest) {
 
     const existing = await prisma.supplier.findFirst({
       where: { id: body.id, organizationId },
-      select: { id: true },
+      select: { id: true, taxId: true },
     });
 
     if (!existing) {
@@ -178,15 +181,28 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    const nextTaxId = body.taxId?.trim() || undefined;
+    const didTaxIdChange =
+      body.taxId !== undefined &&
+      normalizeTaxId(nextTaxId) !== normalizeTaxId(existing.taxId);
+
     const supplier = await prisma.supplier.update({
       where: { id: body.id },
       data: {
         displayName: body.displayName.trim(),
         legalName: body.legalName?.trim() || undefined,
-        taxId: body.taxId?.trim() || undefined,
+        taxId: nextTaxId,
         email: body.email?.trim() || undefined,
         phone: body.phone?.trim() || undefined,
         address: body.address?.trim() || undefined,
+        ...(didTaxIdChange
+          ? {
+              arcaVerificationStatus: "PENDING",
+              arcaVerificationCheckedAt: null,
+              arcaVerificationMessage: null,
+              arcaVerificationSnapshot: Prisma.DbNull,
+            }
+          : {}),
       },
     });
 

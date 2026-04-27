@@ -1,9 +1,15 @@
 "use client";
 
-import type { FormEvent, KeyboardEvent } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckIcon, PlusIcon, TrashIcon } from "@/components/icons";
+import {
+  CheckIcon,
+  ExclamationTriangleIcon,
+  PlusIcon,
+  TrashIcon,
+} from "@/components/icons";
+import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { canCancelSupplierPayments } from "@/lib/auth/rbac";
 import { STOCK_ENABLED } from "@/lib/features";
 import { formatCurrencyARS } from "@/lib/format";
@@ -47,6 +53,11 @@ type StockAdjustmentForm = {
   qty: string;
 };
 
+type PurchasePaymentMode =
+  | "CURRENT_ACCOUNT"
+  | "IMMEDIATE_CASH_OUT"
+  | "OFF_BOOK";
+
 const emptyStockAdjustment = (): StockAdjustmentForm => ({
   productId: "",
   productSearch: "",
@@ -65,6 +76,30 @@ const parseOptionalNumber = (value: string) => {
   if (!Number.isFinite(parsed)) return null;
   return parsed;
 };
+
+const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
+
+const PURCHASE_PAYMENT_MODE_OPTIONS: Array<{
+  value: PurchasePaymentMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "CURRENT_ACCOUNT",
+    label: "Cuenta corriente",
+    description: "La compra queda pendiente para pagar luego.",
+  },
+  {
+    value: "IMMEDIATE_CASH_OUT",
+    label: "Pago inmediato",
+    description: "Registra egreso ahora y no deja deuda.",
+  },
+  {
+    value: "OFF_BOOK",
+    label: "Sin impacto",
+    description: "No impacta cuenta corriente ni egreso.",
+  },
+];
 
 function MiniToggle({
   checked,
@@ -103,6 +138,42 @@ function MiniToggle({
   );
 }
 
+function InlineDataNotice({
+  tone = "amber",
+  title,
+  message,
+  children,
+}: {
+  tone?: "amber" | "rose" | "zinc";
+  title: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  const toneClass =
+    tone === "rose"
+      ? "border-rose-200 text-rose-800"
+      : tone === "zinc"
+        ? "border-zinc-200 text-zinc-700"
+        : "border-amber-200 text-amber-800";
+
+  return (
+    <div className={`rounded-xl border bg-white px-3 py-2 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <ExclamationTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wide">
+            {title}
+          </p>
+          <p className="mt-0.5 text-xs leading-relaxed text-zinc-600">
+            {message}
+          </p>
+          {children ? <div className="mt-2">{children}</div> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function PurchasesPage() {
   const [supplierMatches, setSupplierMatches] = useState<SupplierOption[]>([]);
   const [productMatchesByQuery, setProductMatchesByQuery] = useState<
@@ -124,6 +195,16 @@ export default function PurchasesPage() {
 
   const [supplierSearch, setSupplierSearch] = useState("");
   const [supplierId, setSupplierId] = useState("");
+  const [selectedSupplier, setSelectedSupplier] =
+    useState<SupplierOption | null>(null);
+  const [selectedSupplierTaxId, setSelectedSupplierTaxId] = useState("");
+  const [supplierDataStatus, setSupplierDataStatus] = useState<string | null>(
+    null,
+  );
+  const [isUpdatingSelectedSupplier, setIsUpdatingSelectedSupplier] =
+    useState(false);
+  const [isVerifyingSelectedSupplier, setIsVerifyingSelectedSupplier] =
+    useState(false);
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
   const [supplierActiveIndex, setSupplierActiveIndex] = useState(0);
 
@@ -134,7 +215,7 @@ export default function PurchasesPage() {
   );
   const [totalAmount, setTotalAmount] = useState("");
   const [purchaseVatAmount, setPurchaseVatAmount] = useState("");
-  const [impactCurrentAccount, setImpactCurrentAccount] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<PurchasePaymentMode>("OFF_BOOK");
 
   const [adjustStock, setAdjustStock] = useState(false);
   const [stockAdjustments, setStockAdjustments] = useState<StockAdjustmentForm[]>([
@@ -143,23 +224,14 @@ export default function PurchasesPage() {
   const [openProductIndex, setOpenProductIndex] = useState<number | null>(null);
   const [productActiveIndex, setProductActiveIndex] = useState(0);
 
-  const [registerCashOut, setRegisterCashOut] = useState(false);
+  const [cashOutPaymentMethodId, setCashOutPaymentMethodId] = useState("");
   const [cashOutAccountId, setCashOutAccountId] = useState("");
 
-  const [validateWithArca, setValidateWithArca] = useState(false);
   const [arcaVoucherKind, setArcaVoucherKind] = useState<"A" | "B" | "C">(
     "B",
   );
   const [arcaAuthorizationCode, setArcaAuthorizationCode] = useState("");
-  const [showArcaAdvanced, setShowArcaAdvanced] = useState(false);
-  const [arcaAdvanced, setArcaAdvanced] = useState({
-    issuerTaxId: "",
-    pointOfSale: "",
-    voucherType: "",
-    voucherNumber: "",
-    receiverDocType: "",
-    receiverDocNumber: "",
-  });
+  const [arcaPointOfSale, setArcaPointOfSale] = useState("");
   const [arcaValidationResult, setArcaValidationResult] = useState<{
     status: string;
     message: string;
@@ -193,6 +265,8 @@ export default function PurchasesPage() {
   };
 
   const arcaEnabled = hasInvoice;
+  const impactCurrentAccount = paymentMode === "CURRENT_ACCOUNT";
+  const registerCashOut = paymentMode === "IMMEDIATE_CASH_OUT";
 
   const loadPurchases = async () => {
     const res = await fetch("/api/purchases", { cache: "no-store" });
@@ -329,12 +403,18 @@ export default function PurchasesPage() {
   const handleSupplierSearchChange = (value: string) => {
     setSupplierSearch(value);
     setSupplierId("");
+    setSelectedSupplier(null);
+    setSelectedSupplierTaxId("");
+    setSupplierDataStatus(null);
     setIsSupplierOpen(true);
     setSupplierActiveIndex(0);
   };
 
   const handleSupplierSelect = (supplier: SupplierOption) => {
     setSupplierId(supplier.id);
+    setSelectedSupplier(supplier);
+    setSelectedSupplierTaxId(normalizeTaxId(supplier.taxId ?? ""));
+    setSupplierDataStatus(null);
     setSupplierSearch(formatSupplierLabel(supplier));
     setIsSupplierOpen(false);
   };
@@ -375,6 +455,178 @@ export default function PurchasesPage() {
 
     if (event.key === "Escape") {
       setIsSupplierOpen(false);
+    }
+  };
+
+  const mergeSupplier = (supplier: SupplierOption) => {
+    setSelectedSupplier(supplier);
+    setSupplierSearch(formatSupplierLabel(supplier));
+    setSupplierMatches((previous) => {
+      const byId = new Map(previous.map((item) => [item.id, item]));
+      byId.set(supplier.id, supplier);
+      return Array.from(byId.values());
+    });
+    supplierMatchesCacheRef.current.clear();
+  };
+
+  const updateSelectedSupplier = async (patch: {
+    taxId?: string;
+    legalName?: string | null;
+    address?: string | null;
+  }) => {
+    if (!selectedSupplier) return null;
+
+    setSupplierDataStatus(null);
+    setIsUpdatingSelectedSupplier(true);
+    try {
+      const res = await fetch("/api/suppliers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: selectedSupplier.id,
+          displayName: selectedSupplier.displayName,
+          legalName:
+            patch.legalName !== undefined
+              ? patch.legalName || undefined
+              : selectedSupplier.legalName ?? undefined,
+          taxId:
+            patch.taxId !== undefined
+              ? normalizeTaxId(patch.taxId) || undefined
+              : selectedSupplier.taxId ?? undefined,
+          email: selectedSupplier.email ?? undefined,
+          phone: selectedSupplier.phone ?? undefined,
+          address:
+            patch.address !== undefined
+              ? patch.address || undefined
+              : selectedSupplier.address ?? undefined,
+        }),
+      });
+      const data = (await res.json()) as SupplierOption | { error?: string };
+      if (!res.ok) {
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "No se pudo actualizar proveedor";
+        setSupplierDataStatus(errorMessage);
+        return null;
+      }
+
+      const updatedSupplier = data as SupplierOption;
+      mergeSupplier(updatedSupplier);
+      setSelectedSupplierTaxId(normalizeTaxId(updatedSupplier.taxId ?? ""));
+      setSupplierDataStatus("Proveedor actualizado.");
+      return updatedSupplier;
+    } catch {
+      setSupplierDataStatus("No se pudo actualizar proveedor");
+      return null;
+    } finally {
+      setIsUpdatingSelectedSupplier(false);
+    }
+  };
+
+  const handleSaveSelectedSupplierTaxId = async () => {
+    await updateSelectedSupplier({ taxId: selectedSupplierTaxId });
+  };
+
+  const handleLookupAndSaveSelectedSupplier = async () => {
+    if (!selectedSupplier) return;
+    const taxId = normalizeTaxId(selectedSupplierTaxId);
+    if (!taxId) {
+      setSupplierDataStatus("Ingresa un CUIT para buscar.");
+      return;
+    }
+
+    setSupplierDataStatus(null);
+    setIsUpdatingSelectedSupplier(true);
+    try {
+      const res = await fetch("/api/arca/taxpayer-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taxId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSupplierDataStatus(data?.error ?? "No se pudo consultar ARCA");
+        return;
+      }
+
+      const taxpayer = data?.taxpayer;
+      const legalName =
+        typeof taxpayer?.legalName === "string"
+          ? taxpayer.legalName
+          : typeof taxpayer?.displayName === "string"
+            ? taxpayer.displayName
+            : null;
+      const address =
+        typeof taxpayer?.address === "string" ? taxpayer.address : null;
+
+      const updatedSupplier = await updateSelectedSupplier({
+        taxId,
+        legalName: legalName ?? selectedSupplier.legalName ?? null,
+        address: address ?? selectedSupplier.address ?? null,
+      });
+      if (updatedSupplier) {
+        const source =
+          typeof data?.source === "string" ? ` (${data.source})` : "";
+        setSupplierDataStatus(`Datos ARCA actualizados${source}.`);
+      }
+    } catch {
+      setSupplierDataStatus("No se pudo consultar ARCA");
+    } finally {
+      setIsUpdatingSelectedSupplier(false);
+    }
+  };
+
+  const handleVerifySelectedSupplier = async () => {
+    if (!selectedSupplier) return;
+    if (!normalizeTaxId(selectedSupplier.taxId ?? selectedSupplierTaxId)) {
+      setSupplierDataStatus("Carga CUIT antes de verificar.");
+      return;
+    }
+
+    setSupplierDataStatus(null);
+    setIsVerifyingSelectedSupplier(true);
+    try {
+      const res = await fetch("/api/suppliers/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplierId: selectedSupplier.id,
+          taxId: normalizeTaxId(selectedSupplierTaxId) || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSupplierDataStatus(data?.error ?? "No se pudo verificar");
+        return;
+      }
+
+      const updatedSupplier: SupplierOption = {
+        ...selectedSupplier,
+        taxId: typeof data?.taxId === "string" ? data.taxId : selectedSupplier.taxId,
+        arcaVerificationStatus:
+          typeof data?.status === "string"
+            ? data.status
+            : selectedSupplier.arcaVerificationStatus,
+        arcaVerificationCheckedAt:
+          typeof data?.checkedAt === "string"
+            ? data.checkedAt
+            : selectedSupplier.arcaVerificationCheckedAt,
+        arcaVerificationMessage:
+          typeof data?.message === "string"
+            ? data.message
+            : selectedSupplier.arcaVerificationMessage,
+      };
+      mergeSupplier(updatedSupplier);
+      setSelectedSupplierTaxId(normalizeTaxId(updatedSupplier.taxId ?? ""));
+      setSupplierDataStatus(`ARCA: ${data.status} - ${data.message}`);
+    } catch {
+      setSupplierDataStatus("No se pudo verificar");
+    } finally {
+      setIsVerifyingSelectedSupplier(false);
     }
   };
 
@@ -479,23 +731,8 @@ export default function PurchasesPage() {
       authorizationCode: arcaAuthorizationCode.trim(),
     };
 
-    if (arcaAdvanced.issuerTaxId.trim()) {
-      payload.issuerTaxId = arcaAdvanced.issuerTaxId.trim();
-    }
-    if (arcaAdvanced.pointOfSale.trim()) {
-      payload.pointOfSale = Number(arcaAdvanced.pointOfSale);
-    }
-    if (arcaAdvanced.voucherType.trim()) {
-      payload.voucherType = Number(arcaAdvanced.voucherType);
-    }
-    if (arcaAdvanced.voucherNumber.trim()) {
-      payload.voucherNumber = arcaAdvanced.voucherNumber.trim();
-    }
-    if (arcaAdvanced.receiverDocType.trim()) {
-      payload.receiverDocType = arcaAdvanced.receiverDocType.trim();
-    }
-    if (arcaAdvanced.receiverDocNumber.trim()) {
-      payload.receiverDocNumber = arcaAdvanced.receiverDocNumber.trim();
+    if (arcaPointOfSale.trim()) {
+      payload.pointOfSale = Number(arcaPointOfSale);
     }
 
     return payload;
@@ -589,13 +826,18 @@ export default function PurchasesPage() {
       return;
     }
 
+    if (registerCashOut && !cashOutPaymentMethodId) {
+      setStatus("Selecciona un metodo de pago para el egreso");
+      return;
+    }
+
     if (registerCashOut && !cashOutAccountId) {
       setStatus("Selecciona una cuenta para registrar el egreso");
       return;
     }
 
     const arcaPayload = arcaEnabled ? buildArcaPayload() : null;
-    if (arcaEnabled && validateWithArca && !arcaPayload) {
+    if (arcaEnabled && !arcaPayload) {
       setStatus("Completa los datos del comprobante para validar ARCA");
       return;
     }
@@ -621,12 +863,12 @@ export default function PurchasesPage() {
               }))
             : undefined,
           registerCashOut,
+          cashOutPaymentMethodId: registerCashOut
+            ? cashOutPaymentMethodId
+            : undefined,
           cashOutAccountId: registerCashOut ? cashOutAccountId : undefined,
-          validateWithArca: arcaEnabled && validateWithArca,
-          arcaValidation:
-            arcaEnabled && validateWithArca && arcaPayload
-              ? { ...arcaPayload }
-              : undefined,
+          validateWithArca: arcaEnabled,
+          arcaValidation: arcaEnabled && arcaPayload ? { ...arcaPayload } : undefined,
         }),
       });
       const data = await res.json();
@@ -637,26 +879,21 @@ export default function PurchasesPage() {
 
       setSupplierSearch("");
       setSupplierId("");
+      setSelectedSupplier(null);
+      setSelectedSupplierTaxId("");
+      setSupplierDataStatus(null);
       setHasInvoice(false);
       setInvoiceNumber("");
       setTotalAmount("");
       setPurchaseVatAmount("");
-      setImpactCurrentAccount(false);
+      setPaymentMode("OFF_BOOK");
       setAdjustStock(false);
       setStockAdjustments([emptyStockAdjustment()]);
-      setRegisterCashOut(false);
+      setCashOutPaymentMethodId("");
       setCashOutAccountId("");
-      setValidateWithArca(false);
       setArcaVoucherKind("B");
       setArcaAuthorizationCode("");
-      setArcaAdvanced({
-        issuerTaxId: "",
-        pointOfSale: "",
-        voucherType: "",
-        voucherNumber: "",
-        receiverDocType: "",
-        receiverDocNumber: "",
-      });
+      setArcaPointOfSale("");
       setArcaValidationResult(null);
       setStatus("Compra registrada");
       await loadPurchases();
@@ -714,6 +951,90 @@ export default function PurchasesPage() {
 
     return next;
   }, [purchases, query, sortOrder]);
+
+  const selectedSupplierVerificationStatus =
+    selectedSupplier?.arcaVerificationStatus ?? "PENDING";
+  const selectedSupplierEffectiveTaxId =
+    normalizeTaxId(selectedSupplierTaxId) ||
+    normalizeTaxId(selectedSupplier?.taxId ?? "");
+  const selectedSupplierHasTaxId = Boolean(
+    selectedSupplierEffectiveTaxId,
+  );
+  const shouldShowSupplierDataNotice = Boolean(
+    selectedSupplier &&
+      (!selectedSupplierHasTaxId ||
+        selectedSupplierVerificationStatus !== "MATCH"),
+  );
+  const supplierNoticeTone =
+    selectedSupplierVerificationStatus === "MISMATCH" ||
+    selectedSupplierVerificationStatus === "NO_ENCONTRADO" ||
+    selectedSupplierVerificationStatus === "ERROR"
+      ? "rose"
+      : "amber";
+  const supplierNoticeMessage = !selectedSupplierHasTaxId
+    ? "Falta CUIT para validar comprobantes y ordenar la ficha del proveedor."
+    : selectedSupplierVerificationStatus === "PARTIAL"
+      ? "La razon social tiene coincidencia parcial con ARCA."
+      : selectedSupplierVerificationStatus === "MISMATCH"
+        ? "La razon social no coincide con ARCA."
+        : selectedSupplierVerificationStatus === "NO_ENCONTRADO"
+          ? "ARCA no encontro el CUIT cargado."
+          : selectedSupplierVerificationStatus === "ERROR"
+            ? selectedSupplier?.arcaVerificationMessage ??
+              "No se pudo verificar el proveedor."
+            : "Proveedor pendiente de verificacion ARCA.";
+  const supplierDataNotice = shouldShowSupplierDataNotice ? (
+    <InlineDataNotice
+      tone={supplierNoticeTone}
+      title="Datos del proveedor"
+      message={supplierNoticeMessage}
+    >
+      <div className="grid gap-2 sm:grid-cols-[minmax(140px,1fr)_auto]">
+        <input
+          className="input h-8 text-xs"
+          value={selectedSupplierTaxId}
+          onChange={(event) =>
+            setSelectedSupplierTaxId(normalizeTaxId(event.target.value))
+          }
+          placeholder="CUIT"
+          inputMode="numeric"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleLookupAndSaveSelectedSupplier}
+            disabled={isUpdatingSelectedSupplier}
+          >
+            {isUpdatingSelectedSupplier ? "Buscando..." : "Buscar ARCA"}
+          </button>
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleSaveSelectedSupplierTaxId}
+            disabled={isUpdatingSelectedSupplier}
+          >
+            Guardar
+          </button>
+          {selectedSupplierHasTaxId ? (
+            <button
+              type="button"
+              className="btn h-8 px-2 text-[11px]"
+              onClick={handleVerifySelectedSupplier}
+              disabled={isVerifyingSelectedSupplier}
+            >
+              {isVerifyingSelectedSupplier ? "Verificando..." : "Verificar"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {supplierDataStatus ? (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {supplierDataStatus}
+        </p>
+      ) : null}
+    </InlineDataNotice>
+  ) : null;
 
   return (
     <div className="space-y-6">
@@ -885,10 +1206,11 @@ export default function PurchasesPage() {
                     ) : null}
                   </AnimatePresence>
                 </div>
+                {supplierDataNotice}
               </label>
 
               <label className="field-stack">
-                <span className="input-label">Fecha</span>
+                <span className="input-label">Fecha comprobante</span>
                 <input
                   type="date"
                   className="input cursor-pointer"
@@ -901,261 +1223,235 @@ export default function PurchasesPage() {
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="field-stack">
                 <span className="input-label">Total compra</span>
-                <input
-                  className="input text-right"
-                  inputMode="decimal"
-                  value={totalAmount}
-                  onChange={(event) =>
-                    setTotalAmount(normalizeDecimalInput(event.target.value, 2))
-                  }
-                  placeholder="0,00"
-                  required
-                />
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                    $
+                  </span>
+                  <MoneyInput
+                    className="input no-spinner w-full pl-10 text-right tabular-nums"
+                    value={totalAmount}
+                    onValueChange={setTotalAmount}
+                    placeholder="0,00"
+                    maxDecimals={2}
+                    required
+                  />
+                </div>
               </label>
               <label className="field-stack">
                 <span className="input-label">IVA compra (opc.)</span>
-                <input
-                  className="input text-right"
-                  inputMode="decimal"
-                  value={purchaseVatAmount}
-                  onChange={(event) =>
-                    setPurchaseVatAmount(
-                      normalizeDecimalInput(event.target.value, 2),
-                    )
-                  }
-                  placeholder="0,00"
-                />
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                    $
+                  </span>
+                  <MoneyInput
+                    className="input no-spinner w-full pl-10 text-right tabular-nums"
+                    value={purchaseVatAmount}
+                    onValueChange={setPurchaseVatAmount}
+                    placeholder="0,00"
+                    maxDecimals={2}
+                  />
+                </div>
               </label>
             </div>
 
-            <div className="grid gap-3 rounded-2xl border border-zinc-200/70 bg-white/45 p-3 sm:grid-cols-2 xl:grid-cols-4">
-              <MiniToggle
-                checked={hasInvoice}
-                onChange={(next) => {
-                  setHasInvoice(next);
-                  if (!next) {
-                    setInvoiceNumber("");
-                    setArcaAuthorizationCode("");
-                    setValidateWithArca(false);
-                    setShowArcaAdvanced(false);
-                    setArcaValidationResult(null);
-                  }
-                }}
-                label="Tiene factura"
-              />
-              <MiniToggle
-                checked={impactCurrentAccount}
-                onChange={setImpactCurrentAccount}
-                label="Impacta cuenta corriente"
-              />
-              {STOCK_ENABLED ? (
-                <MiniToggle
-                  checked={adjustStock}
-                  onChange={setAdjustStock}
-                  label="Ajustar stock"
-                />
-              ) : null}
-              <MiniToggle
-                checked={registerCashOut}
-                onChange={setRegisterCashOut}
-                label="Registrar egreso ahora"
-              />
-            </div>
-
-            {registerCashOut ? (
-              <label className="field-stack max-w-md">
-                <span className="input-label">Cuenta de egreso</span>
-                <select
-                  className="input cursor-pointer"
-                  value={cashOutAccountId}
-                  onChange={(event) => setCashOutAccountId(event.target.value)}
-                  required
-                >
-                  <option value="">Selecciona cuenta</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name} ({account.currencyCode})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-
-            {hasInvoice ? (
-              <div className="space-y-4 rounded-2xl border border-zinc-200/70 bg-white/40 p-4">
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <label className="field-stack">
-                    <span className="input-label">Tipo</span>
-                    <select
-                      className="input cursor-pointer"
-                      value={arcaVoucherKind}
-                      onChange={(event) =>
-                        setArcaVoucherKind(event.target.value as "A" | "B" | "C")
+            <div className="space-y-3">
+              <div className="space-y-3 rounded-2xl border border-zinc-200/70 bg-white/45 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Factura
+                  </p>
+                  <MiniToggle
+                    checked={hasInvoice}
+                    onChange={(next) => {
+                      setHasInvoice(next);
+                      if (!next) {
+                        setInvoiceNumber("");
+                        setArcaAuthorizationCode("");
+                        setArcaPointOfSale("");
+                        setArcaValidationResult(null);
                       }
-                    >
-                      <option value="A">Factura A</option>
-                      <option value="B">Factura B</option>
-                      <option value="C">Factura C</option>
-                    </select>
-                  </label>
-                  <label className="field-stack">
-                    <span className="input-label">Numero comprobante</span>
-                    <input
-                      className="input"
-                      value={invoiceNumber}
-                      onChange={(event) => setInvoiceNumber(event.target.value)}
-                      placeholder="0001-00001234"
-                    />
-                  </label>
-                  <label className="field-stack">
-                    <span className="input-label">Fecha comprobante</span>
-                    <input
-                      type="date"
-                      className="input cursor-pointer"
-                      value={invoiceDate}
-                      onChange={(event) => setInvoiceDate(event.target.value)}
-                    />
-                  </label>
-                  <label className="field-stack">
-                    <span className="input-label">CAE</span>
-                    <input
-                      className="input"
-                      value={arcaAuthorizationCode}
-                      onChange={(event) =>
-                        setArcaAuthorizationCode(event.target.value)
-                      }
-                      placeholder="Codigo autorizacion"
-                    />
-                  </label>
+                    }}
+                    label="Tiene factura"
+                  />
                 </div>
 
-                <MiniToggle
-                  checked={validateWithArca}
-                  onChange={setValidateWithArca}
-                  disabled={!arcaEnabled}
-                  label="Validar con ARCA al guardar"
-                />
+                {hasInvoice ? (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      <label className="field-stack w-full sm:w-[220px]">
+                        <span className="input-label">Tipo</span>
+                        <select
+                          className="input cursor-pointer"
+                          value={arcaVoucherKind}
+                          onChange={(event) =>
+                            setArcaVoucherKind(event.target.value as "A" | "B" | "C")
+                          }
+                        >
+                          <option value="A">Factura A</option>
+                          <option value="B">Factura B</option>
+                          <option value="C">Factura C</option>
+                        </select>
+                      </label>
+                      <label className="field-stack w-full sm:w-[220px]">
+                        <span className="input-label">Numero comprobante</span>
+                        <input
+                          className="input"
+                          value={invoiceNumber}
+                          onChange={(event) => setInvoiceNumber(event.target.value)}
+                          placeholder="0001-00001234"
+                        />
+                      </label>
+                      <label className="field-stack w-full sm:w-[220px]">
+                        <span className="input-label">Punto de venta (opc.)</span>
+                        <input
+                          className="input"
+                          inputMode="numeric"
+                          placeholder="Ej: 1"
+                          value={arcaPointOfSale}
+                          onChange={(event) =>
+                            setArcaPointOfSale(event.target.value.replace(/\D/g, ""))
+                          }
+                        />
+                      </label>
+                      <label className="field-stack w-full sm:w-[220px]">
+                        <span className="input-label">CAE</span>
+                        <input
+                          className="input"
+                          value={arcaAuthorizationCode}
+                          onChange={(event) =>
+                            setArcaAuthorizationCode(event.target.value)
+                          }
+                          placeholder="Codigo autorizacion"
+                        />
+                      </label>
+                    </div>
 
-                <p className="text-[11px] text-zinc-500">
-                  CUIT emisor/receptor y punto de venta se derivan desde proveedor
-                  y configuracion fiscal. Avanzado solo para override tecnico.
-                </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-sky text-xs"
+                        onClick={handleValidateArcaOnly}
+                        disabled={isArcaValidating}
+                      >
+                        {isArcaValidating ? "Validando..." : "Validar ahora en ARCA"}
+                      </button>
+                      {arcaValidationResult ? (
+                        <span className="pill border border-zinc-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase text-zinc-700">
+                          {arcaValidationResult.status}
+                        </span>
+                      ) : null}
+                      {arcaValidationResult ? (
+                        <span className="text-xs text-zinc-500">
+                          {arcaValidationResult.message}
+                        </span>
+                      ) : null}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    Activa esta opcion para cargar y validar el comprobante.
+                  </p>
+                )}
+              </div>
 
-                <button
-                  type="button"
-                  className="btn text-xs"
-                  onClick={() => setShowArcaAdvanced((prev) => !prev)}
-                >
-                  {showArcaAdvanced ? "Ocultar avanzado" : "Mostrar avanzado"}
-                </button>
+              <div className="space-y-3 rounded-2xl border border-zinc-200/70 bg-white/45 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Pago
+                  </p>
+                  {STOCK_ENABLED ? (
+                    <MiniToggle
+                      checked={adjustStock}
+                      onChange={setAdjustStock}
+                      label="Ajustar stock"
+                    />
+                  ) : null}
+                </div>
 
-                {showArcaAdvanced ? (
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Modalidad de pago
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {PURCHASE_PAYMENT_MODE_OPTIONS.map((option) => {
+                      const isActive = paymentMode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          aria-pressed={isActive}
+                          onClick={() => {
+                            setPaymentMode(option.value);
+                            if (option.value !== "IMMEDIATE_CASH_OUT") {
+                              setCashOutPaymentMethodId("");
+                              setCashOutAccountId("");
+                            }
+                          }}
+                          className={`rounded-2xl border px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+                            isActive
+                              ? "border-sky-300 bg-sky-50/80 text-sky-950 shadow-[0_8px_20px_-16px_rgba(14,116,144,0.5)]"
+                              : "border-zinc-200 bg-white/80 text-zinc-700 hover:border-zinc-300 hover:bg-white"
+                          }`}
+                        >
+                          <p className="text-sm font-semibold">{option.label}</p>
+                          <p
+                            className={`mt-1 text-[11px] ${
+                              isActive ? "text-sky-700" : "text-zinc-500"
+                            }`}
+                          >
+                            {option.description}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {registerCashOut ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <label className="field-stack">
-                      <span className="input-label">CUIT emisor (override)</span>
-                      <input
-                        className="input"
-                        value={arcaAdvanced.issuerTaxId}
+                      <span className="input-label">Metodo de pago</span>
+                      <select
+                        className="input cursor-pointer"
+                        value={cashOutPaymentMethodId}
                         onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            issuerTaxId: event.target.value,
-                          }))
+                          setCashOutPaymentMethodId(event.target.value)
                         }
-                      />
+                        disabled={!paymentMethods.length}
+                        required
+                      >
+                        <option value="">
+                          {paymentMethods.length
+                            ? "Selecciona metodo"
+                            : "Sin metodos activos"}
+                        </option>
+                        {paymentMethods.map((method) => (
+                          <option key={method.id} value={method.id}>
+                            {method.name}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label className="field-stack">
-                      <span className="input-label">Punto de venta</span>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        value={arcaAdvanced.pointOfSale}
-                        onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            pointOfSale: event.target.value.replace(/\D/g, ""),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="field-stack">
-                      <span className="input-label">Tipo num.</span>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        value={arcaAdvanced.voucherType}
-                        onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            voucherType: event.target.value.replace(/\D/g, ""),
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="field-stack">
-                      <span className="input-label">Numero num.</span>
-                      <input
-                        className="input"
-                        value={arcaAdvanced.voucherNumber}
-                        onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            voucherNumber: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="field-stack">
-                      <span className="input-label">Doc receptor tipo</span>
-                      <input
-                        className="input"
-                        value={arcaAdvanced.receiverDocType}
-                        onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            receiverDocType: event.target.value,
-                          }))
-                        }
-                      />
-                    </label>
-                    <label className="field-stack sm:col-span-2 lg:col-span-3">
-                      <span className="input-label">Doc receptor numero</span>
-                      <input
-                        className="input"
-                        value={arcaAdvanced.receiverDocNumber}
-                        onChange={(event) =>
-                          setArcaAdvanced((prev) => ({
-                            ...prev,
-                            receiverDocNumber: event.target.value,
-                          }))
-                        }
-                      />
+                      <span className="input-label">Cuenta de egreso</span>
+                      <select
+                        className="input cursor-pointer"
+                        value={cashOutAccountId}
+                        onChange={(event) => setCashOutAccountId(event.target.value)}
+                        required
+                      >
+                        <option value="">Selecciona cuenta</option>
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} ({account.currencyCode})
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 ) : null}
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-sky text-xs"
-                    onClick={handleValidateArcaOnly}
-                    disabled={isArcaValidating}
-                  >
-                    {isArcaValidating ? "Validando..." : "Validar ahora"}
-                  </button>
-                  {arcaValidationResult ? (
-                    <span className="pill border border-zinc-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase text-zinc-700">
-                      {arcaValidationResult.status}
-                    </span>
-                  ) : null}
-                  {arcaValidationResult ? (
-                    <span className="text-xs text-zinc-500">
-                      {arcaValidationResult.message}
-                    </span>
-                  ) : null}
-                </div>
               </div>
-            ) : null}
+            </div>
 
             {STOCK_ENABLED && adjustStock ? (
               <div className="space-y-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-4">

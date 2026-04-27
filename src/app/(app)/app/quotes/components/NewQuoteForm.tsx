@@ -1,6 +1,12 @@
 "use client";
 
-import type { Dispatch, FormEvent, KeyboardEvent, SetStateAction } from "react";
+import type {
+  Dispatch,
+  FormEvent,
+  KeyboardEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckIcon, PlusIcon, TrashIcon } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
@@ -27,7 +33,8 @@ type NewQuoteFormProps = {
   consumerFinalThresholdLabel: string;
   priceLists: PriceListOption[];
   selectedPriceListId: string;
-  showPriceListMismatchWarning: boolean;
+  customerDataNotice?: ReactNode;
+  priceListNotice?: ReactNode;
   onSelectedPriceListChange: (value: string) => void;
   isCustomerOpen: boolean;
   customerMatches: CustomerOption[];
@@ -89,7 +96,8 @@ export function NewQuoteForm({
   consumerFinalThresholdLabel,
   priceLists,
   selectedPriceListId,
-  showPriceListMismatchWarning,
+  customerDataNotice,
+  priceListNotice,
   onSelectedPriceListChange,
   isCustomerOpen,
   customerMatches,
@@ -287,6 +295,7 @@ export function NewQuoteForm({
                   continuar.
                 </p>
               ) : null}
+              {customerDataNotice}
             </div>
           </div>
 
@@ -317,12 +326,7 @@ export function NewQuoteForm({
                   </option>
                 ))}
               </select>
-              {showPriceListMismatchWarning ? (
-                <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-                  Advertencia: la lista seleccionada no coincide con la lista del
-                  cliente.
-                </p>
-              ) : null}
+              {priceListNotice}
             </div>
           </div>
         </div>

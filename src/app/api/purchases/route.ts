@@ -36,6 +36,7 @@ const purchaseSchema = z.object({
   adjustStock: z.boolean().optional(),
   stockAdjustments: z.array(stockAdjustmentSchema).optional(),
   registerCashOut: z.boolean().optional(),
+  cashOutPaymentMethodId: z.string().min(1).optional(),
   cashOutAccountId: z.string().min(1).optional(),
 });
 
@@ -156,11 +157,43 @@ export async function POST(req: NextRequest) {
           currencyCode: string;
         }
       | null = null;
+    let cashOutPaymentMethod:
+      | {
+          id: string;
+          name: string;
+        }
+      | null = null;
 
     if (registerCashOut) {
+      if (!body.cashOutPaymentMethodId) {
+        return NextResponse.json(
+          { error: "Selecciona un metodo de pago para registrar egreso" },
+          { status: 400 },
+        );
+      }
+
       if (!body.cashOutAccountId) {
         return NextResponse.json(
           { error: "Selecciona una cuenta para registrar egreso" },
+          { status: 400 },
+        );
+      }
+
+      cashOutPaymentMethod = await prisma.paymentMethod.findFirst({
+        where: {
+          id: body.cashOutPaymentMethodId,
+          organizationId,
+          isActive: true,
+        },
+        select: {
+          id: true,
+          name: true,
+        },
+      });
+
+      if (!cashOutPaymentMethod) {
+        return NextResponse.json(
+          { error: "Metodo de pago invalido" },
           { status: 400 },
         );
       }
@@ -281,7 +314,7 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      if (registerCashOut && cashOutAccount) {
+      if (registerCashOut && cashOutAccount && cashOutPaymentMethod) {
         await tx.accountMovement.create({
           data: {
             organizationId,
@@ -290,7 +323,7 @@ export async function POST(req: NextRequest) {
             direction: "OUT",
             amount: totalAmount.toFixed(2),
             currencyCode: cashOutAccount.currencyCode,
-            note: `Compra ${purchaseInvoice.invoiceNumber ?? purchaseInvoice.id}`,
+            note: `Compra ${purchaseInvoice.invoiceNumber ?? purchaseInvoice.id} · ${cashOutPaymentMethod.name}`,
           },
         });
       }

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { z } from "zod";
 import { ToastContainer, toast } from "react-toastify";
+import { EyeIcon, EyeSlashIcon } from "@/components/icons";
 import { canAccessDashboard } from "@/lib/auth/rbac";
 import "react-toastify/dist/ReactToastify.css";
 
@@ -18,6 +19,7 @@ export default function LoginForm() {
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -89,14 +91,30 @@ export default function LoginForm() {
             <label className="mb-1 block text-xs uppercase tracking-wide text-zinc-500">
               Contraseña
             </label>
-            <input
-              type="password"
-              className="input w-full"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="********"
-              required
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                className="input w-full pr-10"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="********"
+                required
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 inline-flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={
+                  showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
+                }
+              >
+                {showPassword ? (
+                  <EyeSlashIcon className="size-4" />
+                ) : (
+                  <EyeIcon className="size-4" />
+                )}
+              </button>
+            </div>
           </div>
           <button
             type="submit"
