@@ -43,11 +43,21 @@ export function inferFiscalTaxProfileFromArcaTaxStatus(
 ): CustomerFiscalTaxProfile | null {
   if (!taxStatus) return null;
   const normalized = normalizeArcaText(taxStatus);
+  const normalizedWords = normalized.replace(/[^A-Z0-9]+/g, " ").trim();
+  if (normalized.includes("MONOTRIB")) {
+    return "MONOTRIBUTISTA";
+  }
   if (normalized.includes("RESPONSABLE INSCRIPTO")) {
     return "RESPONSABLE_INSCRIPTO";
   }
-  if (normalized.includes("MONOTRIB")) {
-    return "MONOTRIBUTISTA";
+  if (
+    !normalizedWords.includes("EXENTO") &&
+    !normalizedWords.includes("NO ALCANZADO") &&
+    !normalizedWords.includes("NO INSCRIPTO") &&
+    (/\bIVA\b/.test(normalizedWords) ||
+      normalizedWords.includes("IMPUESTO AL VALOR AGREGADO"))
+  ) {
+    return "RESPONSABLE_INSCRIPTO";
   }
   if (normalized.includes("CONSUMIDOR FINAL")) {
     return "CONSUMIDOR_FINAL";

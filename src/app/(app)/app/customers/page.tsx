@@ -181,7 +181,7 @@ export default function CustomersPage() {
       const res = await fetch("/api/arca/taxpayer-lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ taxId }),
+        body: JSON.stringify({ taxId, forceRefresh: true }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -212,7 +212,7 @@ export default function CustomersPage() {
         }));
       }
       const statusText = fiscalTaxProfile
-        ? `Condicion fiscal sugerida: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
+        ? `Condicion fiscal aplicada al formulario: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
         : "ARCA no devolvio condicion fiscal clara.";
       setStatus(`Datos ARCA actualizados (${data.source}). ${statusText}`);
     } catch {

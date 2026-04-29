@@ -69,6 +69,32 @@ function extractValueByKeys(value: unknown, keys: string[], depth = 0): unknown 
   return undefined;
 }
 
+function collectValuesByKeys(value: unknown, keys: string[], depth = 0): unknown[] {
+  if (depth > 6 || value === null || value === undefined) return [];
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectValuesByKeys(item, keys, depth + 1));
+  }
+
+  if (typeof value !== "object") return [];
+
+  const record = value as Record<string, unknown>;
+  const wanted = new Set(keys.map((item) => normalizeKey(item)));
+  const matches: unknown[] = [];
+
+  for (const [key, raw] of Object.entries(record)) {
+    if (wanted.has(normalizeKey(key))) {
+      matches.push(raw);
+    }
+  }
+
+  for (const nested of Object.values(record)) {
+    matches.push(...collectValuesByKeys(nested, keys, depth + 1));
+  }
+
+  return matches;
+}
+
 function asString(value: unknown) {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") {
@@ -79,6 +105,15 @@ function asString(value: unknown) {
     return String(value);
   }
   return null;
+}
+
+function normalizeArcaText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
 }
 
 function compactStrings(values: Array<string | null | undefined>) {
@@ -215,6 +250,114 @@ function buildDisplayName(
   return merged || "Sin nombre";
 }
 
+function collectStringValuesByKeys(value: unknown, keys: string[]) {
+  const seen = new Set<string>();
+  const values: string[] = [];
+
+  for (const raw of collectValuesByKeys(value, keys)) {
+    const text = asString(raw);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    values.push(text);
+  }
+
+  return values;
+}
+
+function isMeaningfulPayload(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.some(isMeaningfulPayload);
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(asString(value));
+}
+
+function hasMeaningfulValueByKeys(value: unknown, keys: string[]) {
+  return collectValuesByKeys(value, keys).some(isMeaningfulPayload);
+}
+
+function isIvaRegisteredHint(value: string) {
+  const normalized = normalizeArcaText(value);
+  if (
+    normalized.includes("EXENTO") ||
+    normalized.includes("NO ALCANZADO") ||
+    normalized.includes("NO INSCRIPTO")
+  ) {
+    return false;
+  }
+
+  return (
+    normalized === "IVA" ||
+    normalized.includes(" IVA ") ||
+    normalized.startsWith("IVA ") ||
+    normalized.endsWith(" IVA") ||
+    normalized.includes("IMPUESTO AL VALOR AGREGADO") ||
+    normalized.includes("RESPONSABLE INSCRIPTO")
+  );
+}
+
+function extractTaxStatus(payload: unknown): string | null {
+  const directTaxStatus =
+    asString(
+      extractValueByKeys(payload, [
+        "taxStatus",
+        "condicionFiscal",
+        "descripcionCondicionFiscal",
+        "condicionIva",
+        "descripcionCondicionIva",
+      ])
+    ) ?? null;
+  const taxHints = compactStrings([
+    directTaxStatus,
+    ...collectStringValuesByKeys(payload, [
+      "descripcionImpuesto",
+      "descripcionCategoria",
+      "categoria",
+      "categoriaMonotributo",
+      "descripcionRegimen",
+    ]),
+  ]);
+  const normalizedHints = taxHints.map(normalizeArcaText);
+  const taxCodeHints = collectStringValuesByKeys(payload, [
+    "idImpuesto",
+    "codigoImpuesto",
+    "codImpuesto",
+  ]).map((value) => value.trim());
+
+  if (
+    normalizedHints.some((value) => value.includes("MONOTRIB")) ||
+    taxCodeHints.includes("20") ||
+    hasMeaningfulValueByKeys(payload, ["datosMonotributo", "monotributo"])
+  ) {
+    return "Monotributo";
+  }
+
+  if (
+    normalizedHints.some((value) => value.includes("RESPONSABLE INSCRIPTO")) ||
+    taxHints.some(isIvaRegisteredHint) ||
+    taxCodeHints.includes("30")
+  ) {
+    return "IVA Responsable inscripto";
+  }
+
+  return directTaxStatus ?? taxHints[0] ?? null;
+}
+
+function normalizeCachedTaxpayerPayload(
+  payload: unknown,
+  fallbackTaxId: string
+): TaxpayerLookupData {
+  if (!payload || typeof payload !== "object") {
+    return normalizeTaxpayerPayload(payload, fallbackTaxId);
+  }
+
+  const cached = payload as Partial<TaxpayerLookupData>;
+  if (cached.raw !== undefined && cached.raw !== null) {
+    return normalizeTaxpayerPayload(cached.raw, cached.taxId ?? fallbackTaxId);
+  }
+
+  return cached as TaxpayerLookupData;
+}
+
 export function normalizeTaxpayerPayload(
   payload: unknown,
   fallbackTaxId: string
@@ -272,15 +415,7 @@ export function normalizeTaxpayerPayload(
         "tipopersona",
       ])
     ) ?? null;
-  const taxStatus =
-    asString(
-      extractValueByKeys(payload, [
-        "descripcionImpuesto",
-        "impuesto",
-        "condicionIva",
-        "descripcionCondicionIva",
-      ])
-    ) ?? null;
+  const taxStatus = extractTaxStatus(payload);
   const state =
     asString(
       extractValueByKeys(payload, [
@@ -345,10 +480,14 @@ export async function lookupTaxpayerByCuit(input: {
     });
 
     if (cache && cache.expiresAt.getTime() > now.getTime()) {
+      const taxpayer = normalizeCachedTaxpayerPayload(
+        cache.payload,
+        normalizedTaxId
+      );
       return {
         source: "cache" as LookupSource,
         checkedAt: cache.checkedAt.toISOString(),
-        taxpayer: cache.payload as TaxpayerLookupData,
+        taxpayer,
       };
     }
   }

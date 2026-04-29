@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeTaxpayerPayload } from "../src/lib/arca/taxpayer-lookup";
+import { inferFiscalTaxProfileFromArcaTaxStatus } from "../src/lib/customers/fiscal-profile";
 
 test("normalizeTaxpayerPayload is tolerant to changed getPersona_v2 tags", () => {
   const normalized = normalizeTaxpayerPayload(
@@ -43,4 +44,56 @@ test("normalizeTaxpayerPayload returns NO_ENCONTRADO snapshot when payload is em
   assert.equal(normalized.displayName, "No encontrado");
   assert.equal(normalized.address, null);
   assert.equal(normalized.raw, null);
+});
+
+test("normalizeTaxpayerPayload infers monotributo from ARCA tax blocks", () => {
+  const normalized = normalizeTaxpayerPayload(
+    {
+      personaReturn: {
+        datosGenerales: {
+          idPersona: "20-11222333-4",
+          razonSocial: "Servicio Austral",
+        },
+        datosMonotributo: {
+          categoriaMonotributo: {
+            descripcionCategoria: "Monotributo Categoria C",
+          },
+          impuesto: [{ descripcionImpuesto: "MONOTRIBUTO" }],
+        },
+      },
+    },
+    "20112223334"
+  );
+
+  assert.equal(normalized.taxStatus, "Monotributo");
+  assert.equal(
+    inferFiscalTaxProfileFromArcaTaxStatus(normalized.taxStatus),
+    "MONOTRIBUTISTA"
+  );
+});
+
+test("normalizeTaxpayerPayload infers responsable inscripto from IVA tax blocks", () => {
+  const normalized = normalizeTaxpayerPayload(
+    {
+      personaReturn: {
+        datosGenerales: {
+          idPersona: "30-71122233-4",
+          razonSocial: "Frio Industrial S.A.",
+        },
+        datosRegimenGeneral: {
+          impuesto: [
+            { descripcionImpuesto: "GANANCIAS SOCIEDADES" },
+            { descripcionImpuesto: "IVA" },
+          ],
+        },
+      },
+    },
+    "30711222334"
+  );
+
+  assert.equal(normalized.taxStatus, "IVA Responsable inscripto");
+  assert.equal(
+    inferFiscalTaxProfileFromArcaTaxStatus(normalized.taxStatus),
+    "RESPONSABLE_INSCRIPTO"
+  );
 });
