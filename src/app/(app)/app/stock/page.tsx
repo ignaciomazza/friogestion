@@ -962,22 +962,22 @@ export default function StockPage() {
           />
         </div>
         <div className="table-scroll">
-          <table className="w-full min-w-[1020px] text-left text-xs">
+          <table className="w-full min-w-[860px] text-left text-xs">
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="w-[220px] py-2 pr-2">Producto</th>
                 <th className="w-[108px] py-2 pr-2">Costo ARS</th>
                 <th className="w-[108px] py-2 pr-2">Costo USD</th>
                 {priceLists.map((priceList) => (
-                  <th key={priceList.id} className="w-[132px] py-2 pr-2">
+                  <th key={priceList.id} className="w-[96px] py-2 pr-2">
                     Precio {priceList.name}
                   </th>
                 ))}
                 {STOCK_ACCOUNTING_ENABLED ? (
                   <th className="w-[220px] py-2 pr-2">Stock</th>
                 ) : null}
-                <th className="sticky right-0 z-20 w-[158px] bg-white/95 py-2 pr-2 text-right">
-                  Guardar
+                <th className="sticky right-0 z-20 w-[104px] bg-white/95 py-2 pr-2 text-right">
+                  <span className="sr-only">Acciones</span>
                 </th>
               </tr>
             </thead>
@@ -1270,7 +1270,7 @@ export default function StockPage() {
                             key={`${product.id}-${priceList.id}`}
                             className="py-3 pr-2 align-top"
                           >
-                            <div className="w-32 space-y-1">
+                            <div className="w-20 space-y-1">
                               <MoneyInput
                                 className="input no-spinner w-full px-2 text-right tabular-nums"
                                 value={draft.percentages[priceList.id] ?? ""}
@@ -1413,12 +1413,20 @@ export default function StockPage() {
                         </div>
                         <button
                           type="button"
-                          className="btn btn-emerald h-10 text-xs"
+                          className="btn btn-emerald h-10 w-10 p-0"
                           disabled={draft.isSaving || isLoading || !hasRowChanges}
                           onClick={() => saveRow(product.id)}
+                          aria-label={
+                            draft.isSaving ? "Guardando cambios" : "Guardar cambios"
+                          }
+                          title={
+                            draft.isSaving ? "Guardando cambios" : "Guardar cambios"
+                          }
                         >
                           <CheckIcon className="size-4" />
-                          {draft.isSaving ? "Guardando..." : "Guardar"}
+                          <span className="sr-only">
+                            {draft.isSaving ? "Guardando..." : "Guardar"}
+                          </span>
                         </button>
                       </div>
                     </td>
