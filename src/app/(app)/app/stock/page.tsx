@@ -13,6 +13,11 @@ import {
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { STOCK_ACCOUNTING_ENABLED, STOCK_PAGE_ENABLED } from "@/lib/features";
 import { normalizeDecimalInput } from "@/lib/input-format";
+import {
+  DEFAULT_STOCK_SORT,
+  normalizeStockSort,
+  type StockSort,
+} from "@/lib/stock-sort";
 import { UNIT_LABELS, UNIT_VALUES, UNIT_OPTIONS } from "@/lib/units";
 
 type PriceListOption = {
@@ -80,10 +85,34 @@ type LoadStockOptions = {
   append?: boolean;
   limit?: number;
   searchQuery?: string;
+  sortOrder?: StockSort;
 };
 
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const SEARCH_DEBOUNCE_MS = 260;
+const STOCK_SORT_STORAGE_KEY = "friogestion.stock.sort";
+
+const STOCK_SORT_OPTIONS: Array<{ value: StockSort; label: string }> = [
+  { value: "created-desc", label: "Creacion reciente" },
+  { value: "created-asc", label: "Creacion antigua" },
+  { value: "code-asc", label: "Codigo A-Z" },
+  { value: "code-desc", label: "Codigo Z-A" },
+  { value: "name-asc", label: "Nombre A-Z" },
+  { value: "name-desc", label: "Nombre Z-A" },
+  { value: "brand-asc", label: "Marca A-Z" },
+  { value: "brand-desc", label: "Marca Z-A" },
+];
+
+const readSavedStockSort = () => {
+  if (typeof window === "undefined") return DEFAULT_STOCK_SORT;
+
+  try {
+    const savedSort = window.localStorage.getItem(STOCK_SORT_STORAGE_KEY);
+    return normalizeStockSort(savedSort);
+  } catch {
+    return DEFAULT_STOCK_SORT;
+  }
+};
 
 const normalizeMoney = (value: string) => normalizeDecimalInput(value, 2);
 const normalizePercent = (value: string) => normalizeDecimalInput(value, 4);
@@ -268,6 +297,8 @@ export default function StockPage() {
   const [rows, setRows] = useState<Record<string, RowDraft>>({});
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<StockSort>(DEFAULT_STOCK_SORT);
+  const [isSortOrderReady, setIsSortOrderReady] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [totalProducts, setTotalProducts] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
@@ -355,6 +386,21 @@ export default function StockPage() {
     }
   }, [router]);
 
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+    setSortOrder(readSavedStockSort());
+    setIsSortOrderReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isSortOrderReady) return;
+    try {
+      window.localStorage.setItem(STOCK_SORT_STORAGE_KEY, sortOrder);
+    } catch {
+      // Ignore storage failures and keep the in-memory order.
+    }
+  }, [isSortOrderReady, sortOrder]);
+
   const hydrateRows = (
     nextProducts: StockProduct[],
     nextPriceLists: PriceListOption[],
@@ -397,6 +443,7 @@ export default function StockPage() {
       append = false,
       limit = DEFAULT_STOCK_PAGE_SIZE,
       searchQuery = "",
+      sortOrder: requestedSortOrder = sortOrder,
     }: LoadStockOptions = {}) => {
       if (!STOCK_PAGE_ENABLED) return;
 
@@ -412,6 +459,7 @@ export default function StockPage() {
         const searchParams = new URLSearchParams();
         searchParams.set("limit", String(limit));
         searchParams.set("offset", String(offset));
+        searchParams.set("sort", requestedSortOrder);
         if (searchQuery) {
           searchParams.set("q", searchQuery);
         }
@@ -458,7 +506,7 @@ export default function StockPage() {
         }
       }
     },
-    [],
+    [sortOrder],
   );
 
   useEffect(() => {
@@ -470,13 +518,13 @@ export default function StockPage() {
   }, [query]);
 
   useEffect(() => {
-    if (!STOCK_PAGE_ENABLED) return;
+    if (!STOCK_PAGE_ENABLED || !isSortOrderReady) return;
     loadStock({
       offset: 0,
       append: false,
       searchQuery: debouncedQuery,
     }).catch(() => undefined);
-  }, [loadStock, debouncedQuery]);
+  }, [loadStock, debouncedQuery, isSortOrderReady]);
 
   useEffect(() => {
     if (!showProductForm) return;
@@ -569,6 +617,10 @@ export default function StockPage() {
       }
       return next;
     });
+  };
+
+  const handleSortOrderChange = (value: string) => {
+    setSortOrder(normalizeStockSort(value));
   };
 
   const nudgeCalculatorQuantity = (productId: string, step: number) => {
@@ -953,13 +1005,30 @@ export default function StockPage() {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
             Costos y listas de precios
           </h2>
-          <input
-            className="input w-full max-w-sm"
-            ref={productSearchInputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Buscar por nombre o codigo"
-          />
+          <div className="flex w-full flex-wrap items-center justify-start gap-3 sm:w-auto sm:flex-nowrap sm:justify-end">
+            <label className="inline-flex items-center gap-2">
+              <span className="text-xs font-medium text-zinc-500">Ordenar</span>
+              <select
+                className="input cursor-pointer border-sky-200 text-xs text-sky-950 focus:border-sky-300"
+                value={sortOrder}
+                onChange={(event) => handleSortOrderChange(event.target.value)}
+                aria-label="Ordenar stock"
+              >
+                {STOCK_SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <input
+              className="input min-w-[260px] flex-1 sm:w-96 sm:flex-none"
+              ref={productSearchInputRef}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Buscar por nombre o codigo"
+            />
+          </div>
         </div>
         <div className="table-scroll">
           <table className="w-full min-w-[860px] text-left text-xs">
@@ -1063,7 +1132,7 @@ export default function StockPage() {
                   >
                     <td className="py-3 pr-2 align-top">
                       <div
-                        className="flex min-h-10 max-w-[220px] min-w-0 items-center gap-2 whitespace-nowrap"
+                        className="flex min-h-10 max-w-[220px] min-w-0 flex-col justify-center gap-0.5"
                       >
                         <p
                           className="min-w-0 truncate text-sm font-medium text-zinc-900"
@@ -1078,9 +1147,18 @@ export default function StockPage() {
                         >
                           {product.name}
                         </p>
-                        <p className="truncate text-[11px] text-zinc-500">
-                          {product.sku ? `Cod ${product.sku} · ` : ""}
-                          {formatUnit(product.unit)}
+                        <p className="max-w-full text-[11px] leading-snug text-zinc-500">
+                          {product.sku ? (
+                            <>
+                              <span className="break-all font-medium tabular-nums text-zinc-600">
+                                {product.sku}
+                              </span>
+                              <span className="text-zinc-400"> · </span>
+                            </>
+                          ) : null}
+                          <span className="whitespace-nowrap">
+                            {formatUnit(product.unit)}
+                          </span>
                         </p>
                       </div>
                     </td>

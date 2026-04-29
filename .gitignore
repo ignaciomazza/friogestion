@@ -48,3 +48,5 @@ provedores.PDF
 import-data.json
 extract-refrigeracion-victoria.py
 import-refrigeracion-victoria.ts
+productos-import.json
+productos.PDF

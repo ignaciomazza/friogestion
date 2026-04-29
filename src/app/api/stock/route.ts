@@ -9,6 +9,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { aggregateStockByProduct } from "@/lib/stock-balance";
 import { STOCK_ENABLED } from "@/lib/features";
+import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const MAX_STOCK_PAGE_SIZE = 200;
@@ -29,10 +30,59 @@ const stockPatchSchema = z.object({
     .optional(),
 });
 
+const productOrderBy = (
+  sort: StockSort,
+): Prisma.ProductOrderByWithRelationInput[] => {
+  if (sort === "created-asc") {
+    return [{ createdAt: "asc" }, { id: "asc" }];
+  }
+  if (sort === "code-asc") {
+    return [
+      { sku: { sort: "asc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "code-desc") {
+    return [
+      { sku: { sort: "desc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "name-asc") {
+    return [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
+  if (sort === "name-desc") {
+    return [{ name: "desc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
+  if (sort === "brand-asc") {
+    return [
+      { brand: { sort: "asc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "brand-desc") {
+    return [
+      { brand: { sort: "desc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+
+  return [{ createdAt: "desc" }, { id: "asc" }];
+};
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
     const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const sort = normalizeStockSort(req.nextUrl.searchParams.get("sort"));
     const requestedLimit = Number(req.nextUrl.searchParams.get("limit") ?? "");
     const requestedOffset = Number(req.nextUrl.searchParams.get("offset") ?? "");
     const limit = Number.isFinite(requestedLimit)
@@ -56,7 +106,7 @@ export async function GET(req: NextRequest) {
       prisma.product.count({ where: productWhere }),
       prisma.product.findMany({
         where: productWhere,
-        orderBy: [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }],
+        orderBy: productOrderBy(sort),
         skip: offset,
         take: limit,
       }),
