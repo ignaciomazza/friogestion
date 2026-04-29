@@ -51,6 +51,18 @@ type FinancingFormState = {
   startDate: string;
 };
 
+type EditableReceipt = {
+  id: string;
+  receivedAt: string;
+  lines: Array<{
+    paymentMethodId: string;
+    accountId: string | null;
+    currencyCode: string;
+    amount: string;
+    fxRateUsed: string | null;
+  }>;
+};
+
 type ReceiptFormProps = {
   saleId: string;
   saleTotal: string | null;
@@ -58,6 +70,10 @@ type ReceiptFormProps = {
   accounts: AccountOption[];
   currencies: CurrencyOption[];
   latestUsdRate: string | null;
+  receipt?: EditableReceipt;
+  allowFinancing?: boolean;
+  submitLabel?: string;
+  onCancel?: () => void;
   onCreated: () => void;
 };
 
@@ -90,6 +106,26 @@ const buildFinancingForm = (): FinancingFormState => ({
   startDate: new Date().toISOString().slice(0, 10),
 });
 
+const buildReceiptLines = (
+  receipt: EditableReceipt | undefined,
+  paymentMethods: PaymentMethodOption[],
+  currencies: CurrencyOption[],
+  latestUsdRate: string | null,
+) => {
+  if (!receipt?.lines.length) {
+    return [buildLine(paymentMethods, currencies, latestUsdRate)];
+  }
+
+  return receipt.lines.map((line) => ({
+    mode: "SIMPLE" as const,
+    paymentMethodId: line.paymentMethodId,
+    accountId: line.accountId ?? "",
+    currencyCode: line.currencyCode,
+    amount: line.amount,
+    fxRateUsed: line.fxRateUsed ?? "",
+  }));
+};
+
 const toLineBaseAmount = (line: Pick<ReceiptLineForm, "currencyCode" | "amount" | "fxRateUsed">) => {
   const amount = Number(line.amount || 0);
   const fx = Number(line.fxRateUsed || 0);
@@ -105,11 +141,20 @@ export function ReceiptForm({
   accounts,
   currencies,
   latestUsdRate,
+  receipt,
+  allowFinancing = true,
+  submitLabel,
+  onCancel,
   onCreated,
 }: ReceiptFormProps) {
-  const [lines, setLines] = useState<ReceiptLineForm[]>(() => [
-    buildLine(paymentMethods, currencies, latestUsdRate),
-  ]);
+  const isEditing = Boolean(receipt);
+  const canUseFinancing = allowFinancing && !isEditing;
+  const [lines, setLines] = useState<ReceiptLineForm[]>(() =>
+    buildReceiptLines(receipt, paymentMethods, currencies, latestUsdRate),
+  );
+  const [receivedAtInput, setReceivedAtInput] = useState(
+    receipt?.receivedAt ? receipt.receivedAt.slice(0, 10) : "",
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [hasFinancingPlan, setHasFinancingPlan] = useState(false);
@@ -137,8 +182,11 @@ export function ReceiptForm({
   const saleTotalBase = Number(saleTotal ?? 0);
 
   const installmentLines = useMemo(
-    () => lines.filter((line) => line.mode === "INSTALLMENTS"),
-    [lines],
+    () =>
+      canUseFinancing
+        ? lines.filter((line) => line.mode === "INSTALLMENTS")
+        : [],
+    [canUseFinancing, lines],
   );
   const hasInstallmentLines = installmentLines.length > 0;
   const firstInstallmentLineIndex = lines.findIndex(
@@ -167,6 +215,19 @@ export function ReceiptForm({
   const financingInstallmentValue = financingTotal / installmentsCountValue;
 
   useEffect(() => {
+    if (!receipt) return;
+    setLines(buildReceiptLines(receipt, paymentMethods, currencies, latestUsdRate));
+    setReceivedAtInput(receipt.receivedAt.slice(0, 10));
+    setStatus(null);
+  }, [receipt, paymentMethods, currencies, latestUsdRate]);
+
+  useEffect(() => {
+    if (!canUseFinancing) {
+      setHasFinancingPlan(false);
+      setIsPlanLoading(false);
+      return;
+    }
+
     let cancelled = false;
 
     const loadPlan = async () => {
@@ -216,7 +277,7 @@ export function ReceiptForm({
     return () => {
       cancelled = true;
     };
-  }, [saleId, paymentMethods, currencies, latestUsdRate]);
+  }, [canUseFinancing, saleId, paymentMethods, currencies, latestUsdRate]);
 
   const addLine = () => {
     setLines((prev) => [
@@ -401,10 +462,12 @@ export function ReceiptForm({
 
       if (linesWithAmount.length) {
         const res = await fetch("/api/receipts", {
-          method: "POST",
+          method: isEditing ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            id: receipt?.id,
             saleId,
+            receivedAt: isEditing ? receivedAtInput : undefined,
             lines: linesWithAmount.map((line) => ({
               paymentMethodId: line.paymentMethodId,
               accountId: line.accountId,
@@ -427,8 +490,10 @@ export function ReceiptForm({
           return;
         }
 
-        setLines([buildLine(paymentMethods, currencies, latestUsdRate)]);
-        const receiptMessage = "Cobro confirmado";
+        if (!isEditing) {
+          setLines([buildLine(paymentMethods, currencies, latestUsdRate)]);
+        }
+        const receiptMessage = isEditing ? "Cobro actualizado" : "Cobro confirmado";
         setStatus(
           financingSaved
             ? `${receiptMessage}. Plan de cuotas guardado`
@@ -461,9 +526,23 @@ export function ReceiptForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
+      {isEditing ? (
+        <label className="field-stack max-w-48">
+          <span className="input-label">Fecha de cobro</span>
+          <input
+            type="date"
+            className="input cursor-pointer text-xs"
+            value={receivedAtInput}
+            onChange={(event) => setReceivedAtInput(event.target.value)}
+            required
+          />
+        </label>
+      ) : null}
+
       <div className="space-y-3">
         {lines.map((line, index) => {
-          const isInstallmentLine = line.mode === "INSTALLMENTS";
+          const isInstallmentLine =
+            canUseFinancing && line.mode === "INSTALLMENTS";
           const isFinancingConfigHost =
             isInstallmentLine && index === firstInstallmentLineIndex;
 
@@ -481,45 +560,47 @@ export function ReceiptForm({
               key={`${line.paymentMethodId}-${index}`}
               className="flex flex-wrap items-end gap-3 rounded-2xl border border-sky-200 bg-white/70 p-3"
             >
-              <div className="field-stack min-w-36">
-                <span className="input-label">Modo</span>
-                <div className="segmented-toggle">
-                  <span
-                    className={`segmented-toggle-indicator ${
-                      isInstallmentLine ? "translate-x-full" : "translate-x-0"
-                    }`}
-                    aria-hidden
-                  />
-                  <button
-                    type="button"
-                    className={`segmented-toggle-item ${
-                      !isInstallmentLine ? "segmented-toggle-item-active" : ""
-                    }`}
-                    onClick={() => updateLineMode(index, "SIMPLE")}
-                    aria-pressed={!isInstallmentLine}
-                  >
-                    Simple
-                  </button>
-                  <button
-                    type="button"
-                    className={`segmented-toggle-item ${
-                      isInstallmentLine ? "segmented-toggle-item-active" : ""
-                    }`}
-                    onClick={() => updateLineMode(index, "INSTALLMENTS")}
-                    aria-pressed={isInstallmentLine}
-                  >
-                    Cuotas
-                  </button>
+              {canUseFinancing ? (
+                <div className="field-stack min-w-36">
+                  <span className="input-label">Modo</span>
+                  <div className="segmented-toggle">
+                    <span
+                      className={`segmented-toggle-indicator ${
+                        isInstallmentLine ? "translate-x-full" : "translate-x-0"
+                      }`}
+                      aria-hidden
+                    />
+                    <button
+                      type="button"
+                      className={`segmented-toggle-item ${
+                        !isInstallmentLine ? "segmented-toggle-item-active" : ""
+                      }`}
+                      onClick={() => updateLineMode(index, "SIMPLE")}
+                      aria-pressed={!isInstallmentLine}
+                    >
+                      Simple
+                    </button>
+                    <button
+                      type="button"
+                      className={`segmented-toggle-item ${
+                        isInstallmentLine ? "segmented-toggle-item-active" : ""
+                      }`}
+                      onClick={() => updateLineMode(index, "INSTALLMENTS")}
+                      aria-pressed={isInstallmentLine}
+                    >
+                      Cuotas
+                    </button>
+                  </div>
+                  {index === 0 && isPlanLoading ? (
+                    <p className="mt-1 text-[10px] text-zinc-500">Cargando plan...</p>
+                  ) : null}
+                  {index === 0 && !hasInstallmentLines && hasFinancingPlan && !isPlanLoading ? (
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      Hay un plan de cuotas guardado.
+                    </p>
+                  ) : null}
                 </div>
-                {index === 0 && isPlanLoading ? (
-                  <p className="mt-1 text-[10px] text-zinc-500">Cargando plan...</p>
-                ) : null}
-                {index === 0 && !hasInstallmentLines && hasFinancingPlan && !isPlanLoading ? (
-                  <p className="mt-1 text-[10px] text-zinc-500">
-                    Hay un plan de cuotas guardado.
-                  </p>
-                ) : null}
-              </div>
+              ) : null}
 
               {!isInstallmentLine ? (
                 <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
@@ -705,12 +786,26 @@ export function ReceiptForm({
 
       <div className="flex flex-wrap items-center gap-3">
         {status ? <span className="text-xs text-zinc-500">{status}</span> : null}
+        {onCancel ? (
+          <button
+            type="button"
+            className="btn text-xs"
+            onClick={onCancel}
+            disabled={isSubmitting}
+          >
+            Cancelar
+          </button>
+        ) : null}
         <button
           type="submit"
           className="btn btn-sky ml-auto"
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Registrando..." : "Registrar cobro"}
+          {isSubmitting
+            ? isEditing
+              ? "Guardando..."
+              : "Registrando..."
+            : submitLabel ?? (isEditing ? "Guardar cobro" : "Registrar cobro")}
         </button>
       </div>
     </form>

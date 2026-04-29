@@ -2,7 +2,11 @@
 
 import { Fragment, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDownTrayIcon } from "@/components/icons";
+import {
+  ArrowDownTrayIcon,
+  PencilSquareIcon,
+  TrashIcon,
+} from "@/components/icons";
 import { formatCurrencyARS } from "@/lib/format";
 import type { SaleRow } from "../types";
 import { ReceiptForm } from "./ReceiptForm";
@@ -33,6 +37,8 @@ type CurrencyOption = {
 
 type ReceiptLineRow = {
   id: string;
+  paymentMethodId: string;
+  accountId: string | null;
   paymentMethodName: string;
   accountName: string | null;
   currencyCode: string;
@@ -84,6 +90,8 @@ export function SalesRecentTable({
   const [receiptStatus, setReceiptStatus] = useState<Record<string, string>>({});
   const [tableStatus, setTableStatus] = useState<string | null>(null);
   const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
+  const [editingReceiptId, setEditingReceiptId] = useState<string | null>(null);
+  const [deletingReceiptId, setDeletingReceiptId] = useState<string | null>(null);
 
   const loadReceipts = async (saleId: string) => {
     setLoadingReceiptId(saleId);
@@ -142,6 +150,43 @@ export function SalesRecentTable({
       setTableStatus("No se pudo cancelar");
     } finally {
       setDeletingSaleId(null);
+    }
+  };
+
+  const handleDeleteReceipt = async (saleId: string, receipt: ReceiptRow) => {
+    if (!window.confirm("Eliminar este cobro? La venta volvera a recalcular su saldo.")) {
+      return;
+    }
+
+    setDeletingReceiptId(receipt.id);
+    setReceiptStatus((prev) => ({ ...prev, [saleId]: "" }));
+    try {
+      const res = await fetch(`/api/receipts?id=${encodeURIComponent(receipt.id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        setReceiptStatus((prev) => ({
+          ...prev,
+          [saleId]: data?.error ?? "No se pudo eliminar el cobro",
+        }));
+        return;
+      }
+
+      setEditingReceiptId((prev) => (prev === receipt.id ? null : prev));
+      setReceiptStatus((prev) => ({
+        ...prev,
+        [saleId]: "Cobro eliminado",
+      }));
+      await loadReceipts(saleId);
+      await onReceiptsUpdated();
+    } catch {
+      setReceiptStatus((prev) => ({
+        ...prev,
+        [saleId]: "No se pudo eliminar el cobro",
+      }));
+    } finally {
+      setDeletingReceiptId(null);
     }
   };
 
@@ -372,8 +417,11 @@ export function SalesRecentTable({
                                           <p className="text-[11px] uppercase tracking-wide text-zinc-500">
                                             Recibo Nro {receipt.receiptNumber ?? "-"}
                                           </p>
+                                          <p className="mt-1 text-[11px] text-zinc-500">
+                                            {new Date(receipt.receivedAt).toLocaleDateString("es-AR")}
+                                          </p>
                                         </div>
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex flex-wrap items-center gap-2">
                                           <span className="text-sm font-semibold text-zinc-900">
                                             {formatCurrencyARS(receipt.total)}
                                           </span>
@@ -386,6 +434,35 @@ export function SalesRecentTable({
                                             <ArrowDownTrayIcon className="size-4" />
                                             Recibo
                                           </a>
+                                          {canManage ? (
+                                            <>
+                                              <button
+                                                type="button"
+                                                className="btn text-xs"
+                                                onClick={() =>
+                                                  setEditingReceiptId((prev) =>
+                                                    prev === receipt.id ? null : receipt.id
+                                                  )
+                                                }
+                                              >
+                                                <PencilSquareIcon className="size-4" />
+                                                Editar
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="btn text-xs border-rose-200 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                                onClick={() =>
+                                                  void handleDeleteReceipt(sale.id, receipt)
+                                                }
+                                                disabled={deletingReceiptId === receipt.id}
+                                              >
+                                                <TrashIcon className="size-4" />
+                                                {deletingReceiptId === receipt.id
+                                                  ? "Eliminando..."
+                                                  : "Eliminar"}
+                                              </button>
+                                            </>
+                                          ) : null}
                                         </div>
                                       </div>
                                       {receipt.lines.length ? (
@@ -408,6 +485,27 @@ export function SalesRecentTable({
                                             </li>
                                           ))}
                                         </ul>
+                                      ) : null}
+                                      {editingReceiptId === receipt.id ? (
+                                        <div className="mt-3 rounded-2xl border border-dashed border-sky-200 bg-sky-50/40 p-3">
+                                          <ReceiptForm
+                                            saleId={sale.id}
+                                            saleTotal={sale.total}
+                                            paymentMethods={paymentMethods}
+                                            accounts={accounts}
+                                            currencies={currencies}
+                                            latestUsdRate={latestUsdRate}
+                                            receipt={receipt}
+                                            allowFinancing={false}
+                                            submitLabel="Guardar cobro"
+                                            onCancel={() => setEditingReceiptId(null)}
+                                            onCreated={() => {
+                                              setEditingReceiptId(null);
+                                              void loadReceipts(sale.id);
+                                              onReceiptsUpdated();
+                                            }}
+                                          />
+                                        </div>
                                       ) : null}
                                     </div>
                                   ))}
