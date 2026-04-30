@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDownTrayIcon,
@@ -28,6 +29,7 @@ import { cn } from "@/lib/cn";
 import { ADMIN_ROLES, DASHBOARD_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
 import { STOCK_PAGE_ENABLED } from "@/lib/features";
+import { requestAppNavigation } from "@/lib/navigation-guard";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
 
 type TopbarClientProps = {
@@ -225,6 +227,7 @@ export default function TopbarClient({
       : null;
 
   const handleLogout = async () => {
+    if (!requestAppNavigation()) return;
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
   };
@@ -300,11 +303,18 @@ export default function TopbarClient({
         <div className="space-y-1">
           {section.items.map((item) => {
             const isActive = isActivePath(item.href);
+            const handleNavClick = (event: MouseEvent<HTMLAnchorElement>) => {
+              if (!requestAppNavigation()) {
+                event.preventDefault();
+                return;
+              }
+              onNavigate?.();
+            };
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={onNavigate}
+                onClick={handleNavClick}
                 title={compactLayout ? item.label : undefined}
                 className={cn(
                   "group relative flex h-9 items-center rounded-2xl border border-transparent py-2 text-zinc-700 transition-all",

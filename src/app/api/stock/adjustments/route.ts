@@ -16,6 +16,7 @@ const adjustmentSchema = z.object({
   }),
   note: z.string().max(280).optional(),
   occurredAt: z.string().optional(),
+  clientRequestId: z.string().min(8).max(120).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -49,6 +50,34 @@ export async function POST(req: NextRequest) {
 
     const stockByProduct = aggregateStockByProduct(movements);
     const currentStock = stockByProduct.get(body.productId) ?? 0;
+    const idempotencyTag = body.clientRequestId
+      ? `[stock-adjustment:${body.clientRequestId}]`
+      : null;
+    const existingMovement = idempotencyTag
+      ? await prisma.stockMovement.findFirst({
+          where: {
+            organizationId,
+            productId: body.productId,
+            type: "ADJUST",
+            note: { contains: idempotencyTag },
+          },
+          select: { id: true },
+        })
+      : null;
+
+    if (existingMovement) {
+      return NextResponse.json({
+        id: existingMovement.id,
+        currentStock: currentStock.toFixed(3),
+        projectedStock: currentStock.toFixed(3),
+        warning:
+          currentStock < 0
+            ? "Advertencia: el stock quedaria en negativo."
+            : null,
+        alreadyApplied: true,
+      });
+    }
+
     const projectedStock = currentStock + body.qty;
     const warning =
       projectedStock < 0
@@ -62,6 +91,7 @@ export async function POST(req: NextRequest) {
     const note = body.note?.trim()
       ? `Ajuste manual: ${body.note.trim()}`
       : "Ajuste manual";
+    const movementNote = idempotencyTag ? `${note} ${idempotencyTag}` : note;
 
     const movement = await prisma.stockMovement.create({
       data: {
@@ -70,7 +100,7 @@ export async function POST(req: NextRequest) {
         type: "ADJUST",
         qty: body.qty.toFixed(3),
         occurredAt,
-        note,
+        note: movementNote,
       },
       select: { id: true },
     });

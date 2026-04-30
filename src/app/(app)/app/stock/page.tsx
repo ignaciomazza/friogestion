@@ -1,9 +1,10 @@
 "use client";
 
 import type { FocusEvent, FormEvent, MouseEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
+import { ToastContainer, toast, type Id as ToastId } from "react-toastify";
 import {
   CalculatorIcon,
   CheckIcon,
@@ -18,7 +19,9 @@ import {
   normalizeStockSort,
   type StockSort,
 } from "@/lib/stock-sort";
+import { APP_NAVIGATION_GUARD_EVENT } from "@/lib/navigation-guard";
 import { UNIT_LABELS, UNIT_VALUES, UNIT_OPTIONS } from "@/lib/units";
+import "react-toastify/dist/ReactToastify.css";
 
 type PriceListOption = {
   id: string;
@@ -47,13 +50,18 @@ type StockProduct = {
   prices: StockPrice[];
 };
 
+type StockSaveStatus = "idle" | "queued" | "saving" | "saved" | "failed";
+
 type RowDraft = {
   cost: string;
   costUsd: string;
   percentages: Record<string, string>;
   adjustmentQty: string;
+  adjustmentRequestId: string | null;
   calculatorQty: string;
   isSaving: boolean;
+  saveStatus: StockSaveStatus;
+  saveError: string | null;
   warning: string | null;
 };
 
@@ -88,9 +96,81 @@ type LoadStockOptions = {
   sortOrder?: StockSort;
 };
 
+type StockPriceUpdate = {
+  priceListId: string;
+  price: number | null;
+  isDefault: boolean;
+};
+
+type StockSaveJob = {
+  productId: string;
+  cost: number | null;
+  costChanged: boolean;
+  costUsd: number | null;
+  costUsdChanged: boolean;
+  priceUpdates: StockPriceUpdate[];
+  adjustmentQty: number | null;
+  adjustmentRequestId: string | null;
+};
+
+type StockSaveQueueStats = {
+  total: number;
+  saved: number;
+  failed: number;
+};
+
+type StockSaveQueueSummary = StockSaveQueueStats & {
+  pending: number;
+  active: number;
+};
+
+type StockRowChangeState = {
+  currentCost: number | null;
+  currentCostUsd: number | null;
+  computedPrices: Record<string, number | null>;
+  costChanged: boolean;
+  costUsdChanged: boolean;
+  pricesChanged: boolean;
+  adjustment: number;
+  adjustmentChanged: boolean;
+  hasPercentagesWithoutCost: boolean;
+  hasRowChanges: boolean;
+};
+
+type StockSaveBuildResult =
+  | { ok: true; job: StockSaveJob }
+  | { ok: false; error: string };
+
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const SEARCH_DEBOUNCE_MS = 260;
+const STOCK_SAVE_CONCURRENCY = 3;
 const STOCK_SORT_STORAGE_KEY = "friogestion.stock.sort";
+const STOCK_SAVE_TOAST_ID = "stock-save-queue";
+const STOCK_EXIT_BLOCKED_TOAST_ID = "stock-exit-blocked";
+
+const INITIAL_SAVE_QUEUE_SUMMARY: StockSaveQueueSummary = {
+  total: 0,
+  saved: 0,
+  failed: 0,
+  pending: 0,
+  active: 0,
+};
+
+const createEmptyRowDraft = (
+  overrides: Partial<RowDraft> = {},
+): RowDraft => ({
+  cost: "",
+  costUsd: "",
+  percentages: {},
+  adjustmentQty: "",
+  adjustmentRequestId: null,
+  calculatorQty: "1",
+  isSaving: false,
+  saveStatus: "idle",
+  saveError: null,
+  warning: null,
+  ...overrides,
+});
 
 const STOCK_SORT_OPTIONS: Array<{ value: StockSort; label: string }> = [
   { value: "created-desc", label: "Creacion reciente" },
@@ -118,6 +198,14 @@ const normalizeMoney = (value: string) => normalizeDecimalInput(value, 2);
 const normalizePercent = (value: string) => normalizeDecimalInput(value, 4);
 const normalizeCalculatorQuantity = (value: string) =>
   normalizeDecimalInput(value, 3);
+
+const createStockAdjustmentRequestId = () => {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2, 12);
+  return `stock-adjustment-${Date.now()}-${random}`;
+};
 
 const normalizeSignedQuantity = (value: string) => {
   const trimmed = value.trim();
@@ -259,6 +347,133 @@ const derivePercentagesFromPrices = (
   return derived;
 };
 
+const getStockRowChangeState = (
+  product: StockProduct,
+  draft: RowDraft,
+  priceLists: PriceListOption[],
+): StockRowChangeState => {
+  const currentCost = parseNumber(draft.cost);
+  const currentCostUsd = parseNumber(draft.costUsd);
+  const computedPrices = calculatePricesFromPercentages(
+    currentCost,
+    draft.percentages,
+    priceLists,
+  );
+  const costChanged =
+    normalizePriceNumber(currentCost) !==
+    normalizePriceNumber(parseNumber(product.cost));
+  const costUsdChanged =
+    normalizePriceNumber(currentCostUsd) !==
+    normalizePriceNumber(parseNumber(product.costUsd));
+  const hasPercentagesWithoutCost =
+    currentCost === null &&
+    priceLists.some(
+      (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
+    );
+  const pricesChanged =
+    currentCost === null
+      ? false
+      : priceLists.some((priceList) => {
+          const originalPrice = normalizePriceNumber(
+            parseNumber(getProductPriceForList(product, priceList)),
+          );
+          const currentPrice = normalizePriceNumber(
+            computedPrices[priceList.id],
+          );
+          return originalPrice !== currentPrice;
+        });
+  const adjustment = Number(draft.adjustmentQty);
+  const adjustmentChanged = Number.isFinite(adjustment) && adjustment !== 0;
+
+  return {
+    currentCost,
+    currentCostUsd,
+    computedPrices,
+    costChanged,
+    costUsdChanged,
+    pricesChanged,
+    adjustment,
+    adjustmentChanged,
+    hasPercentagesWithoutCost,
+    hasRowChanges:
+      costChanged ||
+      costUsdChanged ||
+      pricesChanged ||
+      adjustmentChanged ||
+      hasPercentagesWithoutCost,
+  };
+};
+
+const buildStockSaveJob = (
+  product: StockProduct,
+  draft: RowDraft,
+  priceLists: PriceListOption[],
+): StockSaveBuildResult => {
+  const rowState = getStockRowChangeState(product, draft, priceLists);
+
+  if (!rowState.hasRowChanges) {
+    return { ok: false, error: "No hay cambios para guardar" };
+  }
+
+  if (rowState.hasPercentagesWithoutCost) {
+    return {
+      ok: false,
+      error: "Carga el costo para calcular precios por porcentaje",
+    };
+  }
+
+  const priceUpdates =
+    rowState.currentCost === null
+      ? []
+      : priceLists.reduce<StockPriceUpdate[]>((updates, priceList) => {
+          const originalPrice = normalizePriceNumber(
+            parseNumber(getProductPriceForList(product, priceList)),
+          );
+          const nextPrice = normalizePriceNumber(
+            rowState.computedPrices[priceList.id],
+          );
+
+          if (originalPrice !== nextPrice) {
+            updates.push({
+              priceListId: priceList.id,
+              price: nextPrice,
+              isDefault: priceList.isDefault,
+            });
+          }
+          return updates;
+        }, []);
+
+  return {
+    ok: true,
+    job: {
+      productId: product.id,
+      cost: normalizePriceNumber(rowState.currentCost),
+      costChanged: rowState.costChanged,
+      costUsd: normalizePriceNumber(rowState.currentCostUsd),
+      costUsdChanged: rowState.costUsdChanged,
+      priceUpdates,
+      adjustmentQty: rowState.adjustmentChanged ? rowState.adjustment : null,
+      adjustmentRequestId: rowState.adjustmentChanged
+        ? (draft.adjustmentRequestId ?? createStockAdjustmentRequestId())
+        : null,
+    },
+  };
+};
+
+const formatSaveQueueMessage = (summary: StockSaveQueueSummary) => {
+  const parts = [
+    `${summary.pending} pendientes`,
+    `${summary.active} en curso`,
+    `${summary.saved} guardados`,
+  ];
+
+  if (summary.failed > 0) {
+    parts.push(`${summary.failed} con error`);
+  }
+
+  return `Guardando stock: ${parts.join(", ")}`;
+};
+
 const mergeProductsById = (current: StockProduct[], incoming: StockProduct[]) => {
   if (!current.length) return incoming;
   if (!incoming.length) return current;
@@ -300,6 +515,8 @@ export default function StockPage() {
   const [sortOrder, setSortOrder] = useState<StockSort>(DEFAULT_STOCK_SORT);
   const [isSortOrderReady, setIsSortOrderReady] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [saveQueueSummary, setSaveQueueSummary] =
+    useState<StockSaveQueueSummary>(INITIAL_SAVE_QUEUE_SUMMARY);
   const [totalProducts, setTotalProducts] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -325,6 +542,21 @@ export default function StockPage() {
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
   const stockRequestIdRef = useRef(0);
+  const saveQueueRef = useRef<StockSaveJob[]>([]);
+  const saveProductIdsRef = useRef<Set<string>>(new Set());
+  const activeSaveCountRef = useRef(0);
+  const saveQueueStatsRef = useRef<StockSaveQueueStats>({
+    total: 0,
+    saved: 0,
+    failed: 0,
+  });
+  const saveToastIdRef = useRef<ToastId | null>(null);
+  const saveReconcileTimeoutRef = useRef<number | null>(null);
+  const productsLengthRef = useRef(0);
+  const debouncedQueryRef = useRef("");
+  const sortOrderRef = useRef<StockSort>(DEFAULT_STOCK_SORT);
+  const shouldBlockStockExitRef = useRef(false);
+  const hasSaveQueueActivityRef = useRef(false);
 
   const updateProductTooltip = (
     product: StockProduct,
@@ -401,6 +633,26 @@ export default function StockPage() {
     }
   }, [isSortOrderReady, sortOrder]);
 
+  useEffect(() => {
+    productsLengthRef.current = products.length;
+  }, [products.length]);
+
+  useEffect(() => {
+    debouncedQueryRef.current = debouncedQuery;
+  }, [debouncedQuery]);
+
+  useEffect(() => {
+    sortOrderRef.current = sortOrder;
+  }, [sortOrder]);
+
+  useEffect(() => {
+    return () => {
+      if (saveReconcileTimeoutRef.current) {
+        clearTimeout(saveReconcileTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const hydrateRows = (
     nextProducts: StockProduct[],
     nextPriceLists: PriceListOption[],
@@ -423,15 +675,20 @@ export default function StockPage() {
           "";
       }
 
-      nextRows[product.id] = {
+      nextRows[product.id] = createEmptyRowDraft({
         cost: previousDraft?.cost ?? product.cost ?? "",
         costUsd: previousDraft?.costUsd ?? product.costUsd ?? "",
         percentages: nextPercentages,
         adjustmentQty: previousDraft?.adjustmentQty ?? "",
+        adjustmentRequestId: previousDraft?.adjustmentRequestId ?? null,
         calculatorQty: previousDraft?.calculatorQty ?? "1",
-        isSaving: false,
+        isSaving:
+          previousDraft?.saveStatus === "queued" ||
+          previousDraft?.saveStatus === "saving",
+        saveStatus: previousDraft?.saveStatus ?? "idle",
+        saveError: previousDraft?.saveError ?? null,
         warning: previousDraft?.warning ?? null,
-      };
+      });
     }
 
     return nextRows;
@@ -535,23 +792,125 @@ export default function StockPage() {
     const parsed = Number(product.stock ?? 0);
     return Number.isFinite(parsed) ? sum + parsed : sum;
   }, 0);
+  const hasSaveQueueActivity =
+    saveQueueSummary.pending > 0 || saveQueueSummary.active > 0;
+  const hasVisibleUnsavedChanges = useMemo(
+    () =>
+      products.some((product) => {
+        const draft = rows[product.id];
+        if (!draft) return false;
+        if (draft.saveStatus === "queued" || draft.saveStatus === "saving") {
+          return false;
+        }
+        return getStockRowChangeState(product, draft, priceLists).hasRowChanges;
+      }),
+    [priceLists, products, rows],
+  );
+  const shouldBlockStockExit =
+    hasSaveQueueActivity || hasVisibleUnsavedChanges;
+
+  const showStockExitBlockedToast = useCallback(() => {
+    toast.warn(
+      hasSaveQueueActivityRef.current
+        ? "Espera a que terminen los guardados de stock antes de salir."
+        : "Guarda los cambios de stock antes de buscar, ordenar o salir.",
+      { toastId: STOCK_EXIT_BLOCKED_TOAST_ID },
+    );
+  }, []);
+
+  useEffect(() => {
+    shouldBlockStockExitRef.current = shouldBlockStockExit;
+    hasSaveQueueActivityRef.current = hasSaveQueueActivity;
+  }, [hasSaveQueueActivity, shouldBlockStockExit]);
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!shouldBlockStockExitRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+
+    const handleAppNavigation = (event: Event) => {
+      if (!shouldBlockStockExitRef.current) return;
+      event.preventDefault();
+      showStockExitBlockedToast();
+    };
+
+    window.addEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
+    return () =>
+      window.removeEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
+  }, [showStockExitBlockedToast]);
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+
+    const handleDocumentClick = (event: globalThis.MouseEvent) => {
+      if (!shouldBlockStockExitRef.current || event.defaultPrevented) return;
+      if (
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      const anchor =
+        target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("#")) return;
+
+      const url = new URL(anchor.href);
+      if (url.origin !== window.location.origin) return;
+      if (
+        url.pathname === window.location.pathname &&
+        url.search === window.location.search
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      showStockExitBlockedToast();
+    };
+
+    document.addEventListener("click", handleDocumentClick, true);
+    return () => document.removeEventListener("click", handleDocumentClick, true);
+  }, [showStockExitBlockedToast]);
 
   const updateRow = (productId: string, updates: Partial<RowDraft>) => {
     setRows((previous) => ({
       ...previous,
       [productId]: {
-        ...(previous[productId] ?? {
-          cost: "",
-          costUsd: "",
-          percentages: {},
-          adjustmentQty: "",
-          calculatorQty: "1",
-          isSaving: false,
-          warning: null,
-        }),
+        ...(previous[productId] ?? createEmptyRowDraft()),
         ...updates,
       },
     }));
+  };
+
+  const updateEditableRow = (
+    productId: string,
+    updates: Partial<RowDraft>,
+  ) => {
+    updateRow(productId, {
+      ...updates,
+      saveStatus: "idle",
+      saveError: null,
+    });
   };
 
   const updateRowPercentage = (
@@ -560,15 +919,7 @@ export default function StockPage() {
     value: string,
   ) => {
     setRows((previous) => {
-      const current = previous[productId] ?? {
-        cost: "",
-        costUsd: "",
-        percentages: {},
-        adjustmentQty: "",
-        calculatorQty: "1",
-        isSaving: false,
-        warning: null,
-      };
+      const current = previous[productId] ?? createEmptyRowDraft();
       return {
         ...previous,
         [productId]: {
@@ -577,6 +928,8 @@ export default function StockPage() {
             ...current.percentages,
             [priceListId]: value,
           },
+          saveStatus: "idle",
+          saveError: null,
         },
       };
     });
@@ -584,15 +937,7 @@ export default function StockPage() {
 
   const nudgeStockAdjustment = (productId: string, step: number) => {
     setRows((previous) => {
-      const current = previous[productId] ?? {
-        cost: "",
-        costUsd: "",
-        percentages: {},
-        adjustmentQty: "",
-        calculatorQty: "1",
-        isSaving: false,
-        warning: null,
-      };
+      const current = previous[productId] ?? createEmptyRowDraft();
       const parsedCurrent = Number(current.adjustmentQty);
       const next =
         (Number.isFinite(parsedCurrent) ? parsedCurrent : 0) + step;
@@ -602,6 +947,9 @@ export default function StockPage() {
         [productId]: {
           ...current,
           adjustmentQty: formatSignedQuantity(next),
+          adjustmentRequestId: null,
+          saveStatus: "idle",
+          saveError: null,
         },
       };
     });
@@ -620,20 +968,24 @@ export default function StockPage() {
   };
 
   const handleSortOrderChange = (value: string) => {
+    if (shouldBlockStockExit) {
+      showStockExitBlockedToast();
+      return;
+    }
     setSortOrder(normalizeStockSort(value));
+  };
+
+  const handleSearchQueryChange = (value: string) => {
+    if (shouldBlockStockExit) {
+      showStockExitBlockedToast();
+      return;
+    }
+    setQuery(value);
   };
 
   const nudgeCalculatorQuantity = (productId: string, step: number) => {
     setRows((previous) => {
-      const current = previous[productId] ?? {
-        cost: "",
-        costUsd: "",
-        percentages: {},
-        adjustmentQty: "",
-        calculatorQty: "1",
-        isSaving: false,
-        warning: null,
-      };
+      const current = previous[productId] ?? createEmptyRowDraft();
       const parsedCurrent = parseNumber(current.calculatorQty) ?? 0;
       const next = Math.max(0, parsedCurrent + step);
 
@@ -648,6 +1000,10 @@ export default function StockPage() {
   };
 
   const handleLoadMore = () => {
+    if (shouldBlockStockExit) {
+      showStockExitBlockedToast();
+      return;
+    }
     if (nextOffset === null || isLoading || isLoadingMore) return;
     loadStock({
       offset: nextOffset,
@@ -656,123 +1012,335 @@ export default function StockPage() {
     }).catch(() => undefined);
   };
 
-  const saveRow = async (productId: string) => {
+  const publishSaveQueueSummary = () => {
+    const summary: StockSaveQueueSummary = {
+      ...saveQueueStatsRef.current,
+      pending: saveQueueRef.current.length,
+      active: activeSaveCountRef.current,
+    };
+
+    setSaveQueueSummary(summary);
+
+    if (summary.total <= 0) {
+      return summary;
+    }
+
+    const hasOpenWork = summary.pending > 0 || summary.active > 0;
+    if (hasOpenWork) {
+      const message = formatSaveQueueMessage(summary);
+      if (saveToastIdRef.current && toast.isActive(saveToastIdRef.current)) {
+        toast.update(saveToastIdRef.current, {
+          render: message,
+          type: "default",
+          isLoading: true,
+          autoClose: false,
+          closeOnClick: false,
+        });
+      } else {
+        saveToastIdRef.current = toast.loading(message, {
+          toastId: STOCK_SAVE_TOAST_ID,
+          autoClose: false,
+          closeOnClick: false,
+        });
+      }
+      return summary;
+    }
+
+    const message =
+      summary.failed > 0
+        ? `Stock con errores: ${summary.failed} no se pudieron guardar`
+        : `Stock guardado: ${summary.saved} productos actualizados`;
+    const toastOptions = {
+      render: message,
+      type: summary.failed > 0 ? ("error" as const) : ("success" as const),
+      isLoading: false,
+      autoClose: summary.failed > 0 ? (false as const) : 3500,
+      closeOnClick: true,
+    };
+
+    if (saveToastIdRef.current && toast.isActive(saveToastIdRef.current)) {
+      toast.update(saveToastIdRef.current, toastOptions);
+    } else if (summary.failed > 0) {
+      saveToastIdRef.current = toast.error(message, {
+        toastId: STOCK_SAVE_TOAST_ID,
+        autoClose: false,
+      });
+    } else {
+      saveToastIdRef.current = toast.success(message, {
+        toastId: STOCK_SAVE_TOAST_ID,
+        autoClose: 3500,
+      });
+    }
+
+    if (summary.failed === 0) {
+      window.setTimeout(() => {
+        if (
+          saveToastIdRef.current &&
+          !toast.isActive(saveToastIdRef.current)
+        ) {
+          saveToastIdRef.current = null;
+        }
+      }, 4000);
+    }
+
+    return summary;
+  };
+
+  const reconcileStockAfterQueue = () => {
+    if (saveReconcileTimeoutRef.current) {
+      clearTimeout(saveReconcileTimeoutRef.current);
+    }
+
+    saveReconcileTimeoutRef.current = window.setTimeout(() => {
+      loadStock({
+        offset: 0,
+        append: false,
+        limit: Math.max(DEFAULT_STOCK_PAGE_SIZE, productsLengthRef.current),
+        searchQuery: debouncedQueryRef.current,
+        sortOrder: sortOrderRef.current,
+      }).catch(() => undefined);
+    }, 150);
+  };
+
+  const finishSaveQueue = () => {
+    const summary = publishSaveQueueSummary();
+    setStatus(
+      summary.failed > 0
+        ? `${summary.failed} productos no se pudieron guardar`
+        : `Stock guardado (${summary.saved} productos)`,
+    );
+    reconcileStockAfterQueue();
+  };
+
+  const applySuccessfulSave = (
+    job: StockSaveJob,
+    result: { projectedStock?: string | null; warning?: string | null },
+  ) => {
+    const nextCost = job.cost === null ? null : job.cost.toFixed(2);
+    const nextCostUsd = job.costUsd === null ? null : job.costUsd.toFixed(2);
+
+    setProducts((previousProducts) =>
+      previousProducts.map((product) => {
+        if (product.id !== job.productId) return product;
+
+        let nextPrices = [...product.prices];
+        let nextDefaultPrice = product.price;
+
+        for (const update of job.priceUpdates) {
+          nextPrices = nextPrices.filter(
+            (price) => price.priceListId !== update.priceListId,
+          );
+          const formattedPrice =
+            update.price === null ? null : update.price.toFixed(2);
+          if (formattedPrice !== null) {
+            nextPrices.push({
+              priceListId: update.priceListId,
+              price: formattedPrice,
+            });
+          }
+          if (update.isDefault) {
+            nextDefaultPrice = formattedPrice;
+          }
+        }
+
+        return {
+          ...product,
+          cost: job.costChanged ? nextCost : product.cost,
+          costUsd: job.costUsdChanged ? nextCostUsd : product.costUsd,
+          price: nextDefaultPrice,
+          prices: nextPrices,
+          stock: result.projectedStock ?? product.stock,
+        };
+      }),
+    );
+
+    const rowUpdates: Partial<RowDraft> = {
+      adjustmentQty: "",
+      adjustmentRequestId: null,
+      isSaving: false,
+      saveStatus: "saved",
+      saveError: null,
+      warning: result.warning ?? null,
+    };
+    if (job.costChanged) {
+      rowUpdates.cost = nextCost ?? "";
+    }
+    if (job.costUsdChanged) {
+      rowUpdates.costUsd = nextCostUsd ?? "";
+    }
+    updateRow(job.productId, rowUpdates);
+  };
+
+  const readResponseJson = async (response: Response) => {
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  };
+
+  const executeStockSaveJob = async (job: StockSaveJob) => {
+    if (job.costChanged || job.costUsdChanged || job.priceUpdates.length > 0) {
+      const patchRes = await fetch("/api/stock", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: job.productId,
+          ...(job.costChanged ? { cost: job.cost } : {}),
+          ...(job.costUsdChanged ? { costUsd: job.costUsd } : {}),
+          ...(job.priceUpdates.length > 0
+            ? {
+                prices: job.priceUpdates.map((update) => ({
+                  priceListId: update.priceListId,
+                  price: update.price,
+                })),
+              }
+            : {}),
+        }),
+      });
+      const patchData = await readResponseJson(patchRes);
+      if (!patchRes.ok) {
+        throw new Error(patchData?.error ?? "No se pudo guardar");
+      }
+    }
+
+    let projectedStock: string | null = null;
+    let warning: string | null = null;
+
+    if (STOCK_ACCOUNTING_ENABLED && job.adjustmentQty !== null) {
+      const adjustRes = await fetch("/api/stock/adjustments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId: job.productId,
+          qty: job.adjustmentQty,
+          ...(job.adjustmentRequestId
+            ? { clientRequestId: job.adjustmentRequestId }
+            : {}),
+        }),
+      });
+      const adjustData = await readResponseJson(adjustRes);
+      if (!adjustRes.ok) {
+        throw new Error(adjustData?.error ?? "No se pudo ajustar stock");
+      }
+
+      projectedStock =
+        typeof adjustData?.projectedStock === "string"
+          ? adjustData.projectedStock
+          : null;
+      warning =
+        typeof adjustData?.warning === "string" ? adjustData.warning : null;
+    }
+
+    applySuccessfulSave(job, { projectedStock, warning });
+  };
+
+  const startNextSaveJobs = () => {
+    while (
+      activeSaveCountRef.current < STOCK_SAVE_CONCURRENCY &&
+      saveQueueRef.current.length > 0
+    ) {
+      const job = saveQueueRef.current.shift();
+      if (!job) return;
+
+      activeSaveCountRef.current += 1;
+      updateRow(job.productId, {
+        isSaving: true,
+        saveStatus: "saving",
+        saveError: null,
+        warning: null,
+      });
+      publishSaveQueueSummary();
+
+      executeStockSaveJob(job)
+        .then(() => {
+          saveQueueStatsRef.current.saved += 1;
+        })
+        .catch((error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : "No se pudo guardar";
+          saveQueueStatsRef.current.failed += 1;
+          updateRow(job.productId, {
+            isSaving: false,
+            saveStatus: "failed",
+            saveError: message,
+          });
+        })
+        .finally(() => {
+          saveProductIdsRef.current.delete(job.productId);
+          activeSaveCountRef.current = Math.max(
+            0,
+            activeSaveCountRef.current - 1,
+          );
+          publishSaveQueueSummary();
+          startNextSaveJobs();
+          if (
+            activeSaveCountRef.current === 0 &&
+            saveQueueRef.current.length === 0
+          ) {
+            finishSaveQueue();
+          }
+        });
+    }
+  };
+
+  const saveRow = (productId: string) => {
     const draft = rows[productId];
     const product = products.find((item) => item.id === productId);
     if (!draft || !product) return;
+    if (saveProductIdsRef.current.has(productId)) return;
+    if (draft.saveStatus === "queued" || draft.saveStatus === "saving") return;
 
-    updateRow(productId, { isSaving: true, warning: null });
-    setStatus(null);
-
-    try {
-      const costNumber = parseNumber(draft.cost);
-      const costUsdNumber = parseNumber(draft.costUsd);
-      const hasAnyPercentage = priceLists.some(
-        (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
-      );
-      if (hasAnyPercentage && costNumber === null) {
-        setStatus("Carga el costo para calcular precios por porcentaje");
-        return;
-      }
-
-      const computedPrices = calculatePricesFromPercentages(
-        costNumber,
-        draft.percentages,
-        priceLists,
-      );
-
-      const currentCost = normalizePriceNumber(costNumber);
-      const originalCost = normalizePriceNumber(parseNumber(product.cost));
-      const costChanged = currentCost !== originalCost;
-      const currentCostUsd = normalizePriceNumber(costUsdNumber);
-      const originalCostUsd = normalizePriceNumber(parseNumber(product.costUsd));
-      const costUsdChanged = currentCostUsd !== originalCostUsd;
-
-      const pricesPayload =
-        costNumber === null
-          ? []
-          : priceLists.reduce<Array<{ priceListId: string; price: number | null }>>(
-              (updates, priceList) => {
-                const originalPrice = normalizePriceNumber(
-                  parseNumber(getProductPriceForList(product, priceList)),
-                );
-                const nextPrice = normalizePriceNumber(
-                  computedPrices[priceList.id],
-                );
-
-                if (originalPrice !== nextPrice) {
-                  updates.push({
-                    priceListId: priceList.id,
-                    price: nextPrice,
-                  });
-                }
-                return updates;
-              },
-              [],
-            );
-
-      if (costChanged || costUsdChanged || pricesPayload.length > 0) {
-        const patchRes = await fetch("/api/stock", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            productId,
-            ...(costChanged ? { cost: currentCost } : {}),
-            ...(costUsdChanged ? { costUsd: currentCostUsd } : {}),
-            ...(pricesPayload.length > 0 ? { prices: pricesPayload } : {}),
-          }),
-        });
-        const patchData = await patchRes.json();
-        if (!patchRes.ok) {
-          setStatus(patchData?.error ?? "No se pudo guardar");
-          return;
-        }
-      }
-
-      const adjustmentNumber = Number(draft.adjustmentQty);
-      if (
-        STOCK_ACCOUNTING_ENABLED &&
-        Number.isFinite(adjustmentNumber) &&
-        adjustmentNumber !== 0
-      ) {
-        const adjustRes = await fetch("/api/stock/adjustments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            productId,
-            qty: adjustmentNumber,
-          }),
-        });
-        const adjustData = await adjustRes.json();
-        if (!adjustRes.ok) {
-          setStatus(adjustData?.error ?? "No se pudo ajustar stock");
-          return;
-        }
-
-        if (adjustData?.warning) {
-          updateRow(productId, { warning: adjustData.warning as string });
-        }
-      }
-
+    const saveBuild = buildStockSaveJob(product, draft, priceLists);
+    if (!saveBuild.ok) {
+      setStatus(saveBuild.error);
       updateRow(productId, {
-        adjustmentQty: "",
+        isSaving: false,
+        saveStatus:
+          saveBuild.error === "No hay cambios para guardar" ? "idle" : "failed",
+        saveError:
+          saveBuild.error === "No hay cambios para guardar"
+            ? null
+            : saveBuild.error,
       });
-      setStatus(`Guardado ${product.name}`);
-      await loadStock({
-        offset: 0,
-        append: false,
-        limit: Math.max(DEFAULT_STOCK_PAGE_SIZE, products.length),
-        searchQuery: debouncedQuery,
-      });
-    } catch {
-      setStatus("No se pudo guardar");
-    } finally {
-      updateRow(productId, { isSaving: false });
+      if (saveBuild.error !== "No hay cambios para guardar") {
+        toast.error(saveBuild.error);
+      }
+      return;
     }
+
+    if (
+      activeSaveCountRef.current === 0 &&
+      saveQueueRef.current.length === 0
+    ) {
+      if (saveReconcileTimeoutRef.current) {
+        clearTimeout(saveReconcileTimeoutRef.current);
+        saveReconcileTimeoutRef.current = null;
+      }
+      saveQueueStatsRef.current = { total: 0, saved: 0, failed: 0 };
+    }
+
+    saveQueueStatsRef.current.total += 1;
+    saveProductIdsRef.current.add(productId);
+    saveQueueRef.current.push(saveBuild.job);
+    updateRow(productId, {
+      isSaving: true,
+      adjustmentRequestId: saveBuild.job.adjustmentRequestId,
+      saveStatus: "queued",
+      saveError: null,
+      warning: null,
+    });
+    setStatus(null);
+    publishSaveQueueSummary();
+    startNextSaveJobs();
   };
 
   const handleCreateProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (shouldBlockStockExit) {
+      showStockExitBlockedToast();
+      return;
+    }
     if (!productForm.name.trim()) return;
 
     setIsCreatingProduct(true);
@@ -976,7 +1544,7 @@ export default function StockPage() {
                 <button
                   type="submit"
                   className="btn btn-emerald"
-                  disabled={isCreatingProduct}
+                  disabled={isCreatingProduct || shouldBlockStockExit}
                 >
                   <CheckIcon className="size-4" />
                   {isCreatingProduct ? "Guardando..." : "Guardar"}
@@ -1012,6 +1580,7 @@ export default function StockPage() {
                 className="input cursor-pointer border-sky-200 text-xs text-sky-950 focus:border-sky-300"
                 value={sortOrder}
                 onChange={(event) => handleSortOrderChange(event.target.value)}
+                disabled={shouldBlockStockExit}
                 aria-label="Ordenar stock"
               >
                 {STOCK_SORT_OPTIONS.map((option) => (
@@ -1025,7 +1594,8 @@ export default function StockPage() {
               className="input min-w-[260px] flex-1 sm:w-96 sm:flex-none"
               ref={productSearchInputRef}
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => handleSearchQueryChange(event.target.value)}
+              disabled={shouldBlockStockExit}
               placeholder="Buscar por nombre o codigo"
             />
           </div>
@@ -1056,64 +1626,44 @@ export default function StockPage() {
                   product,
                   priceLists,
                 );
-                const draft = rows[product.id] ?? {
+                const draft = rows[product.id] ?? createEmptyRowDraft({
                   cost: product.cost ?? "",
                   costUsd: product.costUsd ?? "",
                   percentages: derivedPercentages,
-                  adjustmentQty: "",
-                  calculatorQty: "1",
-                  isSaving: false,
-                  warning: null,
-                };
+                });
+                const rowState = getStockRowChangeState(
+                  product,
+                  draft,
+                  priceLists,
+                );
                 const currentStock = Number(product.stock ?? 0);
-                const adjustment = Number(draft.adjustmentQty || 0);
+                const adjustment = rowState.adjustment;
                 const projectedStock =
                   Number.isFinite(currentStock) && Number.isFinite(adjustment)
                     ? currentStock + adjustment
                     : currentStock;
                 const isProjectedNegative = projectedStock < 0;
-                const originalCost = parseNumber(product.cost ?? null);
-                const currentCost = parseNumber(draft.cost);
-                const costChanged = originalCost !== currentCost;
-                const originalCostUsd = parseNumber(product.costUsd ?? null);
-                const currentCostUsd = parseNumber(draft.costUsd);
-                const costUsdChanged = originalCostUsd !== currentCostUsd;
+                const currentCost = rowState.currentCost;
+                const currentCostUsd = rowState.currentCostUsd;
                 const hasCurrentCostUsd = currentCostUsd !== null;
-                const computedPrices = calculatePricesFromPercentages(
-                  currentCost,
-                  draft.percentages,
-                  priceLists,
-                );
+                const computedPrices = rowState.computedPrices;
                 const calculatorActive = calculatorRows.has(product.id);
                 const calculatorQuantity = parseNumber(draft.calculatorQty);
                 const calculatorColSpan =
                   priceLists.length + 2 + (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
-                const hasPercentagesWithoutCost =
-                  currentCost === null &&
-                  priceLists.some(
-                    (priceList) =>
-                      parseNumber(draft.percentages[priceList.id]) !== null,
-                  );
-                const pricesChanged =
-                  currentCost === null
-                    ? false
-                    : priceLists.some((priceList) => {
-                        const originalPrice = normalizePriceNumber(
-                          parseNumber(getProductPriceForList(product, priceList)),
-                        );
-                        const currentPrice = normalizePriceNumber(
-                          computedPrices[priceList.id],
-                        );
-                        return originalPrice !== currentPrice;
-                      });
-                const adjustmentChanged =
-                  Number.isFinite(adjustment) && adjustment !== 0;
-                const hasRowChanges =
-                  costChanged ||
-                  costUsdChanged ||
-                  pricesChanged ||
-                  adjustmentChanged ||
-                  hasPercentagesWithoutCost;
+                const hasRowChanges = rowState.hasRowChanges;
+                const isRowSavePending =
+                  draft.saveStatus === "queued" || draft.saveStatus === "saving";
+                const saveButtonLabel =
+                  draft.saveStatus === "queued"
+                    ? "En cola"
+                    : draft.saveStatus === "saving"
+                      ? "Guardando cambios"
+                      : draft.saveStatus === "failed"
+                        ? "Reintentar guardado"
+                        : draft.saveStatus === "saved"
+                          ? "Guardado"
+                          : "Guardar cambios";
                 const adjustmentLabel =
                   Number.isFinite(adjustment) && adjustment !== 0
                     ? `${adjustment > 0 ? "+" : ""}${formatStock(adjustment)}`
@@ -1224,6 +1774,7 @@ export default function StockPage() {
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
                               onClick={() => nudgeCalculatorQuantity(product.id, -1)}
+                              disabled={isRowSavePending}
                               aria-label="Restar cantidad"
                             >
                               <MinusIcon className="size-3.5" />
@@ -1239,12 +1790,14 @@ export default function StockPage() {
                               }
                               placeholder="1"
                               maxDecimals={3}
+                              disabled={isRowSavePending}
                               aria-label="Cantidad"
                             />
                             <button
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
                               onClick={() => nudgeCalculatorQuantity(product.id, 1)}
+                              disabled={isRowSavePending}
                               aria-label="Sumar cantidad"
                             >
                               <PlusIcon className="size-3.5" />
@@ -1315,13 +1868,14 @@ export default function StockPage() {
                               className="input no-spinner w-full px-2 text-right tabular-nums"
                               value={draft.cost}
                               onValueChange={(nextValue) =>
-                                updateRow(product.id, {
+                                updateEditableRow(product.id, {
                                   cost: normalizeMoney(nextValue),
                                 })
                               }
                               placeholder="0,00"
                               maxDecimals={2}
                               prefix="$"
+                              disabled={isRowSavePending}
                             />
                             <span aria-hidden="true" className="block min-h-4" />
                           </div>
@@ -1332,13 +1886,14 @@ export default function StockPage() {
                               className="input no-spinner w-full px-2 text-right tabular-nums"
                               value={draft.costUsd}
                               onValueChange={(nextValue) =>
-                                updateRow(product.id, {
+                                updateEditableRow(product.id, {
                                   costUsd: normalizeMoney(nextValue),
                                 })
                               }
                               placeholder="0,00"
                               maxDecimals={2}
                               prefix="USD "
+                              disabled={isRowSavePending}
                             />
                             <span aria-hidden="true" className="block min-h-4" />
                           </div>
@@ -1362,6 +1917,7 @@ export default function StockPage() {
                                 placeholder="0"
                                 maxDecimals={4}
                                 suffix="%"
+                                disabled={isRowSavePending}
                               />
                               <p
                                 className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
@@ -1415,6 +1971,7 @@ export default function StockPage() {
                                 onClick={() =>
                                   nudgeStockAdjustment(product.id, -1)
                                 }
+                                disabled={isRowSavePending}
                                 aria-label="Restar una unidad"
                               >
                                 <MinusIcon className="size-3.5" />
@@ -1424,18 +1981,21 @@ export default function StockPage() {
                                 inputMode="decimal"
                                 value={draft.adjustmentQty}
                                 onChange={(event) =>
-                                  updateRow(product.id, {
+                                  updateEditableRow(product.id, {
                                     adjustmentQty: normalizeSignedQuantity(
                                       event.target.value,
                                     ),
+                                    adjustmentRequestId: null,
                                   })
                                 }
+                                disabled={isRowSavePending}
                                 placeholder="+/-"
                               />
                               <button
                                 type="button"
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
                                 onClick={() => nudgeStockAdjustment(product.id, 1)}
+                                disabled={isRowSavePending}
                                 aria-label="Sumar una unidad"
                               >
                                 <PlusIcon className="size-3.5" />
@@ -1466,46 +2026,64 @@ export default function StockPage() {
                       </>
                     )}
                     <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right align-top hover:z-30 focus-within:z-30">
-                      <div className="flex min-h-10 items-center justify-end gap-2">
-                        <div className="group relative">
+                      <div className="flex min-h-10 flex-col items-end gap-1">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="group relative">
+                            <button
+                              type="button"
+                              className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-zinc-700 transition ${
+                                calculatorActive
+                                  ? "border-sky-200 bg-sky-50 text-sky-700 shadow-[0_8px_20px_-18px_rgba(2,132,199,0.65)]"
+                                  : "border-zinc-200 bg-white hover:bg-zinc-50"
+                              }`}
+                              onClick={() => toggleCalculatorRow(product.id)}
+                              aria-label={
+                                calculatorActive
+                                  ? "Cerrar simulador"
+                                  : "Abrir simulador"
+                              }
+                              aria-pressed={calculatorActive}
+                            >
+                              <CalculatorIcon className="size-4" />
+                            </button>
+                            <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                              Simulador
+                            </span>
+                          </div>
                           <button
                             type="button"
-                            className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-zinc-700 transition ${
-                              calculatorActive
-                                ? "border-sky-200 bg-sky-50 text-sky-700 shadow-[0_8px_20px_-18px_rgba(2,132,199,0.65)]"
-                                : "border-zinc-200 bg-white hover:bg-zinc-50"
+                            className={`btn h-10 w-10 p-0 ${
+                              draft.saveStatus === "failed"
+                                ? "btn-rose"
+                                : "btn-emerald"
                             }`}
-                            onClick={() => toggleCalculatorRow(product.id)}
-                            aria-label={
-                              calculatorActive
-                                ? "Cerrar simulador"
-                                : "Abrir simulador"
-                            }
-                            aria-pressed={calculatorActive}
+                            disabled={draft.isSaving || isLoading || !hasRowChanges}
+                            onClick={() => saveRow(product.id)}
+                            aria-label={saveButtonLabel}
+                            title={saveButtonLabel}
                           >
-                            <CalculatorIcon className="size-4" />
+                            <CheckIcon className="size-4" />
+                            <span className="sr-only">{saveButtonLabel}</span>
                           </button>
-                          <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
-                            Simulador
-                          </span>
                         </div>
-                        <button
-                          type="button"
-                          className="btn btn-emerald h-10 w-10 p-0"
-                          disabled={draft.isSaving || isLoading || !hasRowChanges}
-                          onClick={() => saveRow(product.id)}
-                          aria-label={
-                            draft.isSaving ? "Guardando cambios" : "Guardar cambios"
-                          }
-                          title={
-                            draft.isSaving ? "Guardando cambios" : "Guardar cambios"
-                          }
-                        >
-                          <CheckIcon className="size-4" />
-                          <span className="sr-only">
-                            {draft.isSaving ? "Guardando..." : "Guardar"}
+                        {draft.saveStatus === "queued" ? (
+                          <span className="max-w-[96px] truncate text-[10px] font-semibold text-sky-700">
+                            En cola
                           </span>
-                        </button>
+                        ) : null}
+                        {draft.saveStatus === "saving" ? (
+                          <span className="max-w-[96px] truncate text-[10px] font-semibold text-emerald-700">
+                            Guardando
+                          </span>
+                        ) : null}
+                        {draft.saveStatus === "failed" && draft.saveError ? (
+                          <span
+                            className="max-w-[96px] truncate text-[10px] font-semibold text-rose-700"
+                            title={draft.saveError}
+                          >
+                            Error
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -1531,7 +2109,12 @@ export default function StockPage() {
           <button
             type="button"
             className="btn"
-            disabled={isLoading || isLoadingMore || nextOffset === null}
+            disabled={
+              isLoading ||
+              isLoadingMore ||
+              shouldBlockStockExit ||
+              nextOffset === null
+            }
             onClick={handleLoadMore}
           >
             {isLoadingMore ? "Cargando..." : "Cargar mas"}
@@ -1626,6 +2209,7 @@ export default function StockPage() {
       </AnimatePresence>
 
       {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
+      <ToastContainer position="bottom-right" theme="light" />
     </div>
   );
 }
