@@ -97,6 +97,7 @@ export async function GET(req: NextRequest) {
               select: {
                 priceListId: true,
                 price: true,
+                percentage: true,
               },
             },
           },
@@ -121,6 +122,7 @@ export async function GET(req: NextRequest) {
           prices: product.priceItems.map((priceItem) => ({
             priceListId: priceItem.priceListId,
             price: priceItem.price.toString(),
+            percentage: priceItem.percentage?.toString() ?? null,
           })),
         })),
         total,

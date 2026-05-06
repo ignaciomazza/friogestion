@@ -256,6 +256,7 @@ export async function GET(req: NextRequest) {
             prices: item.product.priceItems.map((priceItem) => ({
               priceListId: priceItem.priceListId,
               price: priceItem.price.toString(),
+              percentage: priceItem.percentage?.toString() ?? null,
             })),
           },
         })),

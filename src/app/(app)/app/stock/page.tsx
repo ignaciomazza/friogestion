@@ -34,6 +34,7 @@ type PriceListOption = {
 type StockPrice = {
   priceListId: string;
   price: string;
+  percentage: string | null;
 };
 
 type StockProduct = {
@@ -51,6 +52,7 @@ type StockProduct = {
 };
 
 type StockSaveStatus = "idle" | "queued" | "saving" | "saved" | "failed";
+type CalculatorPriceBasis = "ars" | "usd";
 
 type RowDraft = {
   cost: string;
@@ -59,6 +61,7 @@ type RowDraft = {
   adjustmentQty: string;
   adjustmentRequestId: string | null;
   calculatorQty: string;
+  calculatorPriceBasis: CalculatorPriceBasis;
   isSaving: boolean;
   saveStatus: StockSaveStatus;
   saveError: string | null;
@@ -86,6 +89,7 @@ type StockListResponse = {
   total: number;
   hasMore: boolean;
   nextOffset: number | null;
+  latestUsdRate: string | null;
 };
 
 type LoadStockOptions = {
@@ -99,6 +103,7 @@ type LoadStockOptions = {
 type StockPriceUpdate = {
   priceListId: string;
   price: number | null;
+  percentage: number | null;
   isDefault: boolean;
 };
 
@@ -127,13 +132,19 @@ type StockSaveQueueSummary = StockSaveQueueStats & {
 type StockRowChangeState = {
   currentCost: number | null;
   currentCostUsd: number | null;
+  currentCostUsdArs: number | null;
+  effectiveCost: number | null;
   computedPrices: Record<string, number | null>;
+  computedPricesFromArs: Record<string, number | null>;
+  computedPricesFromUsd: Record<string, number | null>;
   costChanged: boolean;
   costUsdChanged: boolean;
+  percentagesChanged: boolean;
   pricesChanged: boolean;
   adjustment: number;
   adjustmentChanged: boolean;
   hasPercentagesWithoutCost: boolean;
+  hasUsdCostWithoutRate: boolean;
   hasRowChanges: boolean;
 };
 
@@ -165,6 +176,7 @@ const createEmptyRowDraft = (
   adjustmentQty: "",
   adjustmentRequestId: null,
   calculatorQty: "1",
+  calculatorPriceBasis: "ars",
   isSaving: false,
   saveStatus: "idle",
   saveError: null,
@@ -224,10 +236,40 @@ const parseNumber = (value: string | null | undefined) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parsePositiveNumber = (value: string | number | null | undefined) => {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
 const normalizePriceNumber = (value: number | null) => {
   if (value === null || !Number.isFinite(value)) return null;
   return Number(value.toFixed(2));
 };
+
+const normalizePercentageNumber = (value: string | null | undefined) => {
+  const parsed = parseNumber(value);
+  if (parsed === null || !Number.isFinite(parsed)) return null;
+  return Number(parsed.toFixed(4));
+};
+
+const convertUsdCostToArs = (
+  costUsd: number | null,
+  latestUsdRate: number | null,
+) => {
+  if (costUsd === null || latestUsdRate === null) return null;
+  return normalizePriceNumber(costUsd * latestUsdRate);
+};
+
+const resolveEffectiveCost = ({
+  cost,
+  costUsd,
+  latestUsdRate,
+}: {
+  cost: number | null;
+  costUsd: number | null;
+  latestUsdRate: number | null;
+}) => cost ?? convertUsdCostToArs(costUsd, latestUsdRate);
 
 const formatPercentageValue = (value: number) => {
   if (!Number.isFinite(value)) return "";
@@ -295,6 +337,13 @@ const getProductPriceForList = (
   return "";
 };
 
+const getProductPercentageForList = (
+  product: StockProduct,
+  priceList: PriceListOption,
+) =>
+  product.prices.find((price) => price.priceListId === priceList.id)
+    ?.percentage ?? null;
+
 const calculatePricesFromPercentages = (
   cost: number | null,
   percentages: Record<string, string>,
@@ -321,12 +370,22 @@ const calculatePricesFromPercentages = (
 const derivePercentagesFromPrices = (
   product: StockProduct,
   priceLists: PriceListOption[],
+  latestUsdRate: number | null,
 ) => {
   const derived: Record<string, string> = {};
-  let basePrice = parseNumber(product.cost);
+  let basePrice =
+    parseNumber(product.cost) ??
+    convertUsdCostToArs(parseNumber(product.costUsd), latestUsdRate);
 
   for (const priceList of priceLists) {
+    const storedPercentage = getProductPercentageForList(product, priceList);
     const listPrice = parseNumber(getProductPriceForList(product, priceList));
+
+    if (storedPercentage !== null) {
+      derived[priceList.id] = formatPercentageValue(Number(storedPercentage));
+      basePrice = listPrice;
+      continue;
+    }
 
     if (basePrice === null || listPrice === null) {
       derived[priceList.id] = "";
@@ -351,11 +410,31 @@ const getStockRowChangeState = (
   product: StockProduct,
   draft: RowDraft,
   priceLists: PriceListOption[],
+  latestUsdRate: number | null,
 ): StockRowChangeState => {
   const currentCost = parseNumber(draft.cost);
   const currentCostUsd = parseNumber(draft.costUsd);
-  const computedPrices = calculatePricesFromPercentages(
+  const currentCostUsdArs = convertUsdCostToArs(
+    currentCostUsd,
+    latestUsdRate,
+  );
+  const effectiveCost = resolveEffectiveCost({
+    cost: currentCost,
+    costUsd: currentCostUsd,
+    latestUsdRate,
+  });
+  const computedPricesFromArs = calculatePricesFromPercentages(
     currentCost,
+    draft.percentages,
+    priceLists,
+  );
+  const computedPricesFromUsd = calculatePricesFromPercentages(
+    currentCostUsdArs,
+    draft.percentages,
+    priceLists,
+  );
+  const computedPrices = calculatePricesFromPercentages(
+    effectiveCost,
     draft.percentages,
     priceLists,
   );
@@ -365,13 +444,26 @@ const getStockRowChangeState = (
   const costUsdChanged =
     normalizePriceNumber(currentCostUsd) !==
     normalizePriceNumber(parseNumber(product.costUsd));
+  const derivedPercentages = derivePercentagesFromPrices(
+    product,
+    priceLists,
+    latestUsdRate,
+  );
+  const percentagesChanged = priceLists.some(
+    (priceList) =>
+      normalizePercentageNumber(draft.percentages[priceList.id]) !==
+      normalizePercentageNumber(derivedPercentages[priceList.id]),
+  );
   const hasPercentagesWithoutCost =
-    currentCost === null &&
+    effectiveCost === null &&
     priceLists.some(
       (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
     );
+  const hasUsdCostWithoutRate =
+    currentCostUsd !== null && latestUsdRate === null && currentCost === null;
   const pricesChanged =
-    currentCost === null
+    effectiveCost === null ||
+    !(costChanged || costUsdChanged || percentagesChanged)
       ? false
       : priceLists.some((priceList) => {
           const originalPrice = normalizePriceNumber(
@@ -388,18 +480,26 @@ const getStockRowChangeState = (
   return {
     currentCost,
     currentCostUsd,
+    currentCostUsdArs,
+    effectiveCost,
     computedPrices,
+    computedPricesFromArs,
+    computedPricesFromUsd,
     costChanged,
     costUsdChanged,
+    percentagesChanged,
     pricesChanged,
     adjustment,
     adjustmentChanged,
     hasPercentagesWithoutCost,
+    hasUsdCostWithoutRate,
     hasRowChanges:
       costChanged ||
       costUsdChanged ||
+      percentagesChanged ||
       pricesChanged ||
       adjustmentChanged ||
+      hasUsdCostWithoutRate ||
       hasPercentagesWithoutCost,
   };
 };
@@ -408,35 +508,63 @@ const buildStockSaveJob = (
   product: StockProduct,
   draft: RowDraft,
   priceLists: PriceListOption[],
+  latestUsdRate: number | null,
 ): StockSaveBuildResult => {
-  const rowState = getStockRowChangeState(product, draft, priceLists);
+  const rowState = getStockRowChangeState(
+    product,
+    draft,
+    priceLists,
+    latestUsdRate,
+  );
 
   if (!rowState.hasRowChanges) {
     return { ok: false, error: "No hay cambios para guardar" };
   }
 
+  if (rowState.hasUsdCostWithoutRate) {
+    return {
+      ok: false,
+      error: "Configura la cotizacion interna USD -> ARS para usar costo USD",
+    };
+  }
+
   if (rowState.hasPercentagesWithoutCost) {
     return {
       ok: false,
-      error: "Carga el costo para calcular precios por porcentaje",
+      error: "Carga costo ARS o costo USD para calcular precios por porcentaje",
     };
   }
 
   const priceUpdates =
-    rowState.currentCost === null
+    rowState.effectiveCost === null ||
+    !(
+      rowState.costChanged ||
+      rowState.costUsdChanged ||
+      rowState.percentagesChanged
+    )
       ? []
       : priceLists.reduce<StockPriceUpdate[]>((updates, priceList) => {
           const originalPrice = normalizePriceNumber(
             parseNumber(getProductPriceForList(product, priceList)),
           );
+          const originalPercentage = normalizePercentageNumber(
+            getProductPercentageForList(product, priceList),
+          );
+          const nextPercentage = normalizePercentageNumber(
+            draft.percentages[priceList.id],
+          );
           const nextPrice = normalizePriceNumber(
             rowState.computedPrices[priceList.id],
           );
 
-          if (originalPrice !== nextPrice) {
+          if (
+            originalPrice !== nextPrice ||
+            originalPercentage !== nextPercentage
+          ) {
             updates.push({
               priceListId: priceList.id,
               price: nextPrice,
+              percentage: nextPercentage,
               isDefault: priceList.isDefault,
             });
           }
@@ -517,6 +645,7 @@ export default function StockPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [saveQueueSummary, setSaveQueueSummary] =
     useState<StockSaveQueueSummary>(INITIAL_SAVE_QUEUE_SUMMARY);
+  const [latestUsdRate, setLatestUsdRate] = useState<number | null>(null);
   const [totalProducts, setTotalProducts] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -657,6 +786,7 @@ export default function StockPage() {
     nextProducts: StockProduct[],
     nextPriceLists: PriceListOption[],
     previous: Record<string, RowDraft>,
+    usdRate: number | null,
   ) => {
     const nextRows: Record<string, RowDraft> = {};
 
@@ -665,6 +795,7 @@ export default function StockPage() {
       const derivedPercentages = derivePercentagesFromPrices(
         product,
         nextPriceLists,
+        usdRate,
       );
       const nextPercentages: Record<string, string> = {};
 
@@ -682,6 +813,7 @@ export default function StockPage() {
         adjustmentQty: previousDraft?.adjustmentQty ?? "",
         adjustmentRequestId: previousDraft?.adjustmentRequestId ?? null,
         calculatorQty: previousDraft?.calculatorQty ?? "1",
+        calculatorPriceBasis: previousDraft?.calculatorPriceBasis ?? "ars",
         isSaving:
           previousDraft?.saveStatus === "queued" ||
           previousDraft?.saveStatus === "saving",
@@ -736,6 +868,8 @@ export default function StockPage() {
           return;
         }
 
+        const usdRate = parsePositiveNumber(data.latestUsdRate);
+        setLatestUsdRate(usdRate);
         setPriceLists(data.priceLists);
         setTotalProducts(data.total);
         setHasMoreProducts(data.hasMore);
@@ -745,7 +879,7 @@ export default function StockPage() {
             ? mergeProductsById(previousProducts, data.products)
             : data.products;
           setRows((previousRows) =>
-            hydrateRows(nextProducts, data.priceLists, previousRows),
+            hydrateRows(nextProducts, data.priceLists, previousRows, usdRate),
           );
           return nextProducts;
         });
@@ -802,9 +936,14 @@ export default function StockPage() {
         if (draft.saveStatus === "queued" || draft.saveStatus === "saving") {
           return false;
         }
-        return getStockRowChangeState(product, draft, priceLists).hasRowChanges;
+        return getStockRowChangeState(
+          product,
+          draft,
+          priceLists,
+          latestUsdRate,
+        ).hasRowChanges;
       }),
-    [priceLists, products, rows],
+    [latestUsdRate, priceLists, products, rows],
   );
   const shouldBlockStockExit =
     hasSaveQueueActivity || hasVisibleUnsavedChanges;
@@ -913,6 +1052,12 @@ export default function StockPage() {
     });
   };
 
+  const updateUsdCost = (productId: string, value: string) => {
+    updateEditableRow(productId, {
+      costUsd: normalizeMoney(value),
+    });
+  };
+
   const updateRowPercentage = (
     productId: string,
     priceListId: string,
@@ -997,6 +1142,13 @@ export default function StockPage() {
         },
       };
     });
+  };
+
+  const setCalculatorPriceBasis = (
+    productId: string,
+    calculatorPriceBasis: CalculatorPriceBasis,
+  ) => {
+    updateRow(productId, { calculatorPriceBasis });
   };
 
   const handleLoadMore = () => {
@@ -1136,6 +1288,8 @@ export default function StockPage() {
             nextPrices.push({
               priceListId: update.priceListId,
               price: formattedPrice,
+              percentage:
+                update.percentage === null ? null : update.percentage.toFixed(4),
             });
           }
           if (update.isDefault) {
@@ -1193,6 +1347,7 @@ export default function StockPage() {
                 prices: job.priceUpdates.map((update) => ({
                   priceListId: update.priceListId,
                   price: update.price,
+                  percentage: update.percentage,
                 })),
               }
             : {}),
@@ -1291,7 +1446,12 @@ export default function StockPage() {
     if (saveProductIdsRef.current.has(productId)) return;
     if (draft.saveStatus === "queued" || draft.saveStatus === "saving") return;
 
-    const saveBuild = buildStockSaveJob(product, draft, priceLists);
+    const saveBuild = buildStockSaveJob(
+      product,
+      draft,
+      priceLists,
+      latestUsdRate,
+    );
     if (!saveBuild.ok) {
       setStatus(saveBuild.error);
       updateRow(productId, {
@@ -1399,21 +1559,6 @@ export default function StockPage() {
           <p className="mt-2 text-sm text-zinc-600">
             Ajusta costo ARS/USD y precios por lista en una sola grilla.
           </p>
-        </div>
-        <div className="shrink-0 rounded-lg border border-sky-200 bg-sky-50/70 px-2.5 py-1.5 text-right">
-          <div className="flex items-baseline justify-end gap-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-              Productos
-            </p>
-            <p className="text-sm font-semibold tabular-nums text-sky-950">
-              {totalProducts}
-            </p>
-          </div>
-          {totalProducts > products.length ? (
-            <p className="-mt-0.5 text-[10px] text-sky-700/80">
-              Cargados {products.length}
-            </p>
-          ) : null}
         </div>
       </div>
 
@@ -1570,8 +1715,11 @@ export default function StockPage() {
 
       <div className="card space-y-4 p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Costos y listas de precios
+          <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            <span>Costos y listas de precios</span>
+            <span className="text-xs font-medium normal-case tracking-normal text-zinc-400">
+              • {products.length} de {totalProducts}
+            </span>
           </h2>
           <div className="flex w-full flex-wrap items-center justify-start gap-3 sm:w-auto sm:flex-nowrap sm:justify-end">
             <label className="inline-flex items-center gap-2">
@@ -1608,7 +1756,7 @@ export default function StockPage() {
                 <th className="w-[108px] py-2 pr-2">Costo ARS</th>
                 <th className="w-[108px] py-2 pr-2">Costo USD</th>
                 {priceLists.map((priceList) => (
-                  <th key={priceList.id} className="w-[96px] py-2 pr-2">
+                  <th key={priceList.id} className="w-[112px] py-2 pr-2">
                     Precio {priceList.name}
                   </th>
                 ))}
@@ -1625,6 +1773,7 @@ export default function StockPage() {
                 const derivedPercentages = derivePercentagesFromPrices(
                   product,
                   priceLists,
+                  latestUsdRate,
                 );
                 const draft = rows[product.id] ?? createEmptyRowDraft({
                   cost: product.cost ?? "",
@@ -1635,6 +1784,7 @@ export default function StockPage() {
                   product,
                   draft,
                   priceLists,
+                  latestUsdRate,
                 );
                 const currentStock = Number(product.stock ?? 0);
                 const adjustment = rowState.adjustment;
@@ -1643,12 +1793,31 @@ export default function StockPage() {
                     ? currentStock + adjustment
                     : currentStock;
                 const isProjectedNegative = projectedStock < 0;
-                const currentCost = rowState.currentCost;
                 const currentCostUsd = rowState.currentCostUsd;
                 const hasCurrentCostUsd = currentCostUsd !== null;
                 const computedPrices = rowState.computedPrices;
                 const calculatorActive = calculatorRows.has(product.id);
                 const calculatorQuantity = parseNumber(draft.calculatorQty);
+                const canUseCalculatorArs = rowState.currentCost !== null;
+                const canUseCalculatorUsd = rowState.currentCostUsdArs !== null;
+                const calculatorPriceBasis =
+                  draft.calculatorPriceBasis === "usd" && canUseCalculatorUsd
+                    ? "usd"
+                    : draft.calculatorPriceBasis === "ars" && canUseCalculatorArs
+                      ? "ars"
+                      : canUseCalculatorUsd
+                        ? "usd"
+                        : "ars";
+                const calculatorUnitCost =
+                  calculatorPriceBasis === "usd"
+                    ? rowState.currentCostUsdArs
+                    : rowState.currentCost;
+                const calculatorPrices =
+                  calculatorPriceBasis === "usd"
+                    ? rowState.computedPricesFromUsd
+                    : rowState.computedPricesFromArs;
+                const calculatorPriceBasisLabel =
+                  calculatorPriceBasis === "usd" ? "USD" : "ARS";
                 const calculatorColSpan =
                   priceLists.length + 2 + (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
                 const hasRowChanges = rowState.hasRowChanges;
@@ -1724,43 +1893,44 @@ export default function StockPage() {
                           className="flex min-h-[3.75rem] flex-wrap items-center gap-4"
                         >
                           <div className="flex items-center gap-2 pr-1 text-[11px]">
-                            <span className="text-zinc-400">Unit.</span>
+                            <span className="text-zinc-400">Base</span>
                             <span
                               className="cursor-help whitespace-nowrap font-semibold tabular-nums text-zinc-800 outline-none"
                               onMouseEnter={(event) =>
                                 updateTaxTooltip(
-                                  `${product.id}-cost-ars`,
-                                  "Costo unitario",
-                                  currentCost,
+                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                  calculatorUnitCost,
                                   event,
                                 )
                               }
                               onMouseMove={(event) =>
                                 updateTaxTooltip(
-                                  `${product.id}-cost-ars`,
-                                  "Costo unitario",
-                                  currentCost,
+                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                  calculatorUnitCost,
                                   event,
                                 )
                               }
                               onMouseLeave={() => setTaxTooltip(null)}
                               onFocus={(event) =>
                                 focusTaxTooltip(
-                                  `${product.id}-cost-ars`,
-                                  "Costo unitario",
-                                  currentCost,
+                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                  calculatorUnitCost,
                                   event,
                                 )
                               }
                               onBlur={() => setTaxTooltip(null)}
                               tabIndex={0}
                             >
-                              ARS {formatPriceWithIva21Preview(currentCost)}
+                              {calculatorPriceBasisLabel}{" "}
+                              {formatPriceWithIva21Preview(calculatorUnitCost)}
                               <span className="ml-1 text-[10px] font-semibold text-zinc-400">
                                 c/IVA 21
                               </span>
                             </span>
-                            {hasCurrentCostUsd ? (
+                            {calculatorPriceBasis === "usd" && hasCurrentCostUsd ? (
                               <>
                                 <span className="text-zinc-300">/</span>
                                 <span className="font-semibold tabular-nums text-zinc-600">
@@ -1769,6 +1939,31 @@ export default function StockPage() {
                               </>
                             ) : null}
                           </div>
+                          {canUseCalculatorArs && canUseCalculatorUsd ? (
+                            <div className="flex items-center rounded-full bg-white p-0.5 text-[11px] font-semibold shadow-[inset_0_0_0_1px_rgba(228,228,231,0.95)]">
+                              {(["ars", "usd"] as const).map((basis) => {
+                                const isActive = calculatorPriceBasis === basis;
+                                return (
+                                  <button
+                                    key={`${product.id}-calculator-${basis}`}
+                                    type="button"
+                                    className={`h-7 rounded-full px-3 transition ${
+                                      isActive
+                                        ? "bg-sky-100 text-sky-900 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.75)]"
+                                        : "text-zinc-500 hover:bg-zinc-100"
+                                    }`}
+                                    onClick={() =>
+                                      setCalculatorPriceBasis(product.id, basis)
+                                    }
+                                    disabled={isRowSavePending}
+                                    aria-pressed={isActive}
+                                  >
+                                    {basis.toUpperCase()}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
                           <div className="flex items-center gap-1 rounded-full bg-white p-0.5 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.9)]">
                             <button
                               type="button"
@@ -1804,7 +1999,7 @@ export default function StockPage() {
                             </button>
                           </div>
                           {priceLists.map((priceList) => {
-                            const unitPrice = computedPrices[priceList.id];
+                            const unitPrice = calculatorPrices[priceList.id];
                             const finalPrice =
                               unitPrice !== null && calculatorQuantity !== null
                                 ? normalizePriceNumber(
@@ -1825,7 +2020,7 @@ export default function StockPage() {
                                   onMouseEnter={(event) =>
                                     updateTaxTooltip(
                                       `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total`,
+                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
                                       finalPrice,
                                       event,
                                     )
@@ -1833,7 +2028,7 @@ export default function StockPage() {
                                   onMouseMove={(event) =>
                                     updateTaxTooltip(
                                       `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total`,
+                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
                                       finalPrice,
                                       event,
                                     )
@@ -1842,7 +2037,7 @@ export default function StockPage() {
                                   onFocus={(event) =>
                                     focusTaxTooltip(
                                       `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total`,
+                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
                                       finalPrice,
                                       event,
                                     )
@@ -1886,9 +2081,7 @@ export default function StockPage() {
                               className="input no-spinner w-full px-2 text-right tabular-nums"
                               value={draft.costUsd}
                               onValueChange={(nextValue) =>
-                                updateEditableRow(product.id, {
-                                  costUsd: normalizeMoney(nextValue),
-                                })
+                                updateUsdCost(product.id, nextValue)
                               }
                               placeholder="0,00"
                               maxDecimals={2}
@@ -1898,67 +2091,158 @@ export default function StockPage() {
                             <span aria-hidden="true" className="block min-h-4" />
                           </div>
                         </td>
-                        {priceLists.map((priceList) => (
-                          <td
-                            key={`${product.id}-${priceList.id}`}
-                            className="py-3 pr-2 align-top"
-                          >
-                            <div className="w-20 space-y-1">
-                              <MoneyInput
-                                className="input no-spinner w-full px-2 text-right tabular-nums"
-                                value={draft.percentages[priceList.id] ?? ""}
-                                onValueChange={(nextValue) =>
-                                  updateRowPercentage(
-                                    product.id,
-                                    priceList.id,
-                                    normalizePercent(nextValue),
-                                  )
-                                }
-                                placeholder="0"
-                                maxDecimals={4}
-                                suffix="%"
-                                disabled={isRowSavePending}
-                              />
-                              <p
-                                className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
-                                onMouseEnter={(event) =>
-                                  updateTaxTooltip(
-                                    `${product.id}-${priceList.id}-unit`,
-                                    `Precio ${priceList.name}`,
-                                    computedPrices[priceList.id],
-                                    event,
-                                  )
-                                }
-                                onMouseMove={(event) =>
-                                  updateTaxTooltip(
-                                    `${product.id}-${priceList.id}-unit`,
-                                    `Precio ${priceList.name}`,
-                                    computedPrices[priceList.id],
-                                    event,
-                                  )
-                                }
-                                onMouseLeave={() => setTaxTooltip(null)}
-                                onFocus={(event) =>
-                                  focusTaxTooltip(
-                                    `${product.id}-${priceList.id}-unit`,
-                                    `Precio ${priceList.name}`,
-                                    computedPrices[priceList.id],
-                                    event,
-                                  )
-                                }
-                                onBlur={() => setTaxTooltip(null)}
-                                tabIndex={0}
-                              >
-                                {formatPriceWithIva21Preview(
-                                  computedPrices[priceList.id],
+                        {priceLists.map((priceList) => {
+                          const priceFromArs =
+                            rowState.computedPricesFromArs[priceList.id];
+                          const priceFromUsd =
+                            rowState.computedPricesFromUsd[priceList.id];
+                          const showDualCostPrices =
+                            rowState.currentCost !== null &&
+                            rowState.currentCostUsdArs !== null &&
+                            priceFromArs !== null &&
+                            priceFromUsd !== null &&
+                            normalizePriceNumber(priceFromArs) !==
+                              normalizePriceNumber(priceFromUsd);
+
+                          return (
+                            <td
+                              key={`${product.id}-${priceList.id}`}
+                              className="py-3 pr-2 align-top"
+                            >
+                              <div className="w-28 space-y-1">
+                                <MoneyInput
+                                  className="input no-spinner w-full px-2 text-right tabular-nums"
+                                  value={draft.percentages[priceList.id] ?? ""}
+                                  onValueChange={(nextValue) =>
+                                    updateRowPercentage(
+                                      product.id,
+                                      priceList.id,
+                                      normalizePercent(nextValue),
+                                    )
+                                  }
+                                  placeholder="0"
+                                  maxDecimals={4}
+                                  suffix="%"
+                                  disabled={isRowSavePending}
+                                />
+                                {showDualCostPrices ? (
+                                  <div className="min-h-8 space-y-0.5 text-right text-[10px] font-medium tabular-nums leading-tight">
+                                    <p
+                                      className="cursor-help whitespace-nowrap text-zinc-700 outline-none"
+                                      onMouseEnter={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-ars-unit`,
+                                          `Precio ${priceList.name} base ARS`,
+                                          priceFromArs,
+                                          event,
+                                        )
+                                      }
+                                      onMouseMove={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-ars-unit`,
+                                          `Precio ${priceList.name} base ARS`,
+                                          priceFromArs,
+                                          event,
+                                        )
+                                      }
+                                      onMouseLeave={() => setTaxTooltip(null)}
+                                      onFocus={(event) =>
+                                        focusTaxTooltip(
+                                          `${product.id}-${priceList.id}-ars-unit`,
+                                          `Precio ${priceList.name} base ARS`,
+                                          priceFromArs,
+                                          event,
+                                        )
+                                      }
+                                      onBlur={() => setTaxTooltip(null)}
+                                      tabIndex={0}
+                                    >
+                                      ARS{" "}
+                                      {formatPriceWithIva21Preview(priceFromArs)}
+                                      <span className="ml-1 font-semibold text-zinc-400">
+                                        c/IVA
+                                      </span>
+                                    </p>
+                                    <p
+                                      className="cursor-help whitespace-nowrap text-amber-700 outline-none"
+                                      onMouseEnter={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-usd-unit`,
+                                          `Precio ${priceList.name} base USD`,
+                                          priceFromUsd,
+                                          event,
+                                        )
+                                      }
+                                      onMouseMove={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-usd-unit`,
+                                          `Precio ${priceList.name} base USD`,
+                                          priceFromUsd,
+                                          event,
+                                        )
+                                      }
+                                      onMouseLeave={() => setTaxTooltip(null)}
+                                      onFocus={(event) =>
+                                        focusTaxTooltip(
+                                          `${product.id}-${priceList.id}-usd-unit`,
+                                          `Precio ${priceList.name} base USD`,
+                                          priceFromUsd,
+                                          event,
+                                        )
+                                      }
+                                      onBlur={() => setTaxTooltip(null)}
+                                      tabIndex={0}
+                                    >
+                                      USD{" "}
+                                      {formatPriceWithIva21Preview(priceFromUsd)}
+                                      <span className="ml-1 font-semibold text-amber-600/70">
+                                        c/IVA
+                                      </span>
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <p
+                                    className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
+                                    onMouseEnter={(event) =>
+                                      updateTaxTooltip(
+                                        `${product.id}-${priceList.id}-unit`,
+                                        `Precio ${priceList.name}`,
+                                        computedPrices[priceList.id],
+                                        event,
+                                      )
+                                    }
+                                    onMouseMove={(event) =>
+                                      updateTaxTooltip(
+                                        `${product.id}-${priceList.id}-unit`,
+                                        `Precio ${priceList.name}`,
+                                        computedPrices[priceList.id],
+                                        event,
+                                      )
+                                    }
+                                    onMouseLeave={() => setTaxTooltip(null)}
+                                    onFocus={(event) =>
+                                      focusTaxTooltip(
+                                        `${product.id}-${priceList.id}-unit`,
+                                        `Precio ${priceList.name}`,
+                                        computedPrices[priceList.id],
+                                        event,
+                                      )
+                                    }
+                                    onBlur={() => setTaxTooltip(null)}
+                                    tabIndex={0}
+                                  >
+                                    {formatPriceWithIva21Preview(
+                                      computedPrices[priceList.id],
+                                    )}
+                                    <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                      c/IVA 21
+                                    </span>
+                                  </p>
                                 )}
-                                <span className="ml-1 text-[10px] font-semibold text-zinc-400">
-                                  c/IVA 21
-                                </span>
-                              </p>
-                            </div>
-                          </td>
-                        ))}
+                              </div>
+                            </td>
+                          );
+                        })}
                         {STOCK_ACCOUNTING_ENABLED ? (
                           <td className="py-3 pr-2 align-top">
                             <div className="flex min-h-10 items-center gap-2 whitespace-nowrap">

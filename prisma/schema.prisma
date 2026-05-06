@@ -479,6 +479,7 @@ model PriceListItem {
   priceListId String
   productId   String
   price       Decimal @db.Decimal(12, 2)
+  percentage  Decimal? @db.Decimal(12, 4)
 
   priceList PriceList @relation(fields: [priceListId], references: [id])
   product   Product   @relation(fields: [productId], references: [id])

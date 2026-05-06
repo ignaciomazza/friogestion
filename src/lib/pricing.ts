@@ -1,6 +1,7 @@
 type ProductListPrice = {
   priceListId: string;
   price: string | null;
+  percentage?: string | null;
 };
 
 const toNumber = (value: string | null | undefined) => {
@@ -25,6 +26,18 @@ const findListPrice = (
   const found = prices.find((price) => price.priceListId === priceListId);
   return validPrice(found?.price);
 };
+
+const validPercentage = (value: string | null | undefined) => {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return value;
+};
+
+const findListPriceItem = (
+  prices: ProductListPrice[] | null | undefined,
+  priceListId: string,
+) => prices?.find((price) => price.priceListId === priceListId) ?? null;
 
 const findChosenPriceListId = ({
   prices,
@@ -60,25 +73,37 @@ const deriveDynamicUsdListPrice = ({
 }) => {
   if (!prices?.length || !priceListOrderIds.length) return null;
 
-  const costArsBase = toNumber(productCost);
   const costUsd = toNumber(productCostUsd);
-  if (costArsBase === null || costUsd === null) return null;
-  if (costArsBase < 0 || costUsd < 0 || usdRateArs <= 0) return null;
+  if (costUsd === null) return null;
+  if (costUsd < 0 || usdRateArs <= 0) return null;
 
-  let sourceBase = costArsBase;
   let dynamicPrice = costUsd * usdRateArs;
+  let sourceBase = toNumber(productCost) ?? dynamicPrice;
+  if (sourceBase < 0) return null;
 
   for (const priceListId of priceListOrderIds) {
-    const sourcePriceRaw = findListPrice(prices, priceListId);
-    if (!sourcePriceRaw) return null;
+    const priceItem = findListPriceItem(prices, priceListId);
+    const storedPercentage = validPercentage(priceItem?.percentage);
+    const sourcePriceRaw = validPrice(priceItem?.price);
+    if (!storedPercentage && !sourcePriceRaw) return null;
     const sourcePrice = toNumber(sourcePriceRaw);
-    if (sourcePrice === null || sourcePrice < 0) return null;
+    if (!storedPercentage && (sourcePrice === null || sourcePrice < 0)) {
+      return null;
+    }
 
-    let percentage = 0;
-    if (sourceBase === 0) {
-      if (sourcePrice !== 0) return null;
-    } else {
-      percentage = ((sourcePrice - sourceBase) / sourceBase) * 100;
+    let percentage = toNumber(storedPercentage);
+    if (percentage === null) {
+      if (sourcePrice === null) return null;
+      if (sourceBase === 0) {
+        if (sourcePrice !== 0) return null;
+        percentage = 0;
+      } else {
+        percentage = ((sourcePrice - sourceBase) / sourceBase) * 100;
+      }
+    }
+
+    if (!Number.isFinite(percentage)) {
+      return null;
     }
 
     dynamicPrice = dynamicPrice * (1 + percentage / 100);
@@ -88,7 +113,11 @@ const deriveDynamicUsdListPrice = ({
       return dynamicPrice.toFixed(2);
     }
 
-    sourceBase = sourcePrice;
+    if (sourcePrice !== null) {
+      sourceBase = sourcePrice;
+    } else {
+      sourceBase = dynamicPrice;
+    }
   }
 
   return null;
@@ -126,6 +155,7 @@ export const resolveSuggestedProductPrice = ({
     if (
       chosenPriceListId &&
       usdRateArs &&
+      toNumber(productCost) === null &&
       priceListOrderIds?.length
     ) {
       const dynamicPrice = deriveDynamicUsdListPrice({

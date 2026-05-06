@@ -20,11 +20,13 @@ const stockPatchSchema = z.object({
   costUsd: z.union([z.coerce.number().min(0), z.null()]).optional(),
   priceListId: z.string().min(1).optional(),
   price: z.union([z.coerce.number().min(0), z.null()]).optional(),
+  percentage: z.union([z.coerce.number(), z.null()]).optional(),
   prices: z
     .array(
       z.object({
         priceListId: z.string().min(1),
         price: z.union([z.coerce.number().min(0), z.null()]),
+        percentage: z.union([z.coerce.number(), z.null()]).optional(),
       }),
     )
     .optional(),
@@ -102,7 +104,7 @@ export async function GET(req: NextRequest) {
       ];
     }
 
-    const [total, products, priceLists] = await Promise.all([
+    const [total, products, priceLists, latestUsdRate] = await Promise.all([
       prisma.product.count({ where: productWhere }),
       prisma.product.findMany({
         where: productWhere,
@@ -113,6 +115,14 @@ export async function GET(req: NextRequest) {
       prisma.priceList.findMany({
         where: { organizationId, isActive: true },
         orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      }),
+      prisma.exchangeRate.findFirst({
+        where: {
+          organizationId,
+          baseCode: "USD",
+          quoteCode: "ARS",
+        },
+        orderBy: { asOf: "desc" },
       }),
     ]);
     const productIds = products.map((product) => product.id);
@@ -130,6 +140,7 @@ export async function GET(req: NextRequest) {
               productId: true,
               priceListId: true,
               price: true,
+              percentage: true,
             },
           })
         : Promise.resolve([]),
@@ -146,7 +157,7 @@ export async function GET(req: NextRequest) {
       : new Map<string, number>();
     const pricesByProduct = new Map<
       string,
-      Array<{ priceListId: string; price: string }>
+      Array<{ priceListId: string; price: string; percentage: string | null }>
     >();
 
     for (const item of priceItems) {
@@ -154,6 +165,7 @@ export async function GET(req: NextRequest) {
       current.push({
         priceListId: item.priceListId,
         price: item.price.toString(),
+        percentage: item.percentage?.toString() ?? null,
       });
       pricesByProduct.set(item.productId, current);
     }
@@ -166,6 +178,7 @@ export async function GET(req: NextRequest) {
       offset,
       hasMore,
       nextOffset: hasMore ? offset + products.length : null,
+      latestUsdRate: latestUsdRate?.rate?.toString() ?? null,
       priceLists: priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,
@@ -200,7 +213,10 @@ export async function PATCH(req: NextRequest) {
     const organizationId = membership.organizationId;
     const body = stockPatchSchema.parse(await req.json());
 
-    const normalizedPriceUpdates = new Map<string, number | null>();
+    const normalizedPriceUpdates = new Map<
+      string,
+      { price: number | null; percentage?: number | null }
+    >();
     if (body.price !== undefined) {
       if (!body.priceListId) {
         return NextResponse.json(
@@ -208,10 +224,18 @@ export async function PATCH(req: NextRequest) {
           { status: 400 },
         );
       }
-      normalizedPriceUpdates.set(body.priceListId, body.price);
+      normalizedPriceUpdates.set(body.priceListId, {
+        price: body.price,
+        ...(body.percentage !== undefined ? { percentage: body.percentage } : {}),
+      });
     }
     for (const priceUpdate of body.prices ?? []) {
-      normalizedPriceUpdates.set(priceUpdate.priceListId, priceUpdate.price);
+      normalizedPriceUpdates.set(priceUpdate.priceListId, {
+        price: priceUpdate.price,
+        ...(priceUpdate.percentage !== undefined
+          ? { percentage: priceUpdate.percentage }
+          : {}),
+      });
     }
 
     if (
@@ -274,13 +298,15 @@ export async function PATCH(req: NextRequest) {
         });
       }
 
-      for (const [priceListId, nextPrice] of normalizedPriceUpdates.entries()) {
+      for (const [priceListId, update] of normalizedPriceUpdates.entries()) {
         const priceList = priceListById.get(priceListId);
         if (!priceList) {
           // Defensive guard in case list changes after validation.
           continue;
         }
 
+        const nextPrice = update.price;
+        const nextPercentage = update.percentage;
         if (nextPrice === null) {
           await tx.priceListItem.deleteMany({
             where: {
@@ -296,11 +322,25 @@ export async function PATCH(req: NextRequest) {
                 productId: body.productId,
               },
             },
-            update: { price: nextPrice.toFixed(2) },
+            update: {
+              price: nextPrice.toFixed(2),
+              ...(nextPercentage !== undefined
+                ? {
+                    percentage:
+                      nextPercentage === null ? null : nextPercentage.toFixed(4),
+                  }
+                : {}),
+            },
             create: {
               priceListId,
               productId: body.productId,
               price: nextPrice.toFixed(2),
+              ...(nextPercentage !== undefined
+                ? {
+                    percentage:
+                      nextPercentage === null ? null : nextPercentage.toFixed(4),
+                  }
+                : {}),
             },
           });
         }
