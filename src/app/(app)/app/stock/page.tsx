@@ -454,13 +454,18 @@ const getStockRowChangeState = (
       normalizePercentageNumber(draft.percentages[priceList.id]) !==
       normalizePercentageNumber(derivedPercentages[priceList.id]),
   );
+  const hasDraftPercentages = priceLists.some(
+    (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
+  );
   const hasPercentagesWithoutCost =
     effectiveCost === null &&
-    priceLists.some(
-      (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
-    );
+    hasDraftPercentages &&
+    (costChanged || costUsdChanged || percentagesChanged);
   const hasUsdCostWithoutRate =
-    currentCostUsd !== null && latestUsdRate === null && currentCost === null;
+    currentCostUsd !== null &&
+    latestUsdRate === null &&
+    currentCost === null &&
+    (costChanged || costUsdChanged || percentagesChanged);
   const pricesChanged =
     effectiveCost === null ||
     !(costChanged || costUsdChanged || percentagesChanged)
@@ -535,41 +540,80 @@ const buildStockSaveJob = (
     };
   }
 
-  const priceUpdates =
-    rowState.effectiveCost === null ||
-    !(
-      rowState.costChanged ||
+  const shouldSyncComputedPrices =
+    rowState.effectiveCost !== null &&
+    (rowState.costChanged ||
       rowState.costUsdChanged ||
-      rowState.percentagesChanged
-    )
-      ? []
-      : priceLists.reduce<StockPriceUpdate[]>((updates, priceList) => {
-          const originalPrice = normalizePriceNumber(
-            parseNumber(getProductPriceForList(product, priceList)),
-          );
-          const originalPercentage = normalizePercentageNumber(
-            getProductPercentageForList(product, priceList),
-          );
-          const nextPercentage = normalizePercentageNumber(
-            draft.percentages[priceList.id],
-          );
-          const nextPrice = normalizePriceNumber(
-            rowState.computedPrices[priceList.id],
-          );
+      rowState.percentagesChanged ||
+      rowState.pricesChanged);
+  const priceUpdates = priceLists.reduce<StockPriceUpdate[]>(
+    (updates, priceList) => {
+      const originalPrice = normalizePriceNumber(
+        parseNumber(getProductPriceForList(product, priceList)),
+      );
+      const originalPercentage = normalizePercentageNumber(
+        getProductPercentageForList(product, priceList),
+      );
+      const nextPercentage = normalizePercentageNumber(
+        draft.percentages[priceList.id],
+      );
+      const shouldConsiderPriceDiff =
+        rowState.costChanged ||
+        rowState.costUsdChanged ||
+        rowState.percentagesChanged ||
+        rowState.pricesChanged;
 
-          if (
-            originalPrice !== nextPrice ||
-            originalPercentage !== nextPercentage
-          ) {
-            updates.push({
-              priceListId: priceList.id,
-              price: nextPrice,
-              percentage: nextPercentage,
-              isDefault: priceList.isDefault,
-            });
-          }
-          return updates;
-        }, []);
+      if (shouldSyncComputedPrices) {
+        updates.push({
+          priceListId: priceList.id,
+          price: normalizePriceNumber(rowState.computedPrices[priceList.id]),
+          percentage: nextPercentage,
+          isDefault: priceList.isDefault,
+        });
+        return updates;
+      }
+
+      if (!shouldConsiderPriceDiff) {
+        return updates;
+      }
+
+      if (
+        rowState.effectiveCost === null &&
+        rowState.percentagesChanged &&
+        nextPercentage === null &&
+        originalPercentage !== null
+      ) {
+        updates.push({
+          priceListId: priceList.id,
+          price: null,
+          percentage: null,
+          isDefault: priceList.isDefault,
+        });
+        return updates;
+      }
+
+      const nextPrice = normalizePriceNumber(rowState.computedPrices[priceList.id]);
+      if (originalPrice !== nextPrice || originalPercentage !== nextPercentage) {
+        updates.push({
+          priceListId: priceList.id,
+          price: nextPrice,
+          percentage: nextPercentage,
+          isDefault: priceList.isDefault,
+        });
+      }
+      return updates;
+    },
+    [],
+  );
+
+  if (
+    !rowState.costChanged &&
+    !rowState.costUsdChanged &&
+    priceUpdates.length === 0 &&
+    !rowState.adjustmentChanged
+  ) {
+    return { ok: false, error: "No hay cambios para guardar" };
+  }
 
   return {
     ok: true,
@@ -686,6 +730,8 @@ export default function StockPage() {
   const sortOrderRef = useRef<StockSort>(DEFAULT_STOCK_SORT);
   const shouldBlockStockExitRef = useRef(false);
   const hasSaveQueueActivityRef = useRef(false);
+  const productsRef = useRef<StockProduct[]>([]);
+  const rowsRef = useRef<Record<string, RowDraft>>({});
 
   const updateProductTooltip = (
     product: StockProduct,
@@ -763,8 +809,13 @@ export default function StockPage() {
   }, [isSortOrderReady, sortOrder]);
 
   useEffect(() => {
+    productsRef.current = products;
     productsLengthRef.current = products.length;
-  }, [products.length]);
+  }, [products]);
+
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
 
   useEffect(() => {
     debouncedQueryRef.current = debouncedQuery;
@@ -797,34 +848,84 @@ export default function StockPage() {
         nextPriceLists,
         usdRate,
       );
+      const shouldKeepEditableDraft =
+        previousDraft?.saveStatus === "queued" ||
+        previousDraft?.saveStatus === "saving" ||
+        previousDraft?.saveStatus === "failed" ||
+        (previousDraft?.saveStatus === "idle" &&
+          getStockRowChangeState(
+            product,
+            previousDraft,
+            nextPriceLists,
+            usdRate,
+          ).hasRowChanges);
       const nextPercentages: Record<string, string> = {};
 
       for (const priceList of nextPriceLists) {
         nextPercentages[priceList.id] =
-          previousDraft?.percentages[priceList.id] ??
-          derivedPercentages[priceList.id] ??
-          "";
+          shouldKeepEditableDraft && previousDraft
+            ? (previousDraft.percentages[priceList.id] ??
+              derivedPercentages[priceList.id] ??
+              "")
+            : (derivedPercentages[priceList.id] ?? "");
       }
 
       nextRows[product.id] = createEmptyRowDraft({
-        cost: previousDraft?.cost ?? product.cost ?? "",
-        costUsd: previousDraft?.costUsd ?? product.costUsd ?? "",
+        cost:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.cost
+            : (product.cost ?? ""),
+        costUsd:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.costUsd
+            : (product.costUsd ?? ""),
         percentages: nextPercentages,
-        adjustmentQty: previousDraft?.adjustmentQty ?? "",
-        adjustmentRequestId: previousDraft?.adjustmentRequestId ?? null,
+        adjustmentQty:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.adjustmentQty
+            : "",
+        adjustmentRequestId:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.adjustmentRequestId
+            : null,
         calculatorQty: previousDraft?.calculatorQty ?? "1",
         calculatorPriceBasis: previousDraft?.calculatorPriceBasis ?? "ars",
         isSaving:
-          previousDraft?.saveStatus === "queued" ||
-          previousDraft?.saveStatus === "saving",
-        saveStatus: previousDraft?.saveStatus ?? "idle",
-        saveError: previousDraft?.saveError ?? null,
+          shouldKeepEditableDraft &&
+          (previousDraft?.saveStatus === "queued" ||
+            previousDraft?.saveStatus === "saving"),
+        saveStatus:
+          previousDraft?.saveStatus === "saved"
+            ? "saved"
+            : shouldKeepEditableDraft && previousDraft
+              ? previousDraft.saveStatus
+              : "idle",
+        saveError:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.saveError
+            : null,
         warning: previousDraft?.warning ?? null,
       });
     }
 
     return nextRows;
   };
+
+  const replaceRows = useCallback((nextRows: Record<string, RowDraft>) => {
+    rowsRef.current = nextRows;
+    setRows(nextRows);
+  }, []);
+
+  const updateRows = useCallback(
+    (
+      updater: (
+        previousRows: Record<string, RowDraft>,
+      ) => Record<string, RowDraft>,
+    ) => {
+      replaceRows(updater(rowsRef.current));
+    },
+    [replaceRows],
+  );
 
   const loadStock = useCallback(
     async ({
@@ -878,8 +979,9 @@ export default function StockPage() {
           const nextProducts = append
             ? mergeProductsById(previousProducts, data.products)
             : data.products;
-          setRows((previousRows) =>
-            hydrateRows(nextProducts, data.priceLists, previousRows, usdRate),
+          productsRef.current = nextProducts;
+          replaceRows(
+            hydrateRows(nextProducts, data.priceLists, rowsRef.current, usdRate),
           );
           return nextProducts;
         });
@@ -897,7 +999,7 @@ export default function StockPage() {
         }
       }
     },
-    [sortOrder],
+    [replaceRows, sortOrder],
   );
 
   useEffect(() => {
@@ -1032,7 +1134,7 @@ export default function StockPage() {
   }, [showStockExitBlockedToast]);
 
   const updateRow = (productId: string, updates: Partial<RowDraft>) => {
-    setRows((previous) => ({
+    updateRows((previous) => ({
       ...previous,
       [productId]: {
         ...(previous[productId] ?? createEmptyRowDraft()),
@@ -1063,7 +1165,7 @@ export default function StockPage() {
     priceListId: string,
     value: string,
   ) => {
-    setRows((previous) => {
+    updateRows((previous) => {
       const current = previous[productId] ?? createEmptyRowDraft();
       return {
         ...previous,
@@ -1081,7 +1183,7 @@ export default function StockPage() {
   };
 
   const nudgeStockAdjustment = (productId: string, step: number) => {
-    setRows((previous) => {
+    updateRows((previous) => {
       const current = previous[productId] ?? createEmptyRowDraft();
       const parsedCurrent = Number(current.adjustmentQty);
       const next =
@@ -1129,7 +1231,7 @@ export default function StockPage() {
   };
 
   const nudgeCalculatorQuantity = (productId: string, step: number) => {
-    setRows((previous) => {
+    updateRows((previous) => {
       const current = previous[productId] ?? createEmptyRowDraft();
       const parsedCurrent = parseNumber(current.calculatorQty) ?? 0;
       const next = Math.max(0, parsedCurrent + step);
@@ -1271,8 +1373,8 @@ export default function StockPage() {
     const nextCost = job.cost === null ? null : job.cost.toFixed(2);
     const nextCostUsd = job.costUsd === null ? null : job.costUsd.toFixed(2);
 
-    setProducts((previousProducts) =>
-      previousProducts.map((product) => {
+    setProducts((previousProducts) => {
+      const nextProducts = previousProducts.map((product) => {
         if (product.id !== job.productId) return product;
 
         let nextPrices = [...product.prices];
@@ -1305,24 +1407,37 @@ export default function StockPage() {
           prices: nextPrices,
           stock: result.projectedStock ?? product.stock,
         };
-      }),
-    );
+      });
+      productsRef.current = nextProducts;
+      return nextProducts;
+    });
 
-    const rowUpdates: Partial<RowDraft> = {
-      adjustmentQty: "",
-      adjustmentRequestId: null,
-      isSaving: false,
-      saveStatus: "saved",
-      saveError: null,
-      warning: result.warning ?? null,
-    };
-    if (job.costChanged) {
-      rowUpdates.cost = nextCost ?? "";
-    }
-    if (job.costUsdChanged) {
-      rowUpdates.costUsd = nextCostUsd ?? "";
-    }
-    updateRow(job.productId, rowUpdates);
+    updateRows((previousRows) => {
+      const current = previousRows[job.productId] ?? createEmptyRowDraft();
+      const nextPercentages = { ...current.percentages };
+      for (const update of job.priceUpdates) {
+        nextPercentages[update.priceListId] =
+          update.percentage === null
+            ? ""
+            : formatPercentageValue(update.percentage);
+      }
+
+      return {
+        ...previousRows,
+        [job.productId]: {
+          ...current,
+          cost: job.costChanged ? (nextCost ?? "") : current.cost,
+          costUsd: job.costUsdChanged ? (nextCostUsd ?? "") : current.costUsd,
+          percentages: nextPercentages,
+          adjustmentQty: "",
+          adjustmentRequestId: null,
+          isSaving: false,
+          saveStatus: "saved",
+          saveError: null,
+          warning: result.warning ?? null,
+        },
+      };
+    });
   };
 
   const readResponseJson = async (response: Response) => {
@@ -1440,8 +1555,8 @@ export default function StockPage() {
   };
 
   const saveRow = (productId: string) => {
-    const draft = rows[productId];
-    const product = products.find((item) => item.id === productId);
+    const draft = rowsRef.current[productId];
+    const product = productsRef.current.find((item) => item.id === productId);
     if (!draft || !product) return;
     if (saveProductIdsRef.current.has(productId)) return;
     if (draft.saveStatus === "queued" || draft.saveStatus === "saving") return;
