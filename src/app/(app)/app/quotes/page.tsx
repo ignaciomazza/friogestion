@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
+import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import QuotesClient from "./quotes-client";
 
 export default async function QuotesPage() {
@@ -43,7 +44,7 @@ export default async function QuotesPage() {
       }),
       prisma.priceList.findMany({
         where: { organizationId: membership.organizationId, isActive: true },
-        orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+        orderBy: PRICE_LIST_ORDER_BY,
       }),
       prisma.exchangeRate.findFirst({
         where: {
@@ -80,6 +81,7 @@ export default async function QuotesPage() {
         isDefault: priceList.isDefault,
         isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
+        sortOrder: priceList.sortOrder,
       }))}
       initialLatestUsdRate={usdRate?.rate?.toString() ?? null}
     />

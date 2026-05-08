@@ -6,10 +6,13 @@ import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ToastContainer, toast, type Id as ToastId } from "react-toastify";
 import {
+  ArrowRightStartOnRectangleIcon,
   CalculatorIcon,
   CheckIcon,
+  CubeIcon,
   MinusIcon,
   PlusIcon,
+  XMarkIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { STOCK_ACCOUNTING_ENABLED, STOCK_PAGE_ENABLED } from "@/lib/features";
@@ -29,6 +32,7 @@ type PriceListOption = {
   currencyCode: string;
   isDefault: boolean;
   isActive: boolean;
+  sortOrder: number;
 };
 
 type StockPrice = {
@@ -83,6 +87,11 @@ type TaxTooltip = {
   x: number;
   y: number;
 };
+
+type StockExitGuardAction =
+  | { type: "navigation"; href: string }
+  | { type: "reload" }
+  | { type: "blocked-action"; label: string };
 
 type StockListResponse = {
   products: StockProduct[];
@@ -158,7 +167,6 @@ const SEARCH_DEBOUNCE_MS = 260;
 const STOCK_SAVE_CONCURRENCY = 3;
 const STOCK_SORT_STORAGE_KEY = "friogestion.stock.sort";
 const STOCK_SAVE_TOAST_ID = "stock-save-queue";
-const STOCK_EXIT_BLOCKED_TOAST_ID = "stock-exit-blocked";
 
 const INITIAL_SAVE_QUEUE_SUMMARY: StockSaveQueueSummary = {
   total: 0,
@@ -706,6 +714,8 @@ export default function StockPage() {
     null,
   );
   const [taxTooltip, setTaxTooltip] = useState<TaxTooltip | null>(null);
+  const [stockExitGuardAction, setStockExitGuardAction] =
+    useState<StockExitGuardAction | null>(null);
   const [productForm, setProductForm] = useState({
     name: "",
     sku: "",
@@ -1032,33 +1042,38 @@ export default function StockPage() {
   }, 0);
   const hasSaveQueueActivity =
     saveQueueSummary.pending > 0 || saveQueueSummary.active > 0;
-  const hasVisibleUnsavedChanges = useMemo(
+  const visibleUnsavedProductIds = useMemo(
     () =>
-      products.some((product) => {
+      products.reduce<string[]>((changedProductIds, product) => {
         const draft = rows[product.id];
-        if (!draft) return false;
+        if (!draft) return changedProductIds;
         if (draft.saveStatus === "queued" || draft.saveStatus === "saving") {
-          return false;
+          return changedProductIds;
         }
-        return getStockRowChangeState(
+        const rowState = getStockRowChangeState(
           product,
           draft,
           priceLists,
           latestUsdRate,
-        ).hasRowChanges;
-      }),
+        );
+        if (rowState.hasRowChanges) {
+          changedProductIds.push(product.id);
+        }
+        return changedProductIds;
+      }, []),
     [latestUsdRate, priceLists, products, rows],
   );
+  const visibleUnsavedCount = visibleUnsavedProductIds.length;
+  const hasVisibleUnsavedChanges = visibleUnsavedCount > 0;
   const shouldBlockStockExit =
     hasSaveQueueActivity || hasVisibleUnsavedChanges;
 
-  const showStockExitBlockedToast = useCallback(() => {
-    toast.warn(
-      hasSaveQueueActivityRef.current
-        ? "Espera a que terminen los guardados de stock antes de salir."
-        : "Guarda los cambios de stock antes de buscar, ordenar o salir.",
-      { toastId: STOCK_EXIT_BLOCKED_TOAST_ID },
-    );
+  const openStockExitGuard = useCallback((action: StockExitGuardAction) => {
+    setStockExitGuardAction(action);
+  }, []);
+
+  const closeStockExitGuard = useCallback(() => {
+    setStockExitGuardAction(null);
   }, []);
 
   useEffect(() => {
@@ -1085,13 +1100,36 @@ export default function StockPage() {
     const handleAppNavigation = (event: Event) => {
       if (!shouldBlockStockExitRef.current) return;
       event.preventDefault();
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "blocked-action",
+        label: "salir de Stock",
+      });
     };
 
     window.addEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
     return () =>
       window.removeEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
-  }, [showStockExitBlockedToast]);
+  }, [openStockExitGuard]);
+
+  useEffect(() => {
+    if (!STOCK_PAGE_ENABLED) return;
+
+    const handleReloadShortcut = (event: globalThis.KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const isReloadShortcut =
+        event.key === "F5" || ((event.metaKey || event.ctrlKey) && key === "r");
+      if (!isReloadShortcut || event.altKey || event.defaultPrevented) return;
+      if (!shouldBlockStockExitRef.current) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      openStockExitGuard({ type: "reload" });
+    };
+
+    window.addEventListener("keydown", handleReloadShortcut, true);
+    return () =>
+      window.removeEventListener("keydown", handleReloadShortcut, true);
+  }, [openStockExitGuard]);
 
   useEffect(() => {
     if (!STOCK_PAGE_ENABLED) return;
@@ -1128,12 +1166,15 @@ export default function StockPage() {
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "navigation",
+        href: `${url.pathname}${url.search}${url.hash}`,
+      });
     };
 
     document.addEventListener("click", handleDocumentClick, true);
     return () => document.removeEventListener("click", handleDocumentClick, true);
-  }, [showStockExitBlockedToast]);
+  }, [openStockExitGuard]);
 
   const updateRow = (productId: string, updates: Partial<RowDraft>) => {
     updateRows((previous) => ({
@@ -1218,7 +1259,10 @@ export default function StockPage() {
 
   const handleSortOrderChange = (value: string) => {
     if (shouldBlockStockExit) {
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "blocked-action",
+        label: "ordenar la grilla",
+      });
       return;
     }
     setSortOrder(normalizeStockSort(value));
@@ -1226,7 +1270,10 @@ export default function StockPage() {
 
   const handleSearchQueryChange = (value: string) => {
     if (shouldBlockStockExit) {
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "blocked-action",
+        label: "buscar productos",
+      });
       return;
     }
     setQuery(value);
@@ -1257,7 +1304,10 @@ export default function StockPage() {
 
   const handleLoadMore = () => {
     if (shouldBlockStockExit) {
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "blocked-action",
+        label: "cargar mas productos",
+      });
       return;
     }
     if (nextOffset === null || isLoading || isLoadingMore) return;
@@ -1612,10 +1662,37 @@ export default function StockPage() {
     startNextSaveJobs();
   };
 
+  const handleSaveVisibleStockChanges = () => {
+    if (!visibleUnsavedProductIds.length) return;
+    for (const productId of visibleUnsavedProductIds) {
+      saveRow(productId);
+    }
+    setStockExitGuardAction(null);
+  };
+
+  const handleContinueStockExit = () => {
+    if (!stockExitGuardAction || hasSaveQueueActivityRef.current) return;
+    if (stockExitGuardAction.type === "blocked-action") return;
+
+    setStockExitGuardAction(null);
+
+    if (stockExitGuardAction.type === "navigation") {
+      router.push(stockExitGuardAction.href);
+      return;
+    }
+
+    if (stockExitGuardAction.type === "reload") {
+      window.location.reload();
+    }
+  };
+
   const handleCreateProduct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (shouldBlockStockExit) {
-      showStockExitBlockedToast();
+      openStockExitGuard({
+        type: "blocked-action",
+        label: "crear un producto nuevo",
+      });
       return;
     }
     if (!productForm.name.trim()) return;
@@ -1665,6 +1742,29 @@ export default function StockPage() {
       setIsCreatingProduct(false);
     }
   };
+
+  const activeStockSaveCount =
+    saveQueueSummary.pending + saveQueueSummary.active;
+  const stockExitGuardTarget =
+    stockExitGuardAction?.type === "blocked-action"
+      ? stockExitGuardAction.label
+      : stockExitGuardAction?.type === "reload"
+        ? "recargar la pantalla"
+        : "salir de Stock";
+  const stockExitGuardTitle = hasSaveQueueActivity
+    ? "Stock guardandose"
+    : "Cambios sin guardar";
+  const stockExitGuardDescription = hasSaveQueueActivity
+    ? "Todavia hay actualizaciones en cola o enviandose. Espera a que terminen para evitar que el stock quede a mitad de camino."
+    : `Antes de ${stockExitGuardTarget}, guarda los productos modificados o segui editando. Si salis ahora, los costos, porcentajes o ajustes no guardados se pierden.`;
+  const canContinueStockExit =
+    !hasSaveQueueActivity &&
+    (stockExitGuardAction?.type === "navigation" ||
+      stockExitGuardAction?.type === "reload");
+  const continueStockExitLabel =
+    stockExitGuardAction?.type === "reload"
+      ? "Recargar sin guardar"
+      : "Salir sin guardar";
 
   if (!STOCK_PAGE_ENABLED) {
     return null;
@@ -1819,7 +1919,7 @@ export default function StockPage() {
                 <button
                   type="submit"
                   className="btn btn-emerald"
-                  disabled={isCreatingProduct || shouldBlockStockExit}
+                  disabled={isCreatingProduct}
                 >
                   <CheckIcon className="size-4" />
                   {isCreatingProduct ? "Guardando..." : "Guardar"}
@@ -1858,7 +1958,6 @@ export default function StockPage() {
                 className="input cursor-pointer border-sky-200 text-xs text-sky-950 focus:border-sky-300"
                 value={sortOrder}
                 onChange={(event) => handleSortOrderChange(event.target.value)}
-                disabled={shouldBlockStockExit}
                 aria-label="Ordenar stock"
               >
                 {STOCK_SORT_OPTIONS.map((option) => (
@@ -1873,7 +1972,6 @@ export default function StockPage() {
               ref={productSearchInputRef}
               value={query}
               onChange={(event) => handleSearchQueryChange(event.target.value)}
-              disabled={shouldBlockStockExit}
               placeholder="Buscar por nombre, codigo interno o codigo compra"
             />
           </div>
@@ -2534,7 +2632,6 @@ export default function StockPage() {
             disabled={
               isLoading ||
               isLoadingMore ||
-              shouldBlockStockExit ||
               nextOffset === null
             }
             onClick={handleLoadMore}
@@ -2626,6 +2723,105 @@ export default function StockPage() {
                 </span>
               </div>
             </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {stockExitGuardAction ? (
+          <motion.div
+            key="stock-exit-guard"
+            className="fixed inset-x-0 top-0 z-[70] flex h-screen min-h-[100dvh] w-screen items-center justify-center bg-zinc-950/35 p-4 backdrop-blur-[2px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+          >
+            <motion.div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="stock-exit-guard-title"
+              aria-describedby="stock-exit-guard-description"
+              className="w-full max-w-lg rounded-3xl border border-zinc-200 bg-white p-5 shadow-[0_28px_80px_-44px_rgba(24,24,27,0.7)]"
+              initial={{ opacity: 0, scale: 0.96, y: 18 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 18 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-700">
+                    <CubeIcon className="size-5" />
+                  </div>
+                  <h3
+                    id="stock-exit-guard-title"
+                    className="pt-1.5 text-lg font-semibold text-amber-700"
+                  >
+                    {stockExitGuardTitle}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  className="btn h-9 w-9 shrink-0 p-0"
+                  onClick={closeStockExitGuard}
+                  aria-label="Cerrar aviso"
+                >
+                  <XMarkIcon className="size-4" />
+                </button>
+              </div>
+
+              <p
+                id="stock-exit-guard-description"
+                className="mt-3 px-3 text-sm leading-6 text-zinc-600"
+              >
+                {stockExitGuardDescription}
+              </p>
+
+              <div className="mt-4 grid gap-2 rounded-2xl border border-zinc-200/80 bg-zinc-50 p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-500">Productos sin guardar</span>
+                  <span className="font-semibold tabular-nums text-zinc-900">
+                    {visibleUnsavedCount}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-500">Guardados en curso</span>
+                  <span className="font-semibold tabular-nums text-zinc-900">
+                    {activeStockSaveCount}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={closeStockExitGuard}
+                >
+                  Seguir editando
+                </button>
+                {canContinueStockExit ? (
+                  <button
+                    type="button"
+                    className="btn btn-rose text-xs"
+                    onClick={handleContinueStockExit}
+                  >
+                    <ArrowRightStartOnRectangleIcon className="size-4" />
+                    {continueStockExitLabel}
+                  </button>
+                ) : null}
+                {visibleUnsavedCount > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-emerald text-xs"
+                    onClick={handleSaveVisibleStockChanges}
+                  >
+                    <CheckIcon className="size-4" />
+                    Guardar pendientes
+                  </button>
+                ) : null}
+              </div>
+            </motion.div>
           </motion.div>
         ) : null}
       </AnimatePresence>

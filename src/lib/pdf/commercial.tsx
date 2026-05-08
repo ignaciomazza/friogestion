@@ -35,47 +35,64 @@ type CommercialPdfData = {
   }>;
   totals: Array<{ label: string; value: number }>;
   issuedAt?: string | null;
+  headerMeta?: Array<{ label: string; value: string }>;
   currency?: "ARS" | "USD";
   logoSrc?: string | null;
+  taxColumnLabel?: string;
+  totalColumnLabel?: string;
 };
 
 const styles = StyleSheet.create({
   page: {
-    padding: 36,
+    padding: 34,
     fontSize: 9,
     fontFamily: "Helvetica",
-    color: "#111827",
+    color: "#172033",
+    backgroundColor: "#ffffff",
   },
   accent: {
-    height: 1,
-    backgroundColor: "#111827",
+    height: 4,
+    backgroundColor: "#0f172a",
+    borderRadius: 999,
     marginBottom: 16,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 18,
   },
   logo: {
-    width: 120,
-    height: 40,
+    width: 150,
+    height: 56,
     objectFit: "contain",
+  },
+  issuerBrand: {
+    maxWidth: "48%",
+  },
+  brandName: {
+    fontSize: 14,
+    fontWeight: 700,
   },
   titleBlock: {
     alignItems: "flex-end",
     gap: 4,
+    maxWidth: "52%",
   },
   title: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: 700,
   },
   subtitle: {
     fontSize: 9,
-    color: "#4b5563",
+    color: "#667085",
+  },
+  headerMeta: {
+    fontSize: 8,
+    color: "#667085",
   },
   section: {
-    marginBottom: 18,
+    marginBottom: 14,
   },
   row: {
     flexDirection: "row",
@@ -89,13 +106,33 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
-  metaCard: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: "#f9fafb",
-    borderRadius: 8,
+  strong: {
+    fontSize: 10,
+    fontWeight: 700,
+  },
+  partyCard: {
+    width: "50%",
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: "#e4e7ec",
+    backgroundColor: "#fcfcfd",
+    borderRadius: 10,
+    padding: 10,
+    minHeight: 94,
+  },
+  partyHeader: {
+    marginBottom: 6,
+  },
+  detailLine: {
+    marginTop: 3,
+    color: "#344054",
+  },
+  metaCard: {
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#d0d5dd",
   },
   metaGrid: {
     flexDirection: "row",
@@ -106,13 +143,21 @@ const styles = StyleSheet.create({
     paddingRight: 12,
     paddingVertical: 2,
   },
+  tableContainer: {
+    borderWidth: 1,
+    borderColor: "#d0d5dd",
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+  },
   tableHeader: {
     flexDirection: "row",
-    backgroundColor: "#f3f4f6",
-    borderRadius: 6,
+    backgroundColor: "#eef2f7",
+    borderTopLeftRadius: 11,
+    borderTopRightRadius: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: "#d0d5dd",
     paddingVertical: 6,
     paddingHorizontal: 8,
-    marginBottom: 6,
   },
   tableHeaderText: {
     fontSize: 8,
@@ -120,32 +165,30 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
     paddingVertical: 7,
     paddingHorizontal: 8,
   },
   tableRowAlt: {
-    backgroundColor: "#f9fafb",
+    backgroundColor: "#fcfcfd",
   },
-  colDesc: { width: "46%" },
+  colDesc: { width: "44%" },
   colQty: { width: "10%", textAlign: "right" },
-  colUnit: { width: "14%", textAlign: "right" },
+  colUnit: { width: "16%", textAlign: "right" },
   colTax: { width: "14%", textAlign: "right" },
   colTotal: { width: "16%", textAlign: "right" },
   subText: {
     fontSize: 7,
-    color: "#6b7280",
+    color: "#667085",
     marginTop: 2,
   },
   totals: {
     marginTop: 12,
     marginLeft: "auto",
-    width: "48%",
+    width: "44%",
     borderWidth: 1,
-    borderColor: "#e5e7eb",
-    backgroundColor: "#f9fafb",
-    borderRadius: 8,
+    borderColor: "#d0d5dd",
+    backgroundColor: "#f8fafc",
+    borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
@@ -167,66 +210,86 @@ const styles = StyleSheet.create({
   },
 });
 
+function PartyCard({
+  label,
+  name,
+  legalName,
+  taxId,
+  email,
+  address,
+}: {
+  label: string;
+  name: string;
+  legalName?: string | null;
+  taxId?: string | null;
+  email?: string | null;
+  address?: string | null;
+}) {
+  const primaryName = legalName?.trim() ? legalName : name;
+  const commercialName = legalName && legalName !== name ? name : null;
+
+  return (
+    <View style={styles.partyCard}>
+      <View style={styles.partyHeader}>
+        <Text style={styles.label}>{label}</Text>
+        <Text style={styles.strong}>{primaryName}</Text>
+      </View>
+      {commercialName ? (
+        <Text style={styles.detailLine}>{commercialName}</Text>
+      ) : null}
+      {taxId ? <Text style={styles.detailLine}>CUIT {taxId}</Text> : null}
+      {address ? <Text style={styles.detailLine}>{address}</Text> : null}
+      {email ? <Text style={styles.detailLine}>{email}</Text> : null}
+    </View>
+  );
+}
+
 export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
   const currency = data.currency === "USD" ? "USD" : "ARS";
+  const taxColumnLabel = data.taxColumnLabel ?? "Imp.";
+  const totalColumnLabel = data.totalColumnLabel ?? "Total";
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <View style={styles.accent} />
         <View style={styles.header}>
-          {data.logoSrc ? (
-            // eslint-disable-next-line jsx-a11y/alt-text
-            <Image src={data.logoSrc} style={styles.logo} />
-          ) : null}
+          <View style={styles.issuerBrand}>
+            {data.logoSrc ? (
+              // eslint-disable-next-line jsx-a11y/alt-text
+              <Image src={data.logoSrc} style={styles.logo} />
+            ) : (
+              <Text style={styles.brandName}>{data.organization.name}</Text>
+            )}
+          </View>
           <View style={styles.titleBlock}>
             <Text style={styles.title}>{data.title}</Text>
             {data.issuedAt ? (
-              <Text style={styles.subtitle}>{data.issuedAt}</Text>
+              <Text style={styles.subtitle}>Emitido el {data.issuedAt}</Text>
             ) : null}
+            {data.headerMeta?.map((item) => (
+              <Text key={item.label} style={styles.headerMeta}>
+                {item.label} - {item.value}
+              </Text>
+            ))}
           </View>
         </View>
 
         <View style={styles.section}>
           <View style={styles.row}>
-            <View style={{ width: "50%" }}>
-              <Text style={styles.label}>Empresa</Text>
-              {data.organization.legalName ? (
-                <>
-                  <Text style={styles.label}>Razon social</Text>
-                  <Text>{data.organization.legalName}</Text>
-                </>
-              ) : null}
-              {data.organization.legalName &&
-              data.organization.legalName !== data.organization.name ? (
-                <>
-                  <Text style={styles.label}>Nombre comercial</Text>
-                  <Text>{data.organization.name}</Text>
-                </>
-              ) : (
-                !data.organization.legalName && (
-                  <>
-                    <Text style={styles.label}>Nombre comercial</Text>
-                    <Text>{data.organization.name}</Text>
-                  </>
-                )
-              )}
-              {data.organization.taxId ? (
-                <>
-                  <Text style={styles.label}>CUIT</Text>
-                  <Text>{data.organization.taxId}</Text>
-                </>
-              ) : null}
-            </View>
-            <View style={{ width: "50%" }}>
-              <Text style={styles.label}>Cliente</Text>
-              <Text>{data.customer.name}</Text>
-              {data.customer.taxId ? <Text>{data.customer.taxId}</Text> : null}
-              {data.customer.email ? <Text>{data.customer.email}</Text> : null}
-              {data.customer.address ? (
-                <Text>{data.customer.address}</Text>
-              ) : null}
-            </View>
+            <PartyCard
+              label="Empresa"
+              name={data.organization.name}
+              legalName={data.organization.legalName}
+              taxId={data.organization.taxId}
+            />
+            <PartyCard
+              label="Cliente"
+              name={data.customer.name}
+              taxId={data.customer.taxId}
+              email={data.customer.email}
+              address={data.customer.address}
+            />
           </View>
         </View>
 
@@ -246,65 +309,71 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
         ) : null}
 
         <View style={styles.section}>
-          <View style={styles.tableHeader}>
-            <Text style={[styles.colDesc, styles.tableHeaderText]}>Detalle</Text>
-            <Text style={[styles.colQty, styles.tableHeaderText]}>Cant.</Text>
-            <Text style={[styles.colUnit, styles.tableHeaderText]}>Unit.</Text>
-            <Text style={[styles.colTax, styles.tableHeaderText]}>Imp.</Text>
-            <Text style={[styles.colTotal, styles.tableHeaderText]}>Total</Text>
-          </View>
-          {data.items.map((item, index) => {
-            const taxRate =
-              item.taxRate !== undefined && item.taxRate !== null
-                ? item.taxRate
-                : null;
-            const taxAmount =
-              item.taxAmount !== undefined && item.taxAmount !== null
-                ? item.taxAmount
-                : taxRate !== null
-                  ? item.qty * item.unitPrice * (taxRate / 100)
+          <View style={styles.tableContainer}>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.colDesc, styles.tableHeaderText]}>Detalle</Text>
+              <Text style={[styles.colQty, styles.tableHeaderText]}>Cant.</Text>
+              <Text style={[styles.colUnit, styles.tableHeaderText]}>Unit.</Text>
+              <Text style={[styles.colTax, styles.tableHeaderText]}>
+                {taxColumnLabel}
+              </Text>
+              <Text style={[styles.colTotal, styles.tableHeaderText]}>
+                {totalColumnLabel}
+              </Text>
+            </View>
+            {data.items.map((item, index) => {
+              const taxRate =
+                item.taxRate !== undefined && item.taxRate !== null
+                  ? item.taxRate
                   : null;
+              const taxAmount =
+                item.taxAmount !== undefined && item.taxAmount !== null
+                  ? item.taxAmount
+                  : taxRate !== null
+                    ? item.qty * item.unitPrice * (taxRate / 100)
+                    : null;
 
-            return (
-              <View
-                key={`${item.description}-${index}`}
-                style={
-                  index % 2 === 0
-                    ? [styles.tableRow, styles.tableRowAlt]
-                    : styles.tableRow
-                }
-              >
-                <View style={styles.colDesc}>
-                  <Text>{item.description}</Text>
-                  {item.sku ? (
-                    <Text style={styles.subText}>SKU {item.sku}</Text>
-                  ) : null}
-                  {item.brand || item.model ? (
-                    <Text style={styles.subText}>
-                      {item.brand ? `Marca ${item.brand}` : ""}
-                      {item.brand && item.model ? " · " : ""}
-                      {item.model ? `Modelo ${item.model}` : ""}
-                    </Text>
-                  ) : null}
-                  {taxRate !== null ? (
-                    <Text style={styles.subText}>IVA {taxRate.toFixed(2)}%</Text>
-                  ) : null}
+              return (
+                <View
+                  key={`${item.description}-${index}`}
+                  style={
+                    index % 2 === 0
+                      ? [styles.tableRow, styles.tableRowAlt]
+                      : styles.tableRow
+                  }
+                >
+                  <View style={styles.colDesc}>
+                    <Text>{item.description}</Text>
+                    {item.sku ? (
+                      <Text style={styles.subText}>SKU {item.sku}</Text>
+                    ) : null}
+                    {item.brand || item.model ? (
+                      <Text style={styles.subText}>
+                        {item.brand ? `Marca ${item.brand}` : ""}
+                        {item.brand && item.model ? " · " : ""}
+                        {item.model ? `Modelo ${item.model}` : ""}
+                      </Text>
+                    ) : null}
+                    {taxRate !== null ? (
+                      <Text style={styles.subText}>IVA {taxRate.toFixed(2)}%</Text>
+                    ) : null}
+                  </View>
+                  <Text style={styles.colQty}>{item.qty.toFixed(2)}</Text>
+                  <Text style={styles.colUnit}>
+                    {formatCurrency(item.unitPrice, currency)}
+                  </Text>
+                  <Text style={styles.colTax}>
+                    {taxAmount !== null
+                      ? formatCurrency(taxAmount, currency)
+                      : "-"}
+                  </Text>
+                  <Text style={styles.colTotal}>
+                    {formatCurrency(item.total, currency)}
+                  </Text>
                 </View>
-                <Text style={styles.colQty}>{item.qty.toFixed(2)}</Text>
-                <Text style={styles.colUnit}>
-                  {formatCurrency(item.unitPrice, currency)}
-                </Text>
-                <Text style={styles.colTax}>
-                  {taxAmount !== null
-                    ? formatCurrency(taxAmount, currency)
-                    : "-"}
-                </Text>
-                <Text style={styles.colTotal}>
-                  {formatCurrency(item.total, currency)}
-                </Text>
-              </View>
-            );
-          })}
+              );
+            })}
+          </View>
         </View>
 
         <View style={styles.totals}>

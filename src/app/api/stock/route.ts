@@ -10,6 +10,7 @@ import { logServerError } from "@/lib/server/log";
 import { aggregateStockByProduct } from "@/lib/stock-balance";
 import { STOCK_ENABLED } from "@/lib/features";
 import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
+import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const MAX_STOCK_PAGE_SIZE = 200;
@@ -115,7 +116,7 @@ export async function GET(req: NextRequest) {
       }),
       prisma.priceList.findMany({
         where: { organizationId, isActive: true },
-        orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+        orderBy: PRICE_LIST_ORDER_BY,
       }),
       prisma.exchangeRate.findFirst({
         where: {
@@ -186,6 +187,7 @@ export async function GET(req: NextRequest) {
         currencyCode: priceList.currencyCode,
         isDefault: priceList.isDefault,
         isActive: priceList.isActive,
+        sortOrder: priceList.sortOrder,
       })),
       products: products.map((product) => ({
         id: product.id,

@@ -7,6 +7,7 @@ import { getAfipStatus } from "@/lib/afip/status";
 import { getAfipClient } from "@/lib/afip/client";
 import { describeArcaJob } from "@/lib/arca/errors";
 import { hasValidSecretsKey } from "@/lib/crypto/secrets";
+import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 
 const ALLOWED_ROLES = ["OWNER", "ADMIN", "SALES"];
 
@@ -125,7 +126,7 @@ export default async function AdminPage() {
         organizationId: activeMembership.organizationId,
         isActive: true,
       },
-      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      orderBy: PRICE_LIST_ORDER_BY,
     }),
   ]);
 
@@ -215,6 +216,7 @@ export default async function AdminPage() {
         isDefault: priceList.isDefault,
         isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
+        sortOrder: priceList.sortOrder,
       }))}
     />
   );

@@ -28,6 +28,7 @@ import {
 } from "@/lib/labels";
 import { getAfipMissingItems, summarizeAfipMissing } from "@/lib/afip/messages";
 import { formatCurrencyARS } from "@/lib/format";
+import { notifyExchangeRateUpdated } from "@/lib/exchange-rate-events";
 import {
   normalizeIntegerInput,
 } from "@/lib/input-format";
@@ -88,6 +89,7 @@ type PriceListRow = {
   isDefault: boolean;
   isConsumerFinal: boolean;
   isActive: boolean;
+  sortOrder: number;
 };
 
 type AdminClientProps = {
@@ -428,12 +430,14 @@ export default function AdminClient({
     currencyCode: defaultCurrencyCode,
     isDefault: false,
     isConsumerFinal: false,
+    sortOrder: "",
   });
   const [newPriceList, setNewPriceList] = useState({
     name: "",
     currencyCode: defaultCurrencyCode,
     isDefault: false,
     isConsumerFinal: false,
+    sortOrder: "",
   });
   const afipReady = Boolean(afipStatus.ok && afipStatus.clientReady);
   const afipMissingItems = getAfipMissingItems(afipStatus.missing);
@@ -998,9 +1002,16 @@ export default function AdminClient({
         return;
       }
 
+      const created = (await res.json()) as ExchangeRate;
       setRate("");
       setRateStatus("Cotizacion actualizada");
+      notifyExchangeRateUpdated({
+        baseCode: created.baseCode,
+        quoteCode: created.quoteCode,
+        rate: created.rate,
+      });
       await loadRateHistory();
+      router.refresh();
     } catch {
       setRateStatus("No se pudo guardar");
     } finally {
@@ -1195,6 +1206,9 @@ export default function AdminClient({
           currencyCode: newPriceList.currencyCode.trim().toUpperCase(),
           isDefault: newPriceList.isDefault,
           isConsumerFinal: newPriceList.isConsumerFinal,
+          ...(newPriceList.sortOrder
+            ? { sortOrder: Number(newPriceList.sortOrder) }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -1208,6 +1222,7 @@ export default function AdminClient({
         currencyCode: defaultCurrencyCode,
         isDefault: false,
         isConsumerFinal: false,
+        sortOrder: "",
       });
       setPriceListsStatus("Lista de precios creada");
       await loadPriceLists();
@@ -1225,6 +1240,7 @@ export default function AdminClient({
       currencyCode: priceList.currencyCode,
       isDefault: priceList.isDefault,
       isConsumerFinal: priceList.isConsumerFinal,
+      sortOrder: String(priceList.sortOrder),
     });
     setPriceListsStatus(null);
   };
@@ -1236,6 +1252,7 @@ export default function AdminClient({
       currencyCode: defaultCurrencyCode,
       isDefault: false,
       isConsumerFinal: false,
+      sortOrder: "",
     });
   };
 
@@ -1252,6 +1269,9 @@ export default function AdminClient({
           currencyCode: editingPriceList.currencyCode.trim().toUpperCase(),
           isDefault: editingPriceList.isDefault,
           isConsumerFinal: editingPriceList.isConsumerFinal,
+          ...(editingPriceList.sortOrder
+            ? { sortOrder: Number(editingPriceList.sortOrder) }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -1630,6 +1650,21 @@ export default function AdminClient({
                 ))}
               </select>
             </label>
+            <label className="flex w-full flex-col gap-2 text-xs text-zinc-500 sm:w-28">
+              Posicion
+              <input
+                className="input text-sm"
+                value={newPriceList.sortOrder}
+                inputMode="numeric"
+                onChange={(event) =>
+                  setNewPriceList((prev) => ({
+                    ...prev,
+                    sortOrder: normalizeIntegerInput(event.target.value),
+                  }))
+                }
+                placeholder="Auto"
+              />
+            </label>
             <label className="flex items-center gap-2 pb-2 text-xs text-zinc-600">
               <input
                 type="checkbox"
@@ -1675,6 +1710,7 @@ export default function AdminClient({
                 <tr>
                   <th className="py-2 pr-4">Lista</th>
                   <th className="py-2 pr-4">Moneda</th>
+                  <th className="py-2 pr-4">Posicion</th>
                   <th className="py-2 pr-4">Estado</th>
                   <th className="py-2 pr-4 text-right">Acciones</th>
                 </tr>
@@ -1726,6 +1762,28 @@ export default function AdminClient({
                             </select>
                           ) : (
                             priceList.currencyCode
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-zinc-700">
+                          {isEditing ? (
+                            <input
+                              className="input h-9 w-24 text-sm tabular-nums"
+                              value={editingPriceList.sortOrder}
+                              inputMode="numeric"
+                              onChange={(event) =>
+                                setEditingPriceList((prev) => ({
+                                  ...prev,
+                                  sortOrder: normalizeIntegerInput(
+                                    event.target.value,
+                                  ),
+                                }))
+                              }
+                              placeholder="1"
+                            />
+                          ) : (
+                            <span className="tabular-nums">
+                              {priceList.sortOrder || "-"}
+                            </span>
                           )}
                         </td>
                         <td className="py-2 pr-4">
@@ -1825,7 +1883,7 @@ export default function AdminClient({
                   })
                 ) : (
                   <tr>
-                    <td className="py-3 text-sm text-zinc-500" colSpan={4}>
+                    <td className="py-3 text-sm text-zinc-500" colSpan={5}>
                       Sin listas por ahora.
                     </td>
                   </tr>

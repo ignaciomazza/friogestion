@@ -25,16 +25,6 @@ export async function GET(req: NextRequest) {
         items: { include: { product: true } },
         saleCharges: true,
         installmentPlan: true,
-        receipts: {
-          include: {
-            lines: {
-              include: {
-                accountMovement: true,
-                paymentMethod: true,
-              },
-            },
-          },
-        },
       },
     });
 
@@ -91,31 +81,6 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const receiptsCount = sale.receipts.length;
-    meta.push({
-      label: "Cobros",
-      value: receiptsCount
-        ? `${receiptsCount} registrados`
-        : "Sin cobros registrados",
-    });
-
-    const verificationLines = sale.receipts
-      .filter((receipt) => receipt.status === "CONFIRMED")
-      .flatMap((receipt) =>
-        receipt.lines.filter((line) => Boolean(line.accountId))
-      );
-    if (verificationLines.length) {
-      const doubleCheckStatus = verificationLines.some(
-        (line) => !line.accountMovement?.verifiedAt
-      )
-        ? "Pendiente"
-        : "OK";
-      meta.push({
-        label: "Doble control",
-        value: doubleCheckStatus,
-      });
-    }
-
     const doc = (
       <CommercialPdfDocument
         data={{
@@ -155,6 +120,8 @@ export async function GET(req: NextRequest) {
           ],
           currency: "ARS",
           logoSrc,
+          taxColumnLabel: "IVA",
+          totalColumnLabel: "Neto",
         }}
       />
     );

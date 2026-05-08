@@ -1,17 +1,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
+import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 
 const createPriceListSchema = z.object({
   name: z.string().min(2),
   currencyCode: z.string().min(3).max(3).optional(),
   isDefault: z.boolean().optional(),
   isConsumerFinal: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(1).optional(),
 });
 
 const updatePriceListSchema = z.object({
@@ -20,14 +23,59 @@ const updatePriceListSchema = z.object({
   currencyCode: z.string().min(3).max(3).optional(),
   isDefault: z.boolean().optional(),
   isConsumerFinal: z.boolean().optional(),
+  sortOrder: z.coerce.number().int().min(1).optional(),
 });
+
+const normalizePriceListSortOrders = async (
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  movedPriceListId?: string,
+  requestedSortOrder?: number,
+) => {
+  const priceLists = await tx.priceList.findMany({
+    where: { organizationId, isActive: true },
+    select: { id: true },
+    orderBy: PRICE_LIST_ORDER_BY,
+  });
+
+  if (!priceLists.length) return;
+
+  const movedPriceList = movedPriceListId
+    ? priceLists.find((priceList) => priceList.id === movedPriceListId)
+    : null;
+  const otherPriceLists = movedPriceList
+    ? priceLists.filter((priceList) => priceList.id !== movedPriceList.id)
+    : priceLists;
+  const targetIndex = movedPriceList
+    ? Math.min(
+        Math.max((requestedSortOrder ?? priceLists.length) - 1, 0),
+        otherPriceLists.length,
+      )
+    : null;
+  const orderedPriceLists = movedPriceList
+    ? [
+        ...otherPriceLists.slice(0, targetIndex ?? 0),
+        movedPriceList,
+        ...otherPriceLists.slice(targetIndex ?? 0),
+      ]
+    : otherPriceLists;
+
+  await Promise.all(
+    orderedPriceLists.map((priceList, index) =>
+      tx.priceList.update({
+        where: { id: priceList.id },
+        data: { sortOrder: index + 1 },
+      }),
+    ),
+  );
+};
 
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
     const priceLists = await prisma.priceList.findMany({
       where: { organizationId, isActive: true },
-      orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      orderBy: PRICE_LIST_ORDER_BY,
     });
 
     return NextResponse.json(
@@ -38,6 +86,7 @@ export async function GET(req: NextRequest) {
         isDefault: priceList.isDefault,
         isConsumerFinal: priceList.isConsumerFinal,
         isActive: priceList.isActive,
+        sortOrder: priceList.sortOrder,
       })),
     );
   } catch {
@@ -69,7 +118,7 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      return tx.priceList.create({
+      const created = await tx.priceList.create({
         data: {
           organizationId,
           name,
@@ -77,8 +126,16 @@ export async function POST(req: NextRequest) {
           isDefault,
           isConsumerFinal,
           isActive: true,
+          sortOrder: 0,
         },
       });
+      await normalizePriceListSortOrders(
+        tx,
+        organizationId,
+        created.id,
+        body.sortOrder,
+      );
+      return tx.priceList.findUniqueOrThrow({ where: { id: created.id } });
     });
 
     return NextResponse.json({
@@ -88,6 +145,7 @@ export async function POST(req: NextRequest) {
       isDefault: created.isDefault,
       isConsumerFinal: created.isConsumerFinal,
       isActive: created.isActive,
+      sortOrder: created.sortOrder,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -153,7 +211,7 @@ export async function PATCH(req: NextRequest) {
         });
       }
 
-      return tx.priceList.update({
+      const updatedPriceList = await tx.priceList.update({
         where: { id: body.id },
         data: {
           name,
@@ -162,6 +220,16 @@ export async function PATCH(req: NextRequest) {
           isConsumerFinal,
         },
       });
+      if (body.sortOrder !== undefined) {
+        await normalizePriceListSortOrders(
+          tx,
+          organizationId,
+          body.id,
+          body.sortOrder,
+        );
+        return tx.priceList.findUniqueOrThrow({ where: { id: body.id } });
+      }
+      return updatedPriceList;
     });
 
     return NextResponse.json({
@@ -171,6 +239,7 @@ export async function PATCH(req: NextRequest) {
       isDefault: updated.isDefault,
       isConsumerFinal: updated.isConsumerFinal,
       isActive: updated.isActive,
+      sortOrder: updated.sortOrder,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -224,6 +293,8 @@ export async function DELETE(req: NextRequest) {
         where: { organizationId, defaultPriceListId: id },
         data: { defaultPriceListId: null },
       });
+
+      await normalizePriceListSortOrders(tx, organizationId);
     });
 
     return NextResponse.json({ ok: true });

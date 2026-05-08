@@ -57,6 +57,7 @@ export type PriceListOption = {
   isDefault: boolean;
   isConsumerFinal: boolean;
   isActive: boolean;
+  sortOrder: number;
 };
 
 export type QuoteItemForm = {

@@ -30,6 +30,7 @@ import { ADMIN_ROLES, DASHBOARD_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
 import { STOCK_PAGE_ENABLED } from "@/lib/features";
 import { requestAppNavigation } from "@/lib/navigation-guard";
+import { subscribeExchangeRateUpdated } from "@/lib/exchange-rate-events";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
 
 type TopbarClientProps = {
@@ -169,6 +170,7 @@ export default function TopbarClient({
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarCompact, setIsSidebarCompact] = useState(isCollapsed);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [internalRate, setInternalRate] = useState(latestRate);
   const isHydrated = useSyncExternalStore(
     subscribeHydration,
     getHydratedSnapshot,
@@ -200,6 +202,17 @@ export default function TopbarClient({
     syncSidebarState();
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  useEffect(() => {
+    setInternalRate(latestRate);
+  }, [latestRate]);
+
+  useEffect(() => {
+    return subscribeExchangeRateUpdated((detail) => {
+      if (detail.baseCode !== "USD" || detail.quoteCode !== "ARS") return;
+      setInternalRate(detail.rate);
+    });
   }, []);
 
   const visibleSections = useMemo(() => {
@@ -351,7 +364,9 @@ export default function TopbarClient({
     ));
   };
 
-  const internalLabel = latestRate ? formatCurrencyARS(latestRate) : "Sin cotizacion";
+  const internalLabel = internalRate
+    ? formatCurrencyARS(internalRate)
+    : "Sin cotizacion";
   const blueLabel = blueRate
     ? `Compra ${formatCurrencyARS(blueRate.buy)} · Venta ${formatCurrencyARS(
         blueRate.sell

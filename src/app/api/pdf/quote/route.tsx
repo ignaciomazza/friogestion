@@ -73,19 +73,16 @@ export async function GET(req: NextRequest) {
             email: quote.customer.email,
             address: quote.customer.address,
           },
-          meta: [
-            {
-              label: "Fecha",
-              value: quote.createdAt.toLocaleDateString("es-AR"),
-            },
+          issuedAt: quote.createdAt.toLocaleDateString("es-AR"),
+          headerMeta: [
             {
               label: "Vigencia",
               value: quote.validUntil
                 ? new Date(quote.validUntil).toLocaleDateString("es-AR")
                 : "Sin vencimiento",
             },
-            { label: "Estado", value: quote.status },
           ],
+          meta: [],
           items,
           totals: [
             { label: "Subtotal", value: Number(quote.subtotal ?? 0) },
@@ -103,6 +100,8 @@ export async function GET(req: NextRequest) {
           ],
           currency: "ARS",
           logoSrc,
+          taxColumnLabel: "IVA",
+          totalColumnLabel: "Neto",
         }}
       />
     );

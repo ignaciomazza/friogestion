@@ -464,6 +464,7 @@ model PriceList {
   isDefault      Boolean  @default(false)
   isConsumerFinal Boolean @default(false)
   isActive       Boolean  @default(true)
+  sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -473,6 +474,7 @@ model PriceList {
   quotes        Quote[]
 
   @@index([organizationId])
+  @@index([organizationId, sortOrder])
 }
 
 model PriceListItem {
