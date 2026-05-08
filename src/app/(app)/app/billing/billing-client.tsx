@@ -18,6 +18,11 @@ import {
   resolveInvoiceTypeFromFiscalTaxProfile,
   type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import {
+  buildAdjustedTotalsFromRates,
+  buildTotalsFromRates,
+} from "@/lib/afip/totals";
+import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 
 type AfipStatus = {
   ok: boolean;
@@ -107,21 +112,14 @@ type InvoiceDraftResult =
   | {
       ok: true;
       itemsTaxRates: Array<{ saleItemId: string; rate: number }>;
-      manualTotals: ReturnType<typeof buildManualTotals>;
+      fiscalTotals: ReturnType<typeof buildAdjustedTotalsFromRates>;
+      adjustmentTotal: number;
     };
 
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
 const QUEUE_POLL_ATTEMPTS = 90;
 const QUEUE_POLL_INTERVAL_MS = 1000;
 
-const IVA_RATE_TO_ID: Record<number, number> = {
-  27: 6,
-  21: 5,
-  10.5: 4,
-  5: 8,
-  2.5: 9,
-  0: 3,
-};
 const ALLOWED_IVA_RATES = new Set<number>([0, 2.5, 5, 10.5, 21, 27]);
 const DOC_TYPE_LABELS: Record<number, string> = {
   80: "CUIT",
@@ -158,66 +156,6 @@ function parseFiniteNumber(value: unknown) {
 function formatVoucherLabel(pointOfSale?: string | null, number?: string | null) {
   if (pointOfSale && number) return `${pointOfSale}-${number}`;
   return number ?? "-";
-}
-
-function buildManualTotals(
-  sale: SaleRow,
-  itemsTaxRates: Array<{ saleItemId: string; rate: number }>
-) {
-  const fallbackSubtotal = (sale.items ?? []).reduce((acc, item) => {
-    const lineTotal = Number(item.total ?? 0);
-    if (Number.isFinite(lineTotal)) return acc + lineTotal;
-    const qty = Number(item.qty ?? 0);
-    const unitPrice = Number(item.unitPrice ?? 0);
-    if (!Number.isFinite(qty) || !Number.isFinite(unitPrice)) return acc;
-    return acc + qty * unitPrice;
-  }, 0);
-
-  const subtotal = round2(Number(sale.subtotal ?? fallbackSubtotal));
-  const iva = round2(Number(sale.taxes ?? 0));
-  const total = round2(Number(sale.total ?? subtotal + iva));
-
-  const rateByItemId = new Map(itemsTaxRates.map((entry) => [entry.saleItemId, entry.rate]));
-  const baseByRate = new Map<number, number>();
-  for (const item of sale.items ?? []) {
-    if (!item.id) continue;
-    const rate = rateByItemId.get(item.id);
-    if (rate === undefined) continue;
-    const lineBase = round2(Number(item.total ?? 0));
-    if (!Number.isFinite(lineBase)) continue;
-    const current = baseByRate.get(rate) ?? 0;
-    baseByRate.set(rate, round2(current + lineBase));
-  }
-
-  const taxableBreakdown: Array<{ id: number; base: number; amount: number }> = [];
-  let exempt = 0;
-  let breakdownIva = 0;
-
-  for (const [rate, base] of baseByRate.entries()) {
-    if (round2(rate) === 0) {
-      exempt = round2(exempt + base);
-      continue;
-    }
-    const id = IVA_RATE_TO_ID[round2(rate)] ?? 3;
-    const amount = round2((base * rate) / 100);
-    taxableBreakdown.push({ id, base, amount });
-    breakdownIva = round2(breakdownIva + amount);
-  }
-
-  const diff = round2(iva - breakdownIva);
-  if (taxableBreakdown.length && Math.abs(diff) > 0) {
-    const last = taxableBreakdown[taxableBreakdown.length - 1];
-    last.amount = round2(last.amount + diff);
-  }
-
-  const net = round2(subtotal - exempt);
-  return {
-    net,
-    iva,
-    total,
-    exempt,
-    ivaBreakdown: taxableBreakdown.length ? taxableBreakdown : undefined,
-  };
 }
 
 export default function BillingClient({
@@ -562,19 +500,9 @@ export default function BillingClient({
     if (!saleToInvoice) {
       return { ok: false, error: "No hay venta seleccionada para facturar." };
     }
-    const subtotal = Number(saleToInvoice.subtotal ?? saleToInvoice.total ?? 0);
-    const iva = Number(saleToInvoice.taxes ?? 0);
-    const extraAmount = Number(saleToInvoice.extraAmount ?? 0);
-    const total = Number(saleToInvoice.total ?? subtotal + iva);
+    const total = Number(saleToInvoice.total ?? 0);
     if (!Number.isFinite(total) || total <= 0) {
       return { ok: false, error: "No se pudo calcular totales de la venta." };
-    }
-    if (Number.isFinite(extraAmount) && Math.abs(extraAmount) > 0.005) {
-      return {
-        ok: false,
-        error:
-          "La venta tiene recargos o descuentos. Ajusta los totales antes de facturar.",
-      };
     }
     if (resolvedInvoiceType === "A" && !hasRecipientDoc) {
       return {
@@ -592,6 +520,7 @@ export default function BillingClient({
     }
 
     let hasInvalidTaxRate = false;
+    const fiscalEntries: Array<{ base: number; rate: number }> = [];
     const itemsTaxRates = (saleToInvoice.items ?? [])
       .map((item) => {
         if (!item.id) return null;
@@ -600,6 +529,12 @@ export default function BillingClient({
           hasInvalidTaxRate = true;
           return null;
         }
+        const base = Number(item.total ?? 0);
+        if (!Number.isFinite(base) || base < 0) {
+          hasInvalidTaxRate = true;
+          return null;
+        }
+        fiscalEntries.push({ base, rate });
         return { saleItemId: item.id, rate };
       })
       .filter(
@@ -619,9 +554,32 @@ export default function BillingClient({
           "La venta no tiene alicuotas de IVA por item. Revisala antes de facturar.",
       };
     }
-    const manualTotals = buildManualTotals(saleToInvoice, itemsTaxRates);
-    return { ok: true, itemsTaxRates, manualTotals };
+    try {
+      const baseTotals = buildTotalsFromRates(fiscalEntries);
+      const adjustmentTotal = round2(total - baseTotals.total);
+      const fiscalTotals = buildAdjustedTotalsFromRates(
+        fiscalEntries,
+        adjustmentTotal,
+      );
+      return { ok: true, itemsTaxRates, fiscalTotals, adjustmentTotal };
+    } catch {
+      return {
+        ok: false,
+        error:
+          "No se pudieron calcular totales fiscales validos para esta venta.",
+      };
+    }
   };
+
+  const invoiceDraftPreview = saleToInvoice ? buildInvoiceDraft() : null;
+  const fiscalPreview =
+    invoiceDraftPreview?.ok === true ? invoiceDraftPreview.fiscalTotals : null;
+  const fiscalAdjustmentTotal =
+    invoiceDraftPreview?.ok === true ? invoiceDraftPreview.adjustmentTotal : 0;
+  const fiscalAdjustmentLabel = getAdjustmentLabel(
+    saleToInvoice?.extraType,
+    fiscalAdjustmentTotal,
+  );
 
   const goToConfirmStep = () => {
     const draft = buildInvoiceDraft();
@@ -966,7 +924,6 @@ export default function BillingClient({
         saleId: saleToInvoice.id,
         type: resolvedInvoiceType,
         itemsTaxRates: draft.itemsTaxRates,
-        manualTotals: draft.manualTotals,
         requiresIncomeTaxDeduction: invoiceForm.requiresIncomeTaxDeduction,
       };
 
@@ -1374,17 +1331,28 @@ export default function BillingClient({
                         <th className="py-2 pr-4">Fecha</th>
                         <th className="py-2 pr-4 text-right">Precio</th>
                         <th className="py-2 pr-4 text-right">IVA</th>
+                        <th className="py-2 pr-4 text-right">Ajuste</th>
                         <th className="py-2 pr-4 text-right">Total</th>
                         <th className="py-2 pr-4 text-right">Acciones</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredToBill.length ? (
-                        filteredToBill.map((sale) => (
-                          <tr
-                            key={sale.id}
-                            className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
-                          >
+                        filteredToBill.map((sale) => {
+                          const adjustmentAmount = round2(
+                            Number(sale.total ?? 0) -
+                              Number(sale.subtotal ?? 0) -
+                              Number(sale.taxes ?? 0),
+                          );
+                          const adjustmentLabel = getAdjustmentLabel(
+                            sale.extraType,
+                            adjustmentAmount,
+                          );
+                          return (
+                            <tr
+                              key={sale.id}
+                              className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
+                            >
                             <td className="py-2 pr-4 text-zinc-600">
                               {sale.saleNumber ?? "-"}
                             </td>
@@ -1405,6 +1373,15 @@ export default function BillingClient({
                             </td>
                             <td className="py-2 pr-4 text-right text-zinc-700">
                               {sale.taxes ? formatCurrencyARS(sale.taxes.toString()) : "-"}
+                            </td>
+                            <td className="py-2 pr-4 text-right text-zinc-700">
+                              {Math.abs(adjustmentAmount) > 0.005 ? (
+                                <span title={adjustmentLabel}>
+                                  {formatCurrencyARS(adjustmentAmount.toFixed(2))}
+                                </span>
+                              ) : (
+                                "-"
+                              )}
                             </td>
                             <td className="py-2 pr-4 text-right text-zinc-900">
                               {sale.total ? formatCurrencyARS(sale.total.toString()) : "-"}
@@ -1430,11 +1407,12 @@ export default function BillingClient({
                                 </button>
                               </div>
                             </td>
-                          </tr>
-                        ))
+                            </tr>
+                          );
+                        })
                       ) : (
                         <tr>
-                          <td className="py-3 text-sm text-zinc-500" colSpan={7}>
+                          <td className="py-3 text-sm text-zinc-500" colSpan={8}>
                             {toBillSales.length
                               ? "No hay resultados para los filtros aplicados."
                               : "Sin ventas pendientes."}
@@ -1878,6 +1856,37 @@ export default function BillingClient({
                     Factura A requiere CUIT valido del cliente.
                   </p>
                 ) : null}
+                {fiscalPreview ? (
+                  <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
+                    <p className="section-title">Totales fiscales</p>
+                    <div className="mt-2 grid gap-2 text-xs text-zinc-700 sm:grid-cols-4">
+                      <p>
+                        Neto:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(fiscalPreview.net.toFixed(2))}
+                        </span>
+                      </p>
+                      <p>
+                        IVA:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(fiscalPreview.iva.toFixed(2))}
+                        </span>
+                      </p>
+                      <p>
+                        {fiscalAdjustmentLabel}:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
+                        </span>
+                      </p>
+                      <p>
+                        Total:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(fiscalPreview.total.toFixed(2))}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm text-zinc-600">
                     Total:{" "}
@@ -1953,23 +1962,35 @@ export default function BillingClient({
                       </table>
                     </div>
                   ) : null}
-                  <div className="mt-3 grid gap-1 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 text-xs text-zinc-700 sm:grid-cols-3">
+                  <div className="mt-3 grid gap-1 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 text-xs text-zinc-700 sm:grid-cols-4">
                     <p>
                       Neto:{" "}
                       <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(previewSubtotal.toFixed(2))}
+                        {formatCurrencyARS(
+                          (fiscalPreview?.net ?? previewSubtotal).toFixed(2),
+                        )}
                       </span>
                     </p>
                     <p>
                       IVA:{" "}
                       <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(previewIva.toFixed(2))}
+                        {formatCurrencyARS(
+                          (fiscalPreview?.iva ?? previewIva).toFixed(2),
+                        )}
+                      </span>
+                    </p>
+                    <p>
+                      {fiscalAdjustmentLabel}:{" "}
+                      <span className="font-semibold text-zinc-900">
+                        {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
                       </span>
                     </p>
                     <p>
                       Total:{" "}
                       <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(previewTotal.toFixed(2))}
+                        {formatCurrencyARS(
+                          (fiscalPreview?.total ?? previewTotal).toFixed(2),
+                        )}
                       </span>
                     </p>
                   </div>

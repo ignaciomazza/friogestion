@@ -18,6 +18,11 @@ export type ManualTotals = {
   }>;
 };
 
+type RateEntry = {
+  base: number;
+  rate: number;
+};
+
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -41,7 +46,7 @@ function normalizeRate(rate: number) {
 }
 
 export function buildTotalsFromRates(
-  items: Array<{ base: number; rate: number }>
+  items: RateEntry[]
 ) {
   const buckets = new Map<number, number>();
   for (const item of items) {
@@ -75,6 +80,150 @@ export function buildTotalsFromRates(
   const total = round2(net + iva + exempt);
 
   return { net, iva, total, exempt, ivaItems };
+}
+
+function allocateAdjustment(total: number, weights: number[]) {
+  const roundedTotal = round2(total);
+  const weightTotal = weights.reduce((acc, weight) => acc + weight, 0);
+  if (roundedTotal === 0 || weightTotal <= 0) {
+    return weights.map(() => 0);
+  }
+
+  let remaining = roundedTotal;
+  return weights.map((weight, index) => {
+    if (index === weights.length - 1) return round2(remaining);
+    const amount = round2(roundedTotal * (weight / weightTotal));
+    remaining = round2(remaining - amount);
+    return amount;
+  });
+}
+
+export function buildAdjustedTotalsFromRates(
+  items: RateEntry[],
+  finalAdjustment = 0
+) {
+  const adjustment = round2(finalAdjustment);
+  if (adjustment === 0) {
+    return buildTotalsFromRates(items);
+  }
+
+  const buckets = new Map<number, number>();
+  for (const item of items) {
+    const rate = normalizeRate(item.rate);
+    if (rate === null) {
+      throw new Error("INVALID_TAX_RATE");
+    }
+    const base = round2(item.base);
+    if (base < 0) {
+      throw new Error("NEGATIVE_TOTALS");
+    }
+    const prev = buckets.get(rate) ?? 0;
+    buckets.set(rate, round2(prev + base));
+  }
+
+  const entries = Array.from(buckets.entries()).map(([rate, base]) => {
+    const iva = rate === 0 ? 0 : round2((base * rate) / 100);
+    return {
+      rate,
+      base,
+      gross: round2(base + iva),
+    };
+  });
+  const grossBeforeAdjustment = round2(
+    entries.reduce((acc, entry) => acc + entry.gross, 0)
+  );
+  const targetTotal = round2(grossBeforeAdjustment + adjustment);
+  if (grossBeforeAdjustment <= 0 || targetTotal < 0) {
+    throw new Error("NEGATIVE_TOTALS");
+  }
+
+  const allocations = allocateAdjustment(
+    adjustment,
+    entries.map((entry) => entry.gross)
+  );
+
+  let net = 0;
+  let exempt = 0;
+  let iva = 0;
+  const ivaItems: IvaItem[] = [];
+  let lastTaxableIndex = -1;
+  let lastExemptIndex = -1;
+
+  entries.forEach((entry, index) => {
+    const adjustedGross = round2(entry.gross + allocations[index]);
+    if (adjustedGross < 0) {
+      throw new Error("NEGATIVE_TOTALS");
+    }
+
+    if (entry.rate === 0) {
+      exempt = round2(exempt + adjustedGross);
+      ivaItems.push({
+        Id: mapRateToId(entry.rate),
+        BaseImp: adjustedGross,
+        Importe: 0,
+      });
+      lastExemptIndex = ivaItems.length - 1;
+      return;
+    }
+
+    const adjustedBase = round2(adjustedGross / (1 + entry.rate / 100));
+    const adjustedIva = round2((adjustedBase * entry.rate) / 100);
+    net = round2(net + adjustedBase);
+    iva = round2(iva + adjustedIva);
+    ivaItems.push({
+      Id: mapRateToId(entry.rate),
+      BaseImp: adjustedBase,
+      Importe: adjustedIva,
+    });
+    lastTaxableIndex = ivaItems.length - 1;
+  });
+
+  let total = round2(net + iva + exempt);
+  const diff = round2(targetTotal - total);
+  if (diff !== 0) {
+    if (lastTaxableIndex >= 0) {
+      const item = ivaItems[lastTaxableIndex];
+      item.Importe = round2(item.Importe + diff);
+      iva = round2(iva + diff);
+    } else if (lastExemptIndex >= 0) {
+      const item = ivaItems[lastExemptIndex];
+      item.BaseImp = round2(item.BaseImp + diff);
+      exempt = round2(exempt + diff);
+    }
+    total = round2(net + iva + exempt);
+  }
+
+  ensurePositiveTotals([
+    net,
+    iva,
+    total,
+    exempt,
+    ...ivaItems.flatMap((item) => [item.BaseImp, item.Importe]),
+  ]);
+
+  return { net, iva, total, exempt, ivaItems };
+}
+
+export function toManualTotals(totals: {
+  net: number;
+  iva: number;
+  total: number;
+  exempt: number;
+  ivaItems: IvaItem[];
+}): ManualTotals {
+  return {
+    net: totals.net,
+    iva: totals.iva,
+    total: totals.total,
+    exempt: totals.exempt,
+    ivaBreakdown: totals.ivaItems.length
+      ? totals.ivaItems.map((item) => ({
+          id: item.Id,
+          base: item.BaseImp,
+          amount: item.Importe,
+        }))
+      : undefined,
+  };
 }
 
 export function buildTotalsFromManual(manual: ManualTotals) {

@@ -9,6 +9,7 @@ import {
   TrashIcon,
 } from "@/components/icons";
 import { formatCurrencyARS } from "@/lib/format";
+import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { QUOTE_STATUS_LABELS, QUOTE_STATUS_STYLES } from "../constants";
 import type { ProductOption, QuoteRow } from "../types";
 import { formatProductLabel, formatUnit } from "../utils";
@@ -25,6 +26,7 @@ type QuoteDetail = {
   id: string;
   subtotal: string | null;
   taxes: string | null;
+  extraType: string | null;
   extraAmount: string | null;
   total: string | null;
   items: QuoteDetailItem[];
@@ -144,12 +146,10 @@ export function QuoteRecentTable({
                 const extraAmount = detail?.extraAmount ?? null;
                 const total = detail?.total ?? quote.total;
                 const extraAmountNumeric = toNumber(extraAmount);
-                const extraLabel =
-                  extraAmountNumeric === null || extraAmountNumeric === 0
-                    ? "Ajuste"
-                    : extraAmountNumeric > 0
-                      ? "Recargo"
-                      : "Descuento";
+                const extraLabel = getAdjustmentLabel(
+                  detail?.extraType,
+                  extraAmountNumeric,
+                );
                 return (
                   <Fragment key={quote.id}>
                     <tr

@@ -73,6 +73,8 @@ enum ExtraChargeType {
   FIXED
   DISCOUNT_PERCENT
   DISCOUNT_FIXED
+  CARD_INTEREST_PERCENT
+  CARD_INTEREST_FIXED
 }
 
 enum SaleChargeType {

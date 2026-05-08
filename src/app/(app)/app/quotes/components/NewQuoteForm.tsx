@@ -16,6 +16,12 @@ import {
   formatQuantityInput,
   normalizeDecimalInput,
 } from "@/lib/input-format";
+import {
+  getAdjustmentLabel,
+  isCardInterestAdjustment,
+  isDiscountAdjustment,
+  isPercentAdjustment,
+} from "@/lib/sale-adjustments";
 import type {
   CustomerOption,
   PriceListOption,
@@ -142,12 +148,24 @@ export function NewQuoteForm({
   submitLabel,
 }: NewQuoteFormProps) {
   const isConsumerFinalToggleDisabled = isResolvingConsumerFinal || isSubmitting;
-  const isPercentExtra =
-    extraType === "PERCENT" || extraType === "DISCOUNT_PERCENT";
-  const isDiscountExtra =
-    extraType === "DISCOUNT_PERCENT" || extraType === "DISCOUNT_FIXED";
-  const extraSummaryLabel =
-    extraAmount < 0 ? "Descuento" : extraAmount > 0 ? "Recargo" : "Ajuste";
+  const isPercentExtra = isPercentAdjustment(extraType);
+  const adjustmentMode = isCardInterestAdjustment(extraType)
+    ? "CARD_INTEREST"
+    : isDiscountAdjustment(extraType)
+      ? "DISCOUNT"
+      : extraType === "PERCENT" || extraType === "FIXED"
+        ? "SURCHARGE"
+        : "NONE";
+  const extraSummaryLabel = getAdjustmentLabel(extraType, extraAmount);
+  const nextTypeForUnit = (unit: "PERCENT" | "FIXED") => {
+    if (adjustmentMode === "CARD_INTEREST") {
+      return unit === "PERCENT" ? "CARD_INTEREST_PERCENT" : "CARD_INTEREST_FIXED";
+    }
+    if (adjustmentMode === "DISCOUNT") {
+      return unit === "PERCENT" ? "DISCOUNT_PERCENT" : "DISCOUNT_FIXED";
+    }
+    return unit === "PERCENT" ? "PERCENT" : "FIXED";
+  };
 
   return (
     <div className="card space-y-6 p-6 lg:p-7">
@@ -585,62 +603,80 @@ export function NewQuoteForm({
 
           <div className="grid gap-6 lg:grid-cols-[1.1fr_1fr]">
             <div className="space-y-3 text-sm">
-              <p className="section-title">Ajuste extra</p>
+              <p className="section-title">Ajustes de venta</p>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   className={`toggle-pill ${
-                    extraType === "NONE" ? "toggle-pill-active" : ""
+                    adjustmentMode === "NONE" ? "toggle-pill-active" : ""
                   }`}
                   onClick={() => onExtraTypeChange("NONE")}
-                  aria-pressed={extraType === "NONE"}
+                  aria-pressed={adjustmentMode === "NONE"}
                 >
                   Sin ajuste
                 </button>
                 <button
                   type="button"
                   className={`toggle-pill ${
-                    extraType === "PERCENT" ? "toggle-pill-active" : ""
+                    adjustmentMode === "CARD_INTEREST" ? "toggle-pill-active" : ""
+                  }`}
+                  onClick={() => onExtraTypeChange("CARD_INTEREST_PERCENT")}
+                  aria-pressed={adjustmentMode === "CARD_INTEREST"}
+                >
+                  Interes tarjeta
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-pill ${
+                    adjustmentMode === "SURCHARGE" ? "toggle-pill-active" : ""
                   }`}
                   onClick={() => onExtraTypeChange("PERCENT")}
-                  aria-pressed={extraType === "PERCENT"}
+                  aria-pressed={adjustmentMode === "SURCHARGE"}
                 >
-                  Recargo %
+                  Recargo
                 </button>
                 <button
                   type="button"
                   className={`toggle-pill ${
-                    extraType === "FIXED" ? "toggle-pill-active" : ""
-                  }`}
-                  onClick={() => onExtraTypeChange("FIXED")}
-                  aria-pressed={extraType === "FIXED"}
-                >
-                  Recargo $
-                </button>
-                <button
-                  type="button"
-                  className={`toggle-pill ${
-                    extraType === "DISCOUNT_PERCENT" ? "toggle-pill-active" : ""
+                    adjustmentMode === "DISCOUNT" ? "toggle-pill-active" : ""
                   }`}
                   onClick={() => onExtraTypeChange("DISCOUNT_PERCENT")}
-                  aria-pressed={extraType === "DISCOUNT_PERCENT"}
+                  aria-pressed={adjustmentMode === "DISCOUNT"}
                 >
-                  Descuento %
+                  Descuento
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={`toggle-pill ${
+                    isPercentExtra && adjustmentMode !== "NONE"
+                      ? "toggle-pill-active"
+                      : ""
+                  }`}
+                  onClick={() => onExtraTypeChange(nextTypeForUnit("PERCENT"))}
+                  aria-pressed={isPercentExtra && adjustmentMode !== "NONE"}
+                  disabled={adjustmentMode === "NONE"}
+                >
+                  Porcentaje
                 </button>
                 <button
                   type="button"
                   className={`toggle-pill ${
-                    extraType === "DISCOUNT_FIXED" ? "toggle-pill-active" : ""
+                    !isPercentExtra && adjustmentMode !== "NONE"
+                      ? "toggle-pill-active"
+                      : ""
                   }`}
-                  onClick={() => onExtraTypeChange("DISCOUNT_FIXED")}
-                  aria-pressed={extraType === "DISCOUNT_FIXED"}
+                  onClick={() => onExtraTypeChange(nextTypeForUnit("FIXED"))}
+                  aria-pressed={!isPercentExtra && adjustmentMode !== "NONE"}
+                  disabled={adjustmentMode === "NONE"}
                 >
-                  Descuento $
+                  Importe fijo
                 </button>
               </div>
               <div className="field-stack max-w-sm">
                 <span className="input-label">
-                  {isPercentExtra ? "Valor (%)" : "Valor ($)"}
+                  {isPercentExtra ? "Valor (%)" : "Importe ($)"}
                 </span>
                 <div className="relative">
                   {isPercentExtra ? null : (
@@ -667,6 +703,7 @@ export function NewQuoteForm({
                         onExtraValueChange(nextValue);
                       }}
                       placeholder="0"
+                      disabled={adjustmentMode === "NONE"}
                     />
                   ) : (
                     <MoneyInput
@@ -674,16 +711,20 @@ export function NewQuoteForm({
                       value={extraValue}
                       onValueChange={onExtraValueChange}
                       placeholder="0,00"
-                      disabled={extraType === "NONE"}
+                      disabled={adjustmentMode === "NONE"}
                       maxDecimals={2}
                     />
                   )}
                 </div>
               </div>
               <p className="section-subtitle">
-                {extraType === "NONE"
-                  ? "Sin recargo ni descuento aplicado."
-                  : `${isDiscountExtra ? "El descuento" : "El recargo"} se aplica sobre el subtotal.`}
+                {adjustmentMode === "NONE"
+                  ? "Sin ajustes aplicados."
+                  : adjustmentMode === "CARD_INTEREST" && isPercentExtra
+                    ? "El interes de tarjeta se calcula sobre subtotal + IVA."
+                    : isPercentExtra
+                      ? "El porcentaje se aplica sobre el subtotal."
+                      : "El importe fijo se suma o descuenta del total."}
               </p>
             </div>
 

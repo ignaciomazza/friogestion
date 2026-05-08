@@ -4,9 +4,10 @@ import { getAfipClient } from "@/lib/afip/client";
 import { getSalesPoints } from "@/lib/afip/electronic-billing";
 import { buildQrDataUrl, type QrPayload } from "@/lib/afip/qr";
 import {
-  buildTotalsFromManual,
+  buildAdjustedTotalsFromRates,
   buildTotalsFromRates,
   ensurePositiveTotals,
+  toManualTotals,
   type ManualTotals,
 } from "@/lib/afip/totals";
 import { resolveFiscalRecipientDocument } from "@/lib/afip/consumer-final";
@@ -137,35 +138,11 @@ async function resolveCurrencyQuote(
 }
 
 function resolveTotals(
-  items: Array<{ id: string; base: number }>,
-  inputRates?: Array<{ saleItemId: string; rate: number }>,
-  manualTotals?: ManualTotals | null
+  items: Array<{ id: string; base: number; rate: number }>,
+  adjustmentTotal: number
 ): Totals {
-  if (manualTotals) {
-    const totals = buildTotalsFromManual(manualTotals);
-    ensurePositiveTotals([
-      totals.net,
-      totals.iva,
-      totals.total,
-      totals.exempt,
-    ]);
-    return totals;
-  }
-
-  if (!inputRates || inputRates.length === 0) {
-    throw new Error("TAX_RATES_REQUIRED");
-  }
-
-  const rateByItem = new Map(inputRates.map((item) => [item.saleItemId, item]));
-  const entries = items.map((item) => {
-    const rate = rateByItem.get(item.id);
-    if (!rate) {
-      throw new Error("TAX_RATES_REQUIRED");
-    }
-    return { base: item.base, rate: rate.rate };
-  });
-
-  const totals = buildTotalsFromRates(entries);
+  if (!items.length) throw new Error("TAX_RATES_REQUIRED");
+  const totals = buildAdjustedTotalsFromRates(items, adjustmentTotal);
   ensurePositiveTotals([
     totals.net,
     totals.iva,
@@ -245,6 +222,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
       customer: true,
       items: true,
       organization: true,
+      saleCharges: true,
     },
   });
 
@@ -299,24 +277,45 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     input.pointOfSale
   );
 
-  const items = sale.items.map((item) => ({
-    id: item.id,
-    base: Number(item.qty) * Number(item.unitPrice),
-  }));
+  const items = sale.items.map((item) => {
+    const rate =
+      item.taxRate === null || item.taxRate === undefined
+        ? Number.NaN
+        : Number(item.taxRate);
+    const base = Number.isFinite(Number(item.total))
+      ? Number(item.total)
+      : Number(item.qty) * Number(item.unitPrice);
+    return {
+      id: item.id,
+      base,
+      rate,
+    };
+  });
+  if (items.some((item) => !Number.isFinite(item.rate))) {
+    throw new Error("TAX_RATES_REQUIRED");
+  }
 
-  const totals = resolveTotals(items, input.itemsTaxRates, input.manualTotals);
+  const baseTotals = buildTotalsFromRates(items);
+  const saleSubtotal = Number(sale.subtotal ?? baseTotals.net + baseTotals.exempt);
+  const saleTaxes = Number(sale.taxes ?? baseTotals.iva);
+  const saleChargesTotal = sale.saleCharges.reduce(
+    (total, charge) => total + Number(charge.amount ?? 0),
+    0
+  );
+  const fallbackSaleTotal =
+    saleSubtotal + saleTaxes + Number(sale.extraAmount ?? 0) + saleChargesTotal;
+  const saleTotal = Number(sale.total ?? fallbackSaleTotal);
+  const adjustmentTotal = round2(saleTotal - baseTotals.total);
+  const totals = resolveTotals(items, adjustmentTotal);
 
-  const saleSubtotal = Number(sale.subtotal ?? 0);
-  const saleTaxes = Number(sale.taxes ?? 0);
-  const saleTotal = Number(sale.total ?? saleSubtotal + saleTaxes);
-  const fiscalSubtotal = totals.net + totals.exempt;
+  const fiscalSubtotal = baseTotals.net + baseTotals.exempt;
   const subtotalMismatch = differsByMoreThanOneCent(fiscalSubtotal, saleSubtotal);
-  const ivaMismatch = differsByMoreThanOneCent(totals.iva, saleTaxes);
+  const ivaMismatch = differsByMoreThanOneCent(baseTotals.iva, saleTaxes);
   const totalMismatch = differsByMoreThanOneCent(totals.total, saleTotal);
   if (subtotalMismatch || ivaMismatch || totalMismatch) {
     const isWithinTolerance =
       !differsByMoreThanFiveCents(fiscalSubtotal, saleSubtotal) &&
-      !differsByMoreThanFiveCents(totals.iva, saleTaxes) &&
+      !differsByMoreThanFiveCents(baseTotals.iva, saleTaxes) &&
       !differsByMoreThanFiveCents(totals.total, saleTotal);
     if (!isWithinTolerance) {
       logServerWarn(
@@ -326,10 +325,11 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
           saleId: sale.id,
           fiscalSubtotal,
           saleSubtotal,
-          fiscalIva: totals.iva,
+          fiscalIva: baseTotals.iva,
           saleIva: saleTaxes,
           fiscalTotal: totals.total,
           saleTotal,
+          fiscalAdjustment: adjustmentTotal,
         }
       );
       throw new Error("SALE_TOTALS_MISMATCH");
@@ -341,10 +341,11 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
         saleId: sale.id,
         fiscalSubtotal,
         saleSubtotal,
-        fiscalIva: totals.iva,
+        fiscalIva: baseTotals.iva,
         saleIva: saleTaxes,
         fiscalTotal: totals.total,
         saleTotal,
+        fiscalAdjustment: adjustmentTotal,
       }
     );
   }
@@ -455,7 +456,8 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
           voucherData,
           qrBase64,
           serviceDates: null,
-          manualTotals: input.manualTotals ?? null,
+          manualTotals: toManualTotals(totals),
+          fiscalAdjustment: adjustmentTotal,
           complianceWarnings: doc.warnings,
           requiresIncomeTaxDeduction: Boolean(input.requiresIncomeTaxDeduction),
         };

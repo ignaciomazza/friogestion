@@ -24,6 +24,10 @@ import {
 } from "@/lib/customers/fiscal-profile";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
 import { resolveSuggestedProductPrice } from "@/lib/pricing";
+import {
+  calculateSaleAdjustment,
+  getAdjustmentLabel,
+} from "@/lib/sale-adjustments";
 import { InlineCustomerForm } from "./components/InlineCustomerForm";
 import { NewQuoteForm } from "./components/NewQuoteForm";
 import { QuoteRecentTable } from "./components/QuoteRecentTable";
@@ -1766,16 +1770,12 @@ export default function QuotesClient({
   const safeExtraValue = Number.isFinite(extraValueNumber)
     ? extraValueNumber
     : 0;
-  const extraAmount =
-    extraType === "PERCENT"
-      ? subtotal * (safeExtraValue / 100)
-      : extraType === "FIXED"
-        ? safeExtraValue
-        : extraType === "DISCOUNT_PERCENT"
-          ? -(subtotal * (safeExtraValue / 100))
-          : extraType === "DISCOUNT_FIXED"
-            ? -safeExtraValue
-        : 0;
+  const extraAmount = calculateSaleAdjustment({
+    subtotal,
+    taxes: taxesTotal,
+    type: extraType,
+    value: safeExtraValue,
+  }).amount;
 
   const total = subtotal + taxesTotal + extraAmount;
   const consumerFinalThresholdReached =
@@ -2461,8 +2461,10 @@ export default function QuotesClient({
     toSafeNumber(quoteToConfirmSale?.total) ||
       confirmPreviewSubtotal + confirmPreviewIva + confirmPreviewExtra,
   );
-  const confirmExtraLabel =
-    confirmPreviewExtra === 0 ? "Ajuste" : confirmPreviewExtra > 0 ? "Recargo" : "Descuento";
+  const confirmExtraLabel = getAdjustmentLabel(
+    quoteToConfirmSale?.extraType,
+    confirmPreviewExtra,
+  );
   const selectedCustomerSavedTaxId = normalizeTaxId(selectedCustomer?.taxId ?? "");
   const selectedCustomerDraftTaxId = normalizeTaxId(selectedCustomerTaxId);
   const selectedCustomerSavedDisplayName =

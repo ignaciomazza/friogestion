@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth, requireOrg } from "@/lib/auth/tenant";
 import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 
 export const runtime = "nodejs";
 
@@ -106,10 +107,10 @@ export async function GET(req: NextRequest) {
             { label: "Impuestos", value: Number(sale.taxes ?? 0) },
             ...(Number(sale.extraAmount ?? 0) !== 0
               ? [{
-                  label:
-                    Number(sale.extraAmount ?? 0) > 0
-                      ? "Recargos"
-                      : "Descuentos",
+                  label: getAdjustmentLabel(
+                    sale.extraType,
+                    Number(sale.extraAmount ?? 0),
+                  ),
                   value: Number(sale.extraAmount ?? 0),
                 }]
               : []),

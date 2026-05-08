@@ -8,6 +8,7 @@ import {
   TrashIcon,
 } from "@/components/icons";
 import { formatCurrencyARS } from "@/lib/format";
+import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import type { SaleRow } from "../types";
 import { ReceiptForm } from "./ReceiptForm";
 
@@ -227,6 +228,7 @@ export function SalesRecentTable({
               <th className="py-2 pr-4 text-right">Cantidad</th>
               <th className="py-2 pr-4 text-right">Precio unit.</th>
               <th className="py-2 pr-4 text-right">IVA</th>
+              <th className="py-2 pr-4 text-right">Ajuste</th>
               <th className="py-2 pr-4 text-right">Total</th>
               <th className="py-2 pr-4 text-right">Cobrado</th>
               <th className="py-2 pr-4 text-right">Pendiente</th>
@@ -239,6 +241,14 @@ export function SalesRecentTable({
                 const isExpanded = expandedId === sale.id;
                 const paidTotal = sale.paidTotal ?? "0";
                 const balance = sale.balance ?? sale.total ?? "0";
+                const adjustmentAmount =
+                  Number(sale.total ?? 0) -
+                  Number(sale.subtotal ?? 0) -
+                  Number(sale.taxes ?? 0);
+                const adjustmentLabel = getAdjustmentLabel(
+                  sale.extraType,
+                  adjustmentAmount,
+                );
                 return (
                   <Fragment key={sale.id}>
                     <tr
@@ -317,6 +327,15 @@ export function SalesRecentTable({
                             : "-"}
                         </div>
                       </td>
+                      <td className="py-2 pr-4 text-right text-zinc-700">
+                        {Math.abs(adjustmentAmount) > 0.005 ? (
+                          <span title={adjustmentLabel}>
+                            {formatCurrencyARS(adjustmentAmount.toFixed(2))}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
                       <td className="py-2 pr-4 text-right text-zinc-900">
                         {sale.total
                           ? formatCurrencyARS(sale.total.toString())
@@ -376,7 +395,7 @@ export function SalesRecentTable({
                           transition={{ duration: 0.2 }}
                           className="bg-white/40"
                         >
-                          <td colSpan={11} className="px-4 py-0">
+                          <td colSpan={12} className="px-4 py-0">
                             <motion.div
                               initial={{ height: 0, opacity: 0, y: -8 }}
                               animate={{ height: "auto", opacity: 1, y: 0 }}
@@ -542,7 +561,7 @@ export function SalesRecentTable({
               })
             ) : (
               <tr>
-                <td className="py-4 text-sm text-zinc-500" colSpan={11}>
+                <td className="py-4 text-sm text-zinc-500" colSpan={12}>
                   Sin ventas por ahora.
                 </td>
               </tr>

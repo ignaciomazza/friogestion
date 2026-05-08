@@ -8,6 +8,11 @@ import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { parseOptionalDate } from "@/lib/validation";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import {
+  EXTRA_CHARGE_TYPES,
+  calculateSaleAdjustment,
+  type ExtraChargeTypeValue,
+} from "@/lib/sale-adjustments";
 
 const quoteItemSchema = z.object({
   productId: z.string().min(1),
@@ -22,9 +27,7 @@ const quoteSchema = z.object({
   quoteNumber: z.string().min(1).optional(),
   validUntil: z.string().min(1).optional(),
   status: z.enum(["DRAFT", "SENT", "ACCEPTED", "REJECTED", "EXPIRED"]).optional(),
-  extraType: z
-    .enum(["PERCENT", "FIXED", "DISCOUNT_PERCENT", "DISCOUNT_FIXED"])
-    .optional(),
+  extraType: z.enum(EXTRA_CHARGE_TYPES).optional(),
   extraValue: z.coerce.number().min(0).optional(),
   items: z.array(quoteItemSchema).min(1),
 });
@@ -87,7 +90,7 @@ const resolveQuotePriceListId = async ({
 
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
-  extraType?: "PERCENT" | "FIXED" | "DISCOUNT_PERCENT" | "DISCOUNT_FIXED",
+  extraType?: ExtraChargeTypeValue,
   extraValue?: number
 ) => {
   const subtotal = items.reduce(
@@ -98,17 +101,12 @@ const calculateTotals = (
     const rate = item.taxRate ?? 0;
     return total + item.qty * item.unitPrice * (rate / 100);
   }, 0);
-  const extraBase = extraValue ?? 0;
-  const extraAmount =
-    extraType === "PERCENT"
-      ? subtotal * (extraBase / 100)
-      : extraType === "FIXED"
-        ? extraBase
-        : extraType === "DISCOUNT_PERCENT"
-          ? -(subtotal * (extraBase / 100))
-          : extraType === "DISCOUNT_FIXED"
-            ? -extraBase
-            : 0;
+  const extraAmount = calculateSaleAdjustment({
+    subtotal,
+    taxes,
+    type: extraType,
+    value: extraValue,
+  }).amount;
   const total = subtotal + taxes + extraAmount;
 
   return { subtotal, taxes, extraAmount, total };
