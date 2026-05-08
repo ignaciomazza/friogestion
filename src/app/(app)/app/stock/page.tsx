@@ -176,9 +176,7 @@ const INITIAL_SAVE_QUEUE_SUMMARY: StockSaveQueueSummary = {
   active: 0,
 };
 
-const createEmptyRowDraft = (
-  overrides: Partial<RowDraft> = {},
-): RowDraft => ({
+const createEmptyRowDraft = (overrides: Partial<RowDraft> = {}): RowDraft => ({
   cost: "",
   costUsd: "",
   percentages: {},
@@ -423,10 +421,7 @@ const getStockRowChangeState = (
 ): StockRowChangeState => {
   const currentCost = parseNumber(draft.cost);
   const currentCostUsd = parseNumber(draft.costUsd);
-  const currentCostUsdArs = convertUsdCostToArs(
-    currentCostUsd,
-    latestUsdRate,
-  );
+  const currentCostUsdArs = convertUsdCostToArs(currentCostUsd, latestUsdRate);
   const effectiveCost = resolveEffectiveCost({
     cost: currentCost,
     costUsd: currentCostUsd,
@@ -601,8 +596,13 @@ const buildStockSaveJob = (
         return updates;
       }
 
-      const nextPrice = normalizePriceNumber(rowState.computedPrices[priceList.id]);
-      if (originalPrice !== nextPrice || originalPercentage !== nextPercentage) {
+      const nextPrice = normalizePriceNumber(
+        rowState.computedPrices[priceList.id],
+      );
+      if (
+        originalPrice !== nextPrice ||
+        originalPercentage !== nextPercentage
+      ) {
         updates.push({
           priceListId: priceList.id,
           price: nextPrice,
@@ -655,7 +655,10 @@ const formatSaveQueueMessage = (summary: StockSaveQueueSummary) => {
   return `Guardando stock: ${parts.join(", ")}`;
 };
 
-const mergeProductsById = (current: StockProduct[], incoming: StockProduct[]) => {
+const mergeProductsById = (
+  current: StockProduct[],
+  incoming: StockProduct[],
+) => {
   if (!current.length) return incoming;
   if (!incoming.length) return current;
   const seen = new Set(current.map((product) => product.id));
@@ -706,7 +709,9 @@ export default function StockPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
   const [isCreatingProduct, setIsCreatingProduct] = useState(false);
-  const [productFormStatus, setProductFormStatus] = useState<string | null>(null);
+  const [productFormStatus, setProductFormStatus] = useState<string | null>(
+    null,
+  );
   const [calculatorRows, setCalculatorRows] = useState<Set<string>>(
     () => new Set(),
   );
@@ -993,7 +998,12 @@ export default function StockPage() {
             : data.products;
           productsRef.current = nextProducts;
           replaceRows(
-            hydrateRows(nextProducts, data.priceLists, rowsRef.current, usdRate),
+            hydrateRows(
+              nextProducts,
+              data.priceLists,
+              rowsRef.current,
+              usdRate,
+            ),
           );
           return nextProducts;
         });
@@ -1065,8 +1075,7 @@ export default function StockPage() {
   );
   const visibleUnsavedCount = visibleUnsavedProductIds.length;
   const hasVisibleUnsavedChanges = visibleUnsavedCount > 0;
-  const shouldBlockStockExit =
-    hasSaveQueueActivity || hasVisibleUnsavedChanges;
+  const shouldBlockStockExit = hasSaveQueueActivity || hasVisibleUnsavedChanges;
 
   const openStockExitGuard = useCallback((action: StockExitGuardAction) => {
     setStockExitGuardAction(action);
@@ -1108,7 +1117,10 @@ export default function StockPage() {
 
     window.addEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
     return () =>
-      window.removeEventListener(APP_NAVIGATION_GUARD_EVENT, handleAppNavigation);
+      window.removeEventListener(
+        APP_NAVIGATION_GUARD_EVENT,
+        handleAppNavigation,
+      );
   }, [openStockExitGuard]);
 
   useEffect(() => {
@@ -1148,7 +1160,9 @@ export default function StockPage() {
 
       const target = event.target;
       const anchor =
-        target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
+        target instanceof Element
+          ? target.closest<HTMLAnchorElement>("a[href]")
+          : null;
       if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
 
       const href = anchor.getAttribute("href");
@@ -1173,7 +1187,8 @@ export default function StockPage() {
     };
 
     document.addEventListener("click", handleDocumentClick, true);
-    return () => document.removeEventListener("click", handleDocumentClick, true);
+    return () =>
+      document.removeEventListener("click", handleDocumentClick, true);
   }, [openStockExitGuard]);
 
   const updateRow = (productId: string, updates: Partial<RowDraft>) => {
@@ -1186,10 +1201,7 @@ export default function StockPage() {
     }));
   };
 
-  const updateEditableRow = (
-    productId: string,
-    updates: Partial<RowDraft>,
-  ) => {
+  const updateEditableRow = (productId: string, updates: Partial<RowDraft>) => {
     updateRow(productId, {
       ...updates,
       saveStatus: "idle",
@@ -1229,8 +1241,7 @@ export default function StockPage() {
     updateRows((previous) => {
       const current = previous[productId] ?? createEmptyRowDraft();
       const parsedCurrent = Number(current.adjustmentQty);
-      const next =
-        (Number.isFinite(parsedCurrent) ? parsedCurrent : 0) + step;
+      const next = (Number.isFinite(parsedCurrent) ? parsedCurrent : 0) + step;
 
       return {
         ...previous,
@@ -1380,10 +1391,7 @@ export default function StockPage() {
 
     if (summary.failed === 0) {
       window.setTimeout(() => {
-        if (
-          saveToastIdRef.current &&
-          !toast.isActive(saveToastIdRef.current)
-        ) {
+        if (saveToastIdRef.current && !toast.isActive(saveToastIdRef.current)) {
           saveToastIdRef.current = null;
         }
       }, 4000);
@@ -1443,7 +1451,9 @@ export default function StockPage() {
               priceListId: update.priceListId,
               price: formattedPrice,
               percentage:
-                update.percentage === null ? null : update.percentage.toFixed(4),
+                update.percentage === null
+                  ? null
+                  : update.percentage.toFixed(4),
             });
           }
           if (update.isDefault) {
@@ -1636,10 +1646,7 @@ export default function StockPage() {
       return;
     }
 
-    if (
-      activeSaveCountRef.current === 0 &&
-      saveQueueRef.current.length === 0
-    ) {
+    if (activeSaveCountRef.current === 0 && saveQueueRef.current.length === 0) {
       if (saveReconcileTimeoutRef.current) {
         clearTimeout(saveReconcileTimeoutRef.current);
         saveReconcileTimeoutRef.current = null;
@@ -1985,7 +1992,7 @@ export default function StockPage() {
                 <th className="w-[108px] py-2 pr-2">Costo USD</th>
                 {priceLists.map((priceList) => (
                   <th key={priceList.id} className="w-[112px] py-2 pr-2">
-                    Precio {priceList.name}
+                    {priceList.name}
                   </th>
                 ))}
                 {STOCK_ACCOUNTING_ENABLED ? (
@@ -2003,11 +2010,13 @@ export default function StockPage() {
                   priceLists,
                   latestUsdRate,
                 );
-                const draft = rows[product.id] ?? createEmptyRowDraft({
-                  cost: product.cost ?? "",
-                  costUsd: product.costUsd ?? "",
-                  percentages: derivedPercentages,
-                });
+                const draft =
+                  rows[product.id] ??
+                  createEmptyRowDraft({
+                    cost: product.cost ?? "",
+                    costUsd: product.costUsd ?? "",
+                    percentages: derivedPercentages,
+                  });
                 const rowState = getStockRowChangeState(
                   product,
                   draft,
@@ -2031,7 +2040,8 @@ export default function StockPage() {
                 const calculatorPriceBasis =
                   draft.calculatorPriceBasis === "usd" && canUseCalculatorUsd
                     ? "usd"
-                    : draft.calculatorPriceBasis === "ars" && canUseCalculatorArs
+                    : draft.calculatorPriceBasis === "ars" &&
+                        canUseCalculatorArs
                       ? "ars"
                       : canUseCalculatorUsd
                         ? "usd"
@@ -2050,7 +2060,8 @@ export default function StockPage() {
                   priceLists.length + 2 + (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
                 const hasRowChanges = rowState.hasRowChanges;
                 const isRowSavePending =
-                  draft.saveStatus === "queued" || draft.saveStatus === "saving";
+                  draft.saveStatus === "queued" ||
+                  draft.saveStatus === "saving";
                 const saveButtonLabel =
                   draft.saveStatus === "queued"
                     ? "En cola"
@@ -2078,9 +2089,7 @@ export default function StockPage() {
                     className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                   >
                     <td className="py-3 pr-2 align-top">
-                      <div
-                        className="flex min-h-10 max-w-[220px] min-w-0 flex-col justify-center gap-0.5"
-                      >
+                      <div className="flex min-h-10 max-w-[220px] min-w-0 flex-col justify-center gap-0.5">
                         <p
                           className="min-w-0 truncate text-sm font-medium text-zinc-900"
                           onMouseEnter={(event) =>
@@ -2166,7 +2175,8 @@ export default function StockPage() {
                                 c/IVA 21
                               </span>
                             </span>
-                            {calculatorPriceBasis === "usd" && hasCurrentCostUsd ? (
+                            {calculatorPriceBasis === "usd" &&
+                            hasCurrentCostUsd ? (
                               <>
                                 <span className="text-zinc-300">/</span>
                                 <span className="font-semibold tabular-nums text-zinc-600">
@@ -2204,7 +2214,9 @@ export default function StockPage() {
                             <button
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
-                              onClick={() => nudgeCalculatorQuantity(product.id, -1)}
+                              onClick={() =>
+                                nudgeCalculatorQuantity(product.id, -1)
+                              }
                               disabled={isRowSavePending}
                               aria-label="Restar cantidad"
                             >
@@ -2227,7 +2239,9 @@ export default function StockPage() {
                             <button
                               type="button"
                               className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
-                              onClick={() => nudgeCalculatorQuantity(product.id, 1)}
+                              onClick={() =>
+                                nudgeCalculatorQuantity(product.id, 1)
+                              }
                               disabled={isRowSavePending}
                               aria-label="Sumar cantidad"
                             >
@@ -2308,7 +2322,10 @@ export default function StockPage() {
                               prefix="$"
                               disabled={isRowSavePending}
                             />
-                            <span aria-hidden="true" className="block min-h-4" />
+                            <span
+                              aria-hidden="true"
+                              className="block min-h-4"
+                            />
                           </div>
                         </td>
                         <td className="py-3 pr-2 align-top">
@@ -2324,7 +2341,10 @@ export default function StockPage() {
                               prefix="USD "
                               disabled={isRowSavePending}
                             />
-                            <span aria-hidden="true" className="block min-h-4" />
+                            <span
+                              aria-hidden="true"
+                              className="block min-h-4"
+                            />
                           </div>
                         </td>
                         {priceLists.map((priceList) => {
@@ -2394,7 +2414,9 @@ export default function StockPage() {
                                       tabIndex={0}
                                     >
                                       ARS{" "}
-                                      {formatPriceWithIva21Preview(priceFromArs)}
+                                      {formatPriceWithIva21Preview(
+                                        priceFromArs,
+                                      )}
                                       <span className="ml-1 font-semibold text-zinc-400">
                                         c/IVA
                                       </span>
@@ -2430,7 +2452,9 @@ export default function StockPage() {
                                       tabIndex={0}
                                     >
                                       USD{" "}
-                                      {formatPriceWithIva21Preview(priceFromUsd)}
+                                      {formatPriceWithIva21Preview(
+                                        priceFromUsd,
+                                      )}
                                       <span className="ml-1 font-semibold text-amber-600/70">
                                         c/IVA
                                       </span>
@@ -2514,7 +2538,9 @@ export default function StockPage() {
                               <button
                                 type="button"
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
-                                onClick={() => nudgeStockAdjustment(product.id, 1)}
+                                onClick={() =>
+                                  nudgeStockAdjustment(product.id, 1)
+                                }
                                 disabled={isRowSavePending}
                                 aria-label="Sumar una unidad"
                               >
@@ -2577,7 +2603,9 @@ export default function StockPage() {
                                 ? "btn-rose"
                                 : "btn-emerald"
                             }`}
-                            disabled={draft.isSaving || isLoading || !hasRowChanges}
+                            disabled={
+                              draft.isSaving || isLoading || !hasRowChanges
+                            }
                             onClick={() => saveRow(product.id)}
                             aria-label={saveButtonLabel}
                             title={saveButtonLabel}
@@ -2613,7 +2641,9 @@ export default function StockPage() {
                 <tr>
                   <td
                     className="py-4 text-sm text-zinc-500"
-                    colSpan={priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)}
+                    colSpan={
+                      priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)
+                    }
                   >
                     No hay productos para mostrar.
                   </td>
@@ -2629,11 +2659,7 @@ export default function StockPage() {
           <button
             type="button"
             className="btn"
-            disabled={
-              isLoading ||
-              isLoadingMore ||
-              nextOffset === null
-            }
+            disabled={isLoading || isLoadingMore || nextOffset === null}
             onClick={handleLoadMore}
           >
             {isLoadingMore ? "Cargando..." : "Cargar mas"}
