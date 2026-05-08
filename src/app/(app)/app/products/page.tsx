@@ -16,6 +16,7 @@ type ProductRow = {
   id: string;
   name: string;
   sku: string | null;
+  purchaseCode: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
@@ -46,6 +47,7 @@ export default function ProductsPage() {
   const [form, setForm] = useState({
     name: "",
     sku: "",
+    purchaseCode: "",
     brand: "",
     model: "",
     unit: "u",
@@ -54,6 +56,7 @@ export default function ProductsPage() {
   const [editForm, setEditForm] = useState({
     name: "",
     sku: "",
+    purchaseCode: "",
     brand: "",
     model: "",
     unit: "u",
@@ -139,6 +142,7 @@ export default function ProductsPage() {
         body: JSON.stringify({
           name: form.name,
           sku: form.sku || undefined,
+          purchaseCode: form.purchaseCode || undefined,
           brand: form.brand || undefined,
           model: form.model || undefined,
           unit: form.unit || undefined,
@@ -154,6 +158,7 @@ export default function ProductsPage() {
       setForm({
         name: "",
         sku: "",
+        purchaseCode: "",
         brand: "",
         model: "",
         unit: "u",
@@ -172,6 +177,7 @@ export default function ProductsPage() {
     setEditForm({
       name: item.name,
       sku: item.sku ?? "",
+      purchaseCode: item.purchaseCode ?? "",
       brand: item.brand ?? "",
       model: item.model ?? "",
       unit: item.unit ?? "u",
@@ -183,6 +189,7 @@ export default function ProductsPage() {
     setEditForm({
       name: "",
       sku: "",
+      purchaseCode: "",
       brand: "",
       model: "",
       unit: "u",
@@ -202,6 +209,7 @@ export default function ProductsPage() {
           id: editingId,
           name: editForm.name,
           sku: editForm.sku || undefined,
+          purchaseCode: editForm.purchaseCode,
           brand: editForm.brand || undefined,
           model: editForm.model || undefined,
           unit: editForm.unit || undefined,
@@ -247,6 +255,9 @@ export default function ProductsPage() {
   const totalProducts = totalItems;
   const productsWithUnit = items.filter((item) => item.unit).length;
   const productsWithSku = items.filter((item) => item.sku).length;
+  const productsWithPurchaseCode = items.filter(
+    (item) => item.purchaseCode,
+  ).length;
 
   return (
     <div className="space-y-6">
@@ -260,7 +271,7 @@ export default function ProductsPage() {
       </div>
 
       <div className="table-scroll pb-1">
-        <div className="grid min-w-[680px] grid-cols-3 gap-2">
+        <div className="grid min-w-[860px] grid-cols-4 gap-2">
           <div className="card border !border-sky-200 p-3 !bg-white">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-sky-700">
@@ -287,10 +298,21 @@ export default function ProductsPage() {
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs font-medium text-amber-700">
                 <DocumentTextIcon className="size-3.5" />
-                Con codigo
+                Con codigo interno
               </span>
               <p className="text-base font-semibold text-zinc-900">
                 {productsWithSku}
+              </p>
+            </div>
+          </div>
+          <div className="card border !border-violet-200 p-3 !bg-white">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-xs font-medium text-violet-700">
+                <DocumentTextIcon className="size-3.5" />
+                Con codigo compra
+              </span>
+              <p className="text-base font-semibold text-zinc-900">
+                {productsWithPurchaseCode}
               </p>
             </div>
           </div>
@@ -317,16 +339,30 @@ export default function ProductsPage() {
               required
             />
           </label>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <label className="flex flex-col gap-3">
-              <span className="input-label">Codigo</span>
+              <span className="input-label">Codigo interno</span>
               <input
                 className="input"
                 value={form.sku}
                 onChange={(event) =>
                   setForm((prev) => ({ ...prev, sku: event.target.value }))
                 }
-                placeholder="Codigo"
+                placeholder="Codigo interno"
+              />
+            </label>
+            <label className="flex flex-col gap-3">
+              <span className="input-label">Codigo compra</span>
+              <input
+                className="input"
+                value={form.purchaseCode}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    purchaseCode: event.target.value,
+                  }))
+                }
+                placeholder="Codigo compra"
               />
             </label>
             <label className="flex flex-col gap-3">
@@ -424,7 +460,7 @@ export default function ProductsPage() {
             className="input w-full"
             value={productQuery}
             onChange={(event) => setProductQuery(event.target.value)}
-            placeholder="Buscar nombre, codigo o marca"
+            placeholder="Buscar nombre, codigo interno, codigo compra o marca"
           />
           <select
             className="input cursor-pointer"
@@ -466,7 +502,8 @@ export default function ProductsPage() {
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
                 <th className="py-2 pr-4">Producto</th>
-                <th className="py-2 pr-4">Codigo</th>
+                <th className="py-2 pr-4">Codigo interno</th>
+                <th className="py-2 pr-4">Codigo compra</th>
                 <th className="py-2 pr-4">Marca</th>
                 <th className="py-2 pr-4">Modelo</th>
                 <th className="py-2 pr-4">Unidad</th>
@@ -483,6 +520,9 @@ export default function ProductsPage() {
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.sku ?? "-"}
+                      </td>
+                      <td className="py-3 pr-4 text-zinc-600">
+                        {item.purchaseCode ?? "-"}
                       </td>
                       <td className="py-3 pr-4 text-zinc-600">
                         {item.brand ?? "-"}
@@ -529,11 +569,11 @@ export default function ProductsPage() {
                           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                           className="border-t border-zinc-200/60"
                         >
-                          <td className="py-3" colSpan={6}>
+                          <td className="py-3" colSpan={7}>
                             <form onSubmit={handleUpdate} className="space-y-4">
-                              <div className="grid gap-3 sm:grid-cols-6">
+                              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
                               <input
-                                className="input sm:col-span-2"
+                                className="input lg:col-span-2"
                                 value={editForm.name}
                                 onChange={(event) =>
                                   setEditForm((prev) => ({
@@ -553,7 +593,18 @@ export default function ProductsPage() {
                                     sku: event.target.value,
                                   }))
                                 }
-                                placeholder="Codigo"
+                                placeholder="Codigo interno"
+                              />
+                              <input
+                                className="input"
+                                value={editForm.purchaseCode}
+                                onChange={(event) =>
+                                  setEditForm((prev) => ({
+                                    ...prev,
+                                    purchaseCode: event.target.value,
+                                  }))
+                                }
+                                placeholder="Codigo compra"
                               />
                               <select
                                 className="input cursor-pointer"
@@ -620,7 +671,7 @@ export default function ProductsPage() {
                 ))
               ) : (
                 <tr>
-                  <td className="py-3 text-sm text-zinc-500" colSpan={6}>
+                  <td className="py-3 text-sm text-zinc-500" colSpan={7}>
                     {isLoadingList ? "Cargando productos..." : "Sin productos por ahora."}
                   </td>
                 </tr>

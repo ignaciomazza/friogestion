@@ -247,6 +247,7 @@ export async function GET(req: NextRequest) {
             id: item.product.id,
             name: item.product.name,
             sku: item.product.sku,
+            purchaseCode: item.product.purchaseCode,
             brand: item.product.brand,
             model: item.product.model,
             unit: item.product.unit,

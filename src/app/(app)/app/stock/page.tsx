@@ -41,6 +41,7 @@ type StockProduct = {
   id: string;
   name: string;
   sku: string | null;
+  purchaseCode: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
@@ -708,6 +709,7 @@ export default function StockPage() {
   const [productForm, setProductForm] = useState({
     name: "",
     sku: "",
+    purchaseCode: "",
     brand: "",
     model: "",
     unit: "",
@@ -1627,6 +1629,7 @@ export default function StockPage() {
         body: JSON.stringify({
           name: productForm.name.trim(),
           sku: productForm.sku || undefined,
+          purchaseCode: productForm.purchaseCode || undefined,
           brand: productForm.brand || undefined,
           model: productForm.model || undefined,
           unit: productForm.unit || undefined,
@@ -1640,6 +1643,7 @@ export default function StockPage() {
       setProductForm({
         name: "",
         sku: "",
+        purchaseCode: "",
         brand: "",
         model: "",
         unit: "",
@@ -1760,7 +1764,18 @@ export default function StockPage() {
                       sku: event.target.value,
                     }))
                   }
-                  placeholder="Codigo"
+                  placeholder="Codigo interno"
+                />
+                <input
+                  className="input"
+                  value={productForm.purchaseCode}
+                  onChange={(event) =>
+                    setProductForm((previous) => ({
+                      ...previous,
+                      purchaseCode: event.target.value,
+                    }))
+                  }
+                  placeholder="Codigo compra"
                 />
                 <select
                   className="input cursor-pointer"
@@ -1859,7 +1874,7 @@ export default function StockPage() {
               value={query}
               onChange={(event) => handleSearchQueryChange(event.target.value)}
               disabled={shouldBlockStockExit}
-              placeholder="Buscar por nombre o codigo"
+              placeholder="Buscar por nombre, codigo interno o codigo compra"
             />
           </div>
         </div>
@@ -1986,6 +2001,14 @@ export default function StockPage() {
                             <>
                               <span className="break-all font-medium tabular-nums text-zinc-600">
                                 {product.sku}
+                              </span>
+                              <span className="text-zinc-400"> · </span>
+                            </>
+                          ) : null}
+                          {product.purchaseCode ? (
+                            <>
+                              <span className="break-all font-medium tabular-nums text-amber-700">
+                                Compra {product.purchaseCode}
                               </span>
                               <span className="text-zinc-400"> · </span>
                             </>

@@ -5,7 +5,13 @@ export const formatSupplierLabel = (supplier: SupplierOption) =>
   `${supplier.displayName}${supplier.taxId ? ` - ${supplier.taxId}` : ""}`;
 
 export const formatProductLabel = (product: ProductOption) =>
-  `${product.name}${product.sku ? ` (${product.sku})` : ""}`;
+  [
+    product.name,
+    product.sku ? `Int. ${product.sku}` : null,
+    product.purchaseCode ? `Compra ${product.purchaseCode}` : null,
+  ]
+    .filter(Boolean)
+    .join(" - ");
 
 export const normalizeQuery = (value: string) => value.trim().toLowerCase();
 

@@ -99,6 +99,7 @@ export async function GET(req: NextRequest) {
       productWhere.OR = [
         { name: { contains: query } },
         { sku: { contains: query } },
+        { purchaseCode: { contains: query } },
         { brand: { contains: query } },
         { model: { contains: query } },
       ];
@@ -190,6 +191,7 @@ export async function GET(req: NextRequest) {
         id: product.id,
         name: product.name,
         sku: product.sku,
+        purchaseCode: product.purchaseCode,
         brand: product.brand,
         model: product.model,
         unit: product.unit,

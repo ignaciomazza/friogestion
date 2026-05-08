@@ -377,6 +377,7 @@ model Product {
   id             String   @id @default(cuid())
   organizationId String
   sku            String?
+  purchaseCode   String?
   name           String
   brand          String?
   model          String?

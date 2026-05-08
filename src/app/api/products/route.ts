@@ -12,6 +12,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 const productSchema = z.object({
   name: z.string().min(2),
   sku: z.string().min(1).optional(),
+  purchaseCode: z.string().optional(),
   brand: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   unit: z.enum(UNIT_VALUES).optional(),
@@ -21,6 +22,7 @@ const productUpdateSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(2),
   sku: z.string().min(1).optional(),
+  purchaseCode: z.string().optional(),
   brand: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   unit: z.enum(UNIT_VALUES).optional(),
@@ -71,6 +73,7 @@ export async function GET(req: NextRequest) {
             OR: [
               { name: { contains: query, mode: "insensitive" } },
               { sku: { contains: query, mode: "insensitive" } },
+              { purchaseCode: { contains: query, mode: "insensitive" } },
               { brand: { contains: query, mode: "insensitive" } },
               { model: { contains: query, mode: "insensitive" } },
             ],
@@ -112,6 +115,7 @@ export async function GET(req: NextRequest) {
           id: product.id,
           name: product.name,
           sku: product.sku,
+          purchaseCode: product.purchaseCode,
           brand: product.brand,
           model: product.model,
           unit: product.unit,
@@ -149,6 +153,7 @@ export async function GET(req: NextRequest) {
         id: product.id,
         name: product.name,
         sku: product.sku,
+        purchaseCode: product.purchaseCode,
         brand: product.brand,
         model: product.model,
         unit: product.unit,
@@ -173,6 +178,7 @@ export async function POST(req: NextRequest) {
     const body = productSchema.parse(await req.json());
 
     const sku = body.sku?.trim();
+    const purchaseCode = body.purchaseCode?.trim();
     const brand = body.brand?.trim();
     const model = body.model?.trim();
     const unit = body.unit?.trim();
@@ -182,6 +188,7 @@ export async function POST(req: NextRequest) {
         organizationId,
         name: body.name.trim(),
         sku: sku || undefined,
+        purchaseCode: purchaseCode || undefined,
         brand: brand || undefined,
         model: model || undefined,
         unit: unit || undefined,
@@ -192,6 +199,7 @@ export async function POST(req: NextRequest) {
       id: product.id,
       name: product.name,
       sku: product.sku,
+      purchaseCode: product.purchaseCode,
       brand: product.brand,
       model: product.model,
       unit: product.unit,
@@ -243,6 +251,7 @@ export async function PATCH(req: NextRequest) {
     }
 
     const sku = body.sku?.trim();
+    const purchaseCode = body.purchaseCode?.trim();
     const brand = body.brand?.trim();
     const model = body.model?.trim();
     const unit = body.unit?.trim();
@@ -252,6 +261,9 @@ export async function PATCH(req: NextRequest) {
       data: {
         name: body.name.trim(),
         sku: sku || undefined,
+        ...(body.purchaseCode !== undefined
+          ? { purchaseCode: purchaseCode || null }
+          : {}),
         brand: brand || undefined,
         model: model || undefined,
         unit: unit || undefined,
@@ -262,6 +274,7 @@ export async function PATCH(req: NextRequest) {
       id: product.id,
       name: product.name,
       sku: product.sku,
+      purchaseCode: product.purchaseCode,
       brand: product.brand,
       model: product.model,
       unit: product.unit,

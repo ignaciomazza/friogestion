@@ -285,7 +285,7 @@ export function NewPurchaseForm({
                               onKeyDown={(event) =>
                                 onProductKeyDown(event, index, productMatches)
                               }
-                              placeholder="Buscar por nombre o codigo"
+                              placeholder="Buscar por nombre, codigo interno o codigo compra"
                               autoComplete="off"
                               role="combobox"
                               aria-autocomplete="list"

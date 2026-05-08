@@ -1506,7 +1506,7 @@ export default function PurchasesPage() {
                             onKeyDown={(event) =>
                               handleStockProductKeyDown(event, index, matches)
                             }
-                            placeholder="Buscar producto por nombre o codigo"
+                            placeholder="Buscar producto por nombre, codigo interno o codigo compra"
                             autoComplete="off"
                             role="combobox"
                             aria-autocomplete="list"

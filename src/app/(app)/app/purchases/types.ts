@@ -2,6 +2,7 @@ export type ProductOption = {
   id: string;
   name: string;
   sku: string | null;
+  purchaseCode: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
