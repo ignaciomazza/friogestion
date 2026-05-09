@@ -10,6 +10,17 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  const isSharedPdfRequest =
+    req.nextUrl.searchParams.has("shareToken") &&
+    (pathname === "/api/pdf/quote" ||
+      pathname === "/api/pdf/sale" ||
+      /^\/api\/fiscal-invoices\/[^/]+\/pdf$/.test(pathname) ||
+      /^\/api\/credit-notes\/[^/]+\/pdf$/.test(pathname));
+
+  if (isSharedPdfRequest) {
+    return NextResponse.next();
+  }
+
   if (!STOCK_PAGE_ENABLED && pathname.startsWith("/app/stock")) {
     const productsUrl = req.nextUrl.clone();
     productsUrl.pathname = "/app/products";

@@ -7,6 +7,7 @@ import {
   PencilSquareIcon,
   TrashIcon,
 } from "@/components/icons";
+import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { formatCurrencyARS } from "@/lib/format";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import type { SaleRow } from "../types";
@@ -359,6 +360,18 @@ export function SalesRecentTable({
                             <ArrowDownTrayIcon className="size-4" />
                             PDF
                           </a>
+                          <WhatsappPdfButton
+                            documentType="sale"
+                            documentId={sale.id}
+                            documentLabel={
+                              sale.saleNumber
+                                ? `Venta ${sale.saleNumber}`
+                                : "Venta"
+                            }
+                            customerName={sale.customerName}
+                            customerPhone={sale.customerPhone}
+                            stopPropagation
+                          />
                           {canManage ? (
                             <button
                               type="button"

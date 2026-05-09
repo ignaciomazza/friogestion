@@ -68,3 +68,13 @@ test("buildAdjustedTotalsFromRates treats installment interest as gross adjustme
   assert.equal(result.net, 1100);
   assert.equal(result.iva, 231);
 });
+
+test("buildAdjustedTotalsFromRates keeps IVA calculated from its taxable base", () => {
+  const result = buildAdjustedTotalsFromRates([{ base: 1000, rate: 21 }], 0.03);
+  const [ivaItem] = result.ivaItems;
+
+  assert.equal(ivaItem.Importe, round2(ivaItem.BaseImp * 0.21));
+  assert.equal(result.iva, ivaItem.Importe);
+  assert.equal(round2(result.net + result.iva + result.exempt), result.total);
+  assert.ok(Math.abs(Math.round(result.total * 100) - 121003) <= 1);
+});

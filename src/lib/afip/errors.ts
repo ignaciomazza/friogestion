@@ -6,6 +6,20 @@ type ErrorPayload = {
   error: string;
   helpLinks?: HelpLink[];
   details?: string;
+  resolution?:
+    | {
+        type: "USE_ISSUE_DATE";
+        issueDate: string;
+        title: string;
+        description: string;
+        primaryActionLabel: string;
+      }
+    | {
+        type: "RECALCULATE_FISCAL_TOTALS";
+        title: string;
+        description: string;
+        primaryActionLabel: string;
+      };
 };
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -46,6 +60,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   AFIP_CERT_KEY_REQUIRED: "Faltan certificados de ARCA para emitir comprobantes.",
   AFIP_CUIT_REQUIRED: "Falta CUIT para emitir comprobantes.",
   ISSUE_DATE_IN_FUTURE: "La fecha del comprobante no puede ser futura.",
+  ISSUE_DATE_BEFORE_LAST_AUTHORIZED:
+    "ARCA no permite emitir este comprobante con una fecha anterior al ultimo comprobante autorizado para el mismo punto de venta y tipo de factura.",
   FISCAL_INVOICE_NOT_FOUND: "Factura no encontrada.",
   FISCAL_INVOICE_ALREADY_ANNULLED:
     "La factura ya tiene una nota de credito asociada.",
@@ -75,11 +91,75 @@ function getHelpLinks(code: string) {
   return undefined;
 }
 
+function isIvaCalculationMismatch(message: string) {
+  const lower = message
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  return (
+    lower.includes("iva") &&
+    (lower.includes("alicuota") ||
+      lower.includes("base imponible") ||
+      lower.includes("baseimp") ||
+      lower.includes("importe"))
+  );
+}
+
+function buildFiscalTotalsResolution() {
+  return {
+    type: "RECALCULATE_FISCAL_TOTALS" as const,
+    title: "Recalcular IVA fiscal",
+    description:
+      "ARCA necesita que el IVA de cada alicuota cierre contra su base imponible. Volve a emitir con el calculo fiscal actualizado; si el ajuste era interes de tarjeta, revisa que la venta este cargada con ese criterio.",
+    primaryActionLabel: "Recalcular y emitir",
+  };
+}
+
 export function mapAfipError(error: unknown): ErrorPayload {
   if (error instanceof Error) {
     const message = error.message;
     const knownMessage = ERROR_MESSAGES[message];
+    const errorWithResolution = error as Error & {
+      suggestedIssueDate?: string;
+      lastVoucherDate?: string;
+      lastVoucherNumber?: number;
+    };
+
+    if (
+      message === "ISSUE_DATE_BEFORE_LAST_AUTHORIZED" &&
+      errorWithResolution.suggestedIssueDate
+    ) {
+      const suggestedDate = new Date(
+        `${errorWithResolution.suggestedIssueDate}T00:00:00`
+      ).toLocaleDateString("es-AR");
+      const lastVoucherLabel = errorWithResolution.lastVoucherNumber
+        ? ` Nro ${errorWithResolution.lastVoucherNumber}`
+        : "";
+      return {
+        code: message,
+        error: normalizeArcaMessage(
+          knownMessage ?? "La fecha del comprobante no respeta la secuencia."
+        ),
+        details: errorWithResolution.lastVoucherDate ?? undefined,
+        resolution: {
+          type: "USE_ISSUE_DATE",
+          issueDate: errorWithResolution.suggestedIssueDate,
+          title: "Actualizar fecha de factura",
+          description: `Ya existe un comprobante autorizado${lastVoucherLabel} con fecha ${suggestedDate}. Para mantener la numeracion correlativa, podes emitir esta factura con esa misma fecha.`,
+          primaryActionLabel: `Usar fecha ${suggestedDate} y emitir`,
+        },
+      };
+    }
+
     if (knownMessage) {
+      if (message === "SALE_TOTALS_MISMATCH") {
+        return {
+          code: message,
+          error: normalizeArcaMessage(knownMessage),
+          helpLinks: getHelpLinks(message),
+          resolution: buildFiscalTotalsResolution(),
+        };
+      }
       return {
         code: message,
         error: normalizeArcaMessage(knownMessage),
@@ -88,6 +168,21 @@ export function mapAfipError(error: unknown): ErrorPayload {
     }
 
     const errorWithCode = error as Error & { code?: string | number };
+    if (isIvaCalculationMismatch(message)) {
+      return {
+        code:
+          errorWithCode.code !== undefined
+            ? `AFIP_WS_${errorWithCode.code}`
+            : "ARCA_IVA_MISMATCH",
+        error:
+          "ARCA rechazo la factura porque el IVA calculado no coincide con la base imponible enviada. Revisa recargos, descuentos o intereses antes de volver a emitir.",
+        details:
+          errorWithCode.code !== undefined
+            ? String(errorWithCode.code)
+            : undefined,
+        resolution: buildFiscalTotalsResolution(),
+      };
+    }
     if (errorWithCode.code !== undefined) {
       return {
         code: `AFIP_WS_${errorWithCode.code}`,

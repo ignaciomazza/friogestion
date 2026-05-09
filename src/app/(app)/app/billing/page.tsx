@@ -83,6 +83,7 @@ export default async function BillingPage() {
         saleId: invoice.saleId,
         saleNumber: invoice.sale.saleNumber,
         customerName: invoice.sale.customer.displayName,
+        customerPhone: invoice.sale.customer.phone,
         type: invoice.type,
         pointOfSale: invoice.pointOfSale,
         number: invoice.number,
@@ -108,6 +109,7 @@ export default async function BillingPage() {
       initialSales={sales.map((sale) => ({
         id: sale.id,
         customerName: sale.customer.displayName,
+        customerPhone: sale.customer.phone,
         customerTaxId: sale.customer.taxId,
         customerType: sale.customer.type,
         customerFiscalTaxProfile: sale.customer.fiscalTaxProfile,

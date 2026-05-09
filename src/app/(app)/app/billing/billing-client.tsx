@@ -8,6 +8,7 @@ import {
   ChevronDownIcon,
   DocumentTextIcon,
 } from "@/components/icons";
+import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { getAfipMissingItems, summarizeAfipMissing } from "@/lib/afip/messages";
 import { formatCurrencyARS } from "@/lib/format";
 import type { SaleRow } from "../sales/types";
@@ -54,6 +55,7 @@ type IssuedInvoiceRow = {
   saleId: string;
   saleNumber: string | null;
   customerName: string;
+  customerPhone?: string | null;
   type: string | null;
   pointOfSale: string | null;
   number: string | null;
@@ -116,6 +118,27 @@ type InvoiceDraftResult =
       adjustmentTotal: number;
     };
 
+type InvoiceResolution =
+  | {
+      type: "USE_ISSUE_DATE";
+      issueDate: string;
+      title: string;
+      description: string;
+      primaryActionLabel: string;
+    }
+  | {
+      type: "RECALCULATE_FISCAL_TOTALS";
+      title: string;
+      description: string;
+      primaryActionLabel: string;
+    };
+
+type InvoiceApiErrorPayload = {
+  code?: string;
+  error?: string;
+  resolution?: unknown;
+};
+
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
 const QUEUE_POLL_ATTEMPTS = 90;
 const QUEUE_POLL_INTERVAL_MS = 1000;
@@ -158,6 +181,55 @@ function formatVoucherLabel(pointOfSale?: string | null, number?: string | null)
   return number ?? "-";
 }
 
+function formatDateInput(value: string) {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString("es-AR");
+}
+
+function isInvoiceResolution(value: unknown): value is InvoiceResolution {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const hasBaseShape =
+    typeof record.title === "string" &&
+    typeof record.description === "string" &&
+    typeof record.primaryActionLabel === "string";
+  if (!hasBaseShape) return false;
+  if (record.type === "RECALCULATE_FISCAL_TOTALS") return true;
+  return record.type === "USE_ISSUE_DATE" && typeof record.issueDate === "string";
+}
+
+function cleanInvoiceErrorMessage(value: unknown) {
+  const message =
+    typeof value === "string" && value.trim()
+      ? value.trim()
+      : "No se pudo emitir la factura.";
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("feparam") ||
+    lower.includes("fep") ||
+    lower.includes("soap") ||
+    lower.includes("wsfe") ||
+    lower.includes("exception")
+  ) {
+    return "ARCA rechazo la solicitud. Revisa los datos de la factura e intenta nuevamente.";
+  }
+  return message.replace(/AFIP/g, "ARCA");
+}
+
+function FiscalAmountItem({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+        {label}
+      </p>
+      <p className="mt-1 break-words text-sm font-semibold text-zinc-900">
+        {formatCurrencyARS(value.toFixed(2))}
+      </p>
+    </div>
+  );
+}
+
 export default function BillingClient({
   initialSales,
   initialIssuedInvoices,
@@ -181,6 +253,10 @@ export default function BillingClient({
   const [isIssuing, setIsIssuing] = useState(false);
   const [invoiceStatus, setInvoiceStatus] = useState<string | null>(null);
   const [invoiceWarnings, setInvoiceWarnings] = useState<string[]>([]);
+  const [invoiceResolution, setInvoiceResolution] =
+    useState<InvoiceResolution | null>(null);
+  const [invoiceIssueDateOverride, setInvoiceIssueDateOverride] =
+    useState<string | null>(null);
   const [invoiceForm, setInvoiceForm] = useState({
     requiresIncomeTaxDeduction: false,
   });
@@ -305,6 +381,8 @@ export default function BillingClient({
     setInvoiceStep("FORM");
     setInvoiceWarnings([]);
     setInvoiceStatus(null);
+    setInvoiceResolution(null);
+    setInvoiceIssueDateOverride(null);
     setInvoiceForm({
       requiresIncomeTaxDeduction: false,
     });
@@ -322,6 +400,8 @@ export default function BillingClient({
     if (isIssuing) return;
     setInvoiceStep("FORM");
     setSaleToInvoice(null);
+    setInvoiceResolution(null);
+    setInvoiceIssueDateOverride(null);
   };
 
   const openCreditNoteModal = (invoice: IssuedInvoiceRow) => {
@@ -329,6 +409,7 @@ export default function BillingClient({
     setCreditPreview(null);
     setCreditPreviewStatus("Cargando datos de la factura...");
     setInvoiceStatus(null);
+    setInvoiceResolution(null);
   };
 
   const closeCreditNoteModal = () => {
@@ -467,6 +548,11 @@ export default function BillingClient({
     (invoiceTotal >= CONSUMER_FINAL_THRESHOLD ||
       invoiceForm.requiresIncomeTaxDeduction);
   const hasRecipientDoc = normalizeTaxId(saleToInvoice?.customerTaxId).length === 11;
+  const recipientDocumentLabel = hasRecipientDoc
+    ? `CUIT ${saleToInvoice?.customerTaxId}`
+    : isConsumerFinal
+      ? "Consumidor final sin CUIT"
+      : "Sin CUIT cargado";
   const customerFiscalTaxProfileLabel = customerFiscalTaxProfile
     ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[customerFiscalTaxProfile]
     : "Sin definir";
@@ -492,6 +578,13 @@ export default function BillingClient({
   const previewSubtotal = round2(Number(saleToInvoice?.subtotal ?? 0));
   const previewIva = round2(Number(saleToInvoice?.taxes ?? 0));
   const previewTotal = round2(Number(saleToInvoice?.total ?? previewSubtotal + previewIva));
+  const invoiceIssueDateLabel = invoiceIssueDateOverride
+    ? formatDateInput(invoiceIssueDateOverride)
+    : saleToInvoice?.saleDate
+      ? new Date(saleToInvoice.saleDate).toLocaleDateString("es-AR")
+      : saleToInvoice?.createdAt
+        ? new Date(saleToInvoice.createdAt).toLocaleDateString("es-AR")
+        : "-";
   const linkedCreditNoteForSelectedInvoice = invoiceToCancel
     ? creditNoteByInvoiceId.get(invoiceToCancel.id) ?? null
     : null;
@@ -580,14 +673,27 @@ export default function BillingClient({
     saleToInvoice?.extraType,
     fiscalAdjustmentTotal,
   );
+  const hasRegularSurchargeAdjustment =
+    Boolean(saleToInvoice) &&
+    fiscalAdjustmentTotal > 0 &&
+    (saleToInvoice?.extraType === "PERCENT" || saleToInvoice?.extraType === "FIXED");
+
+  const handleInvoiceIssueError = (data: InvoiceApiErrorPayload | null) => {
+    setInvoiceStatus(cleanInvoiceErrorMessage(data?.error));
+    setInvoiceResolution(
+      isInvoiceResolution(data?.resolution) ? data.resolution : null,
+    );
+  };
 
   const goToConfirmStep = () => {
     const draft = buildInvoiceDraft();
     if (!draft.ok) {
       setInvoiceStatus(draft.error);
+      setInvoiceResolution(null);
       return;
     }
     setInvoiceStatus(null);
+    setInvoiceResolution(null);
     setInvoiceStep("CONFIRM");
   };
 
@@ -609,6 +715,7 @@ export default function BillingClient({
         saleId: saleSnapshot.id,
         saleNumber: saleSnapshot.saleNumber,
         customerName: saleSnapshot.customerName,
+        customerPhone: saleSnapshot.customerPhone,
         type: invoice.type,
         pointOfSale: invoice.pointOfSale,
         number: invoice.number,
@@ -638,7 +745,11 @@ export default function BillingClient({
       });
       const pollData = await pollResponse.json();
       if (!pollResponse.ok) {
-        setInvoiceStatus(pollData?.error ?? "No se pudo consultar la cola de facturacion");
+        handleInvoiceIssueError(
+          pollData && typeof pollData === "object"
+            ? (pollData as InvoiceApiErrorPayload)
+            : null,
+        );
         return false;
       }
 
@@ -687,7 +798,11 @@ export default function BillingClient({
       }
 
       if (pollData?.status === "ERROR") {
-        setInvoiceStatus(pollData?.error ?? "No se pudo emitir factura");
+        handleInvoiceIssueError(
+          pollData && typeof pollData === "object"
+            ? (pollData as InvoiceApiErrorPayload)
+            : null,
+        );
         return false;
       }
 
@@ -696,6 +811,7 @@ export default function BillingClient({
           ? "Factura en procesamiento..."
           : "Factura en cola, esperando turno..."
       );
+      setInvoiceResolution(null);
       await sleep(QUEUE_POLL_INTERVAL_MS);
     }
 
@@ -709,10 +825,14 @@ export default function BillingClient({
     if (!saleToInvoice) return;
     const customerTaxId = normalizeTaxId(saleToInvoice.customerTaxId);
     if (!customerTaxId) {
+      const canIssueAsConsumerFinal = isConsumerFinal && !requiresIdentification;
       setArcaValidation({
-        status: "warning",
-        message:
-          "El cliente no tiene CUIT cargado. No se puede validar contra ARCA.",
+        status: canIssueAsConsumerFinal ? "ok" : "warning",
+        message: canIssueAsConsumerFinal
+          ? "No hace falta validar CUIT para este comprobante. Se emitira como consumidor final."
+          : requiresIdentification
+            ? "Por el importe o la deduccion solicitada, este comprobante necesita CUIT del receptor."
+            : "Para validar el receptor con ARCA, carga un CUIT en el cliente.",
         source: null,
         checkedAt: null,
         suggestedFiscalTaxProfile: null,
@@ -812,16 +932,18 @@ export default function BillingClient({
     return () => {
       cancelled = true;
     };
-  }, [saleToInvoice]);
+  }, [isConsumerFinal, requiresIdentification, saleToInvoice]);
 
   const refreshArcaValidation = async () => {
     if (!saleToInvoice) return;
     const customerTaxId = normalizeTaxId(saleToInvoice.customerTaxId);
     if (!customerTaxId) {
+      const canIssueAsConsumerFinal = isConsumerFinal && !requiresIdentification;
       setArcaValidation({
-        status: "warning",
-        message:
-          "El cliente no tiene CUIT cargado. No se puede revalidar en ARCA.",
+        status: canIssueAsConsumerFinal ? "ok" : "warning",
+        message: canIssueAsConsumerFinal
+          ? "No hace falta validar CUIT para este comprobante. Se emitira como consumidor final."
+          : "Para revalidar con ARCA, primero carga un CUIT en el cliente.",
         source: null,
         checkedAt: null,
         suggestedFiscalTaxProfile: null,
@@ -908,9 +1030,12 @@ export default function BillingClient({
     }
   };
 
-  const submitInvoice = async () => {
+  const submitInvoice = async (options?: { issueDateOverride?: string }) => {
     if (!saleToInvoice) return;
+    const issueDateOverride =
+      options?.issueDateOverride ?? invoiceIssueDateOverride;
     setInvoiceStatus(null);
+    setInvoiceResolution(null);
     setInvoiceWarnings([]);
     setIsIssuing(true);
     try {
@@ -926,6 +1051,9 @@ export default function BillingClient({
         itemsTaxRates: draft.itemsTaxRates,
         requiresIncomeTaxDeduction: invoiceForm.requiresIncomeTaxDeduction,
       };
+      if (issueDateOverride) {
+        payload.issueDate = issueDateOverride;
+      }
 
       const res = await fetch("/api/fiscal-invoices", {
         method: "POST",
@@ -934,7 +1062,11 @@ export default function BillingClient({
       });
       const data = await res.json();
       if (!res.ok) {
-        setInvoiceStatus(data?.error ?? "No se pudo emitir factura");
+        handleInvoiceIssueError(
+          data && typeof data === "object"
+            ? (data as InvoiceApiErrorPayload)
+            : null,
+        );
         return;
       }
 
@@ -958,6 +1090,7 @@ export default function BillingClient({
           },
           warnings
         );
+        setInvoiceIssueDateOverride(null);
         setSaleToInvoice(null);
         return;
       }
@@ -965,17 +1098,32 @@ export default function BillingClient({
       if (typeof data?.jobId === "string") {
         const completed = await waitForQueuedInvoice(data.jobId, saleToInvoice);
         if (completed) {
+          setInvoiceIssueDateOverride(null);
           setSaleToInvoice(null);
         }
         return;
       }
 
       setInvoiceStatus("No se pudo emitir factura");
+      setInvoiceResolution(null);
     } catch {
       setInvoiceStatus("No se pudo emitir factura");
+      setInvoiceResolution(null);
     } finally {
       setIsIssuing(false);
     }
+  };
+
+  const applyInvoiceResolution = async () => {
+    if (!invoiceResolution) {
+      return;
+    }
+    if (invoiceResolution.type === "RECALCULATE_FISCAL_TOTALS") {
+      await submitInvoice();
+      return;
+    }
+    setInvoiceIssueDateOverride(invoiceResolution.issueDate);
+    await submitInvoice({ issueDateOverride: invoiceResolution.issueDate });
   };
 
   const submitCreditNote = async () => {
@@ -1216,7 +1364,7 @@ export default function BillingClient({
         </div>
       ) : null}
 
-      {invoiceStatus || invoiceWarnings.length ? (
+      {!saleToInvoice && (invoiceStatus || invoiceWarnings.length) ? (
         <div className="card space-y-2 p-4">
           {invoiceStatus ? (
             <p className="text-sm font-medium text-zinc-800">{invoiceStatus}</p>
@@ -1397,6 +1545,18 @@ export default function BillingClient({
                                   <ArrowDownTrayIcon className="size-4" />
                                   PDF venta
                                 </a>
+                                <WhatsappPdfButton
+                                  documentType="sale"
+                                  documentId={sale.id}
+                                  documentLabel={
+                                    sale.saleNumber
+                                      ? `Venta ${sale.saleNumber}`
+                                      : "Venta"
+                                  }
+                                  customerName={sale.customerName}
+                                  customerPhone={sale.customerPhone}
+                                  className="btn btn-emerald text-xs"
+                                />
                                 <button
                                   type="button"
                                   className="btn btn-emerald text-xs"
@@ -1553,6 +1713,17 @@ export default function BillingClient({
                                     <ArrowDownTrayIcon className="size-4" />
                                     PDF factura
                                   </a>
+                                  <WhatsappPdfButton
+                                    documentType="fiscalInvoice"
+                                    documentId={invoice.id}
+                                    documentLabel={`Factura ${formatVoucherLabel(
+                                      invoice.pointOfSale,
+                                      invoice.number,
+                                    )}`}
+                                    customerName={invoice.customerName}
+                                    customerPhone={invoice.customerPhone}
+                                    className="btn btn-emerald text-xs"
+                                  />
                                   {linkedCreditNote ? (
                                     <>
                                       <a
@@ -1564,6 +1735,16 @@ export default function BillingClient({
                                         <ArrowDownTrayIcon className="size-4" />
                                         PDF NC
                                       </a>
+                                      <WhatsappPdfButton
+                                        documentType="creditNote"
+                                        documentId={linkedCreditNote.id}
+                                        documentLabel={`Nota de credito ${
+                                          creditNoteLabel ?? ""
+                                        }`.trim()}
+                                        customerName={invoice.customerName}
+                                        customerPhone={invoice.customerPhone}
+                                        className="btn btn-emerald text-xs"
+                                      />
                                       <span className="rounded-full border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-800">
                                         Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""}
                                       </span>
@@ -1767,6 +1948,67 @@ export default function BillingClient({
               ) : null}
             </div>
 
+	            {invoiceStatus || invoiceWarnings.length ? (
+	              <div
+	                className={`rounded-xl border bg-white p-3 ${
+	                  invoiceStatus === "Factura emitida correctamente."
+	                    ? "border-emerald-200"
+	                    : "border-zinc-200"
+	                }`}
+	              >
+                {invoiceStatus ? (
+                  <p className="text-sm font-medium text-zinc-800">
+                    {invoiceStatus}
+                  </p>
+                ) : null}
+                {invoiceWarnings.length ? (
+                  <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                    {invoiceWarnings.map((warning) => (
+                      <li key={warning}>• {warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+
+            {invoiceResolution ? (
+              <div className="rounded-xl border border-amber-200 bg-white p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
+                  Solucion sugerida
+                </p>
+                <p className="mt-1 text-sm font-semibold text-zinc-900">
+                  {invoiceResolution.title}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-zinc-600">
+                  {invoiceResolution.description}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn btn-emerald text-xs"
+                    onClick={() => {
+                      void applyInvoiceResolution();
+                    }}
+                    disabled={isIssuing}
+                  >
+                    {isIssuing ? "Emitiendo..." : invoiceResolution.primaryActionLabel}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn text-xs"
+                    onClick={() => {
+                      setInvoiceResolution(null);
+                      setInvoiceStatus(null);
+                      setInvoiceStep("FORM");
+                    }}
+                    disabled={isIssuing}
+                  >
+                    Revisar factura
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             {invoiceStep === "FORM" ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1781,9 +2023,11 @@ export default function BillingClient({
                   <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600 sm:col-span-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <p>
-                          <span className="font-medium text-zinc-900">CUIT cliente:</span>{" "}
-                          {saleToInvoice.customerTaxId ? saleToInvoice.customerTaxId : "Sin CUIT"}
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                          Receptor
+                        </p>
+                        <p className="mt-1 font-semibold text-zinc-900">
+                          {recipientDocumentLabel}
                         </p>
                         {arcaValidation.checkedAt ? (
                           <p className="text-[11px] text-zinc-500">
@@ -1856,34 +2100,34 @@ export default function BillingClient({
                     Factura A requiere CUIT valido del cliente.
                   </p>
                 ) : null}
+                {hasRegularSurchargeAdjustment ? (
+                  <div className="rounded-xl border border-amber-200 bg-white p-3 text-xs">
+                    <p className="font-semibold text-zinc-900">
+                      Revisar recargo e IVA
+                    </p>
+                    <p className="mt-1 leading-5 text-zinc-600">
+                      Esta venta tiene un recargo de{" "}
+                      <span className="font-semibold text-zinc-900">
+                        {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
+                      </span>
+                      . Para emitir, se integra al neto y al IVA fiscal para que
+                      la alicuota cierre contra la base imponible. Si en realidad
+                      era interes de tarjeta, conviene corregir el tipo de ajuste
+                      de la venta antes de emitir.
+                    </p>
+                  </div>
+                ) : null}
                 {fiscalPreview ? (
                   <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
                     <p className="section-title">Totales fiscales</p>
-                    <div className="mt-2 grid gap-2 text-xs text-zinc-700 sm:grid-cols-4">
-                      <p>
-                        Neto:{" "}
-                        <span className="font-semibold text-zinc-900">
-                          {formatCurrencyARS(fiscalPreview.net.toFixed(2))}
-                        </span>
-                      </p>
-                      <p>
-                        IVA:{" "}
-                        <span className="font-semibold text-zinc-900">
-                          {formatCurrencyARS(fiscalPreview.iva.toFixed(2))}
-                        </span>
-                      </p>
-                      <p>
-                        {fiscalAdjustmentLabel}:{" "}
-                        <span className="font-semibold text-zinc-900">
-                          {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
-                        </span>
-                      </p>
-                      <p>
-                        Total:{" "}
-                        <span className="font-semibold text-zinc-900">
-                          {formatCurrencyARS(fiscalPreview.total.toFixed(2))}
-                        </span>
-                      </p>
+                    <div className="mt-2 grid gap-3 sm:grid-cols-4">
+                      <FiscalAmountItem label="Neto" value={fiscalPreview.net} />
+                      <FiscalAmountItem label="IVA" value={fiscalPreview.iva} />
+                      <FiscalAmountItem
+                        label={fiscalAdjustmentLabel}
+                        value={fiscalAdjustmentTotal}
+                      />
+                      <FiscalAmountItem label="Total" value={fiscalPreview.total} />
                     </div>
                   </div>
                 ) : null}
@@ -1919,9 +2163,7 @@ export default function BillingClient({
                     </p>
                     <p>
                       <span className="font-medium text-zinc-900">Fecha:</span>{" "}
-                      {saleToInvoice.saleDate
-                        ? new Date(saleToInvoice.saleDate).toLocaleDateString("es-AR")
-                        : new Date(saleToInvoice.createdAt).toLocaleDateString("es-AR")}
+                      {invoiceIssueDateLabel}
                     </p>
                     <p>
                       <span className="font-medium text-zinc-900">Comprobante:</span>{" "}
@@ -1962,37 +2204,23 @@ export default function BillingClient({
                       </table>
                     </div>
                   ) : null}
-                  <div className="mt-3 grid gap-1 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 text-xs text-zinc-700 sm:grid-cols-4">
-                    <p>
-                      Neto:{" "}
-                      <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(
-                          (fiscalPreview?.net ?? previewSubtotal).toFixed(2),
-                        )}
-                      </span>
-                    </p>
-                    <p>
-                      IVA:{" "}
-                      <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(
-                          (fiscalPreview?.iva ?? previewIva).toFixed(2),
-                        )}
-                      </span>
-                    </p>
-                    <p>
-                      {fiscalAdjustmentLabel}:{" "}
-                      <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
-                      </span>
-                    </p>
-                    <p>
-                      Total:{" "}
-                      <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(
-                          (fiscalPreview?.total ?? previewTotal).toFixed(2),
-                        )}
-                      </span>
-                    </p>
+                  <div className="mt-3 grid gap-3 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 sm:grid-cols-4">
+                    <FiscalAmountItem
+                      label="Neto"
+                      value={fiscalPreview?.net ?? previewSubtotal}
+                    />
+                    <FiscalAmountItem
+                      label="IVA"
+                      value={fiscalPreview?.iva ?? previewIva}
+                    />
+                    <FiscalAmountItem
+                      label={fiscalAdjustmentLabel}
+                      value={fiscalAdjustmentTotal}
+                    />
+                    <FiscalAmountItem
+                      label="Total"
+                      value={fiscalPreview?.total ?? previewTotal}
+                    />
                   </div>
                 </div>
                 <div className="flex items-center justify-between gap-2">
@@ -2005,7 +2233,9 @@ export default function BillingClient({
                   <button
                     type="button"
                     className="btn btn-emerald text-xs"
-                    onClick={submitInvoice}
+                    onClick={() => {
+                      void submitInvoice();
+                    }}
                     disabled={isIssuing}
                   >
                     {isIssuing ? "Confirmando..." : "Confirmar factura"}

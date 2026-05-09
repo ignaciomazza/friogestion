@@ -27,6 +27,14 @@ function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function toCents(value: number) {
+  return Math.round(round2(value) * 100);
+}
+
+function fromCents(value: number) {
+  return round2(value / 100);
+}
+
 function mapRateToId(rate: number) {
   if (rate === 27) return 6;
   if (rate === 21) return 5;
@@ -98,6 +106,57 @@ function allocateAdjustment(total: number, weights: number[]) {
   });
 }
 
+function buildTaxableBucketFromGross(rate: number, targetGross: number) {
+  const targetGrossCents = toCents(targetGross);
+  const estimatedBaseCents = Math.max(
+    0,
+    Math.round(targetGrossCents / (1 + rate / 100))
+  );
+  let best:
+    | {
+        baseCents: number;
+        ivaCents: number;
+        grossCents: number;
+        grossDiff: number;
+        baseDiff: number;
+      }
+    | null = null;
+
+  for (let delta = -100; delta <= 100; delta += 1) {
+    const baseCents = estimatedBaseCents + delta;
+    if (baseCents < 0) continue;
+    const ivaCents = Math.round((baseCents * rate) / 100);
+    const grossCents = baseCents + ivaCents;
+    const grossDiff = Math.abs(grossCents - targetGrossCents);
+    const baseDiff = Math.abs(baseCents - estimatedBaseCents);
+
+    if (
+      !best ||
+      grossDiff < best.grossDiff ||
+      (grossDiff === best.grossDiff && baseDiff < best.baseDiff)
+    ) {
+      best = { baseCents, ivaCents, grossCents, grossDiff, baseDiff };
+    }
+  }
+
+  if (!best) {
+    throw new Error("NEGATIVE_TOTALS");
+  }
+
+  return {
+    base: fromCents(best.baseCents),
+    iva: fromCents(best.ivaCents),
+    gross: fromCents(best.grossCents),
+  };
+}
+
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
+}
+
 export function buildAdjustedTotalsFromRates(
   items: RateEntry[],
   finalAdjustment = 0
@@ -142,56 +201,81 @@ export function buildAdjustedTotalsFromRates(
     entries.map((entry) => entry.gross)
   );
 
-  let net = 0;
-  let exempt = 0;
-  let iva = 0;
-  const ivaItems: IvaItem[] = [];
-  let lastTaxableIndex = -1;
-  let lastExemptIndex = -1;
-
-  entries.forEach((entry, index) => {
+  const adjustedEntries = entries.map((entry, index) => {
     const adjustedGross = round2(entry.gross + allocations[index]);
     if (adjustedGross < 0) {
       throw new Error("NEGATIVE_TOTALS");
     }
 
     if (entry.rate === 0) {
-      exempt = round2(exempt + adjustedGross);
-      ivaItems.push({
-        Id: mapRateToId(entry.rate),
-        BaseImp: adjustedGross,
-        Importe: 0,
-      });
-      lastExemptIndex = ivaItems.length - 1;
-      return;
+      return {
+        rate: entry.rate,
+        base: adjustedGross,
+        iva: 0,
+        gross: adjustedGross,
+      };
     }
 
-    const adjustedBase = round2(adjustedGross / (1 + entry.rate / 100));
-    const adjustedIva = round2((adjustedBase * entry.rate) / 100);
-    net = round2(net + adjustedBase);
-    iva = round2(iva + adjustedIva);
-    ivaItems.push({
-      Id: mapRateToId(entry.rate),
-      BaseImp: adjustedBase,
-      Importe: adjustedIva,
-    });
-    lastTaxableIndex = ivaItems.length - 1;
+    return {
+      rate: entry.rate,
+      ...buildTaxableBucketFromGross(entry.rate, adjustedGross),
+    };
   });
 
-  let total = round2(net + iva + exempt);
-  const diff = round2(targetTotal - total);
+  let total = round2(
+    adjustedEntries.reduce((acc, entry) => acc + entry.gross, 0)
+  );
+  let diff = round2(targetTotal - total);
   if (diff !== 0) {
+    const lastTaxableIndex = findLastIndex(
+      adjustedEntries,
+      (entry) => entry.rate !== 0
+    );
     if (lastTaxableIndex >= 0) {
-      const item = ivaItems[lastTaxableIndex];
-      item.Importe = round2(item.Importe + diff);
-      iva = round2(iva + diff);
-    } else if (lastExemptIndex >= 0) {
-      const item = ivaItems[lastExemptIndex];
-      item.BaseImp = round2(item.BaseImp + diff);
-      exempt = round2(exempt + diff);
+      const entry = adjustedEntries[lastTaxableIndex];
+      const replacement = {
+        rate: entry.rate,
+        ...buildTaxableBucketFromGross(entry.rate, round2(entry.gross + diff)),
+      };
+      const nextTotal = round2(total - entry.gross + replacement.gross);
+      if (Math.abs(round2(targetTotal - nextTotal)) < Math.abs(diff)) {
+        adjustedEntries[lastTaxableIndex] = replacement;
+        total = nextTotal;
+        diff = round2(targetTotal - total);
+      }
     }
-    total = round2(net + iva + exempt);
+
+    const lastExemptIndex = findLastIndex(
+      adjustedEntries,
+      (entry) => entry.rate === 0
+    );
+    if (diff !== 0 && lastExemptIndex >= 0) {
+      const entry = adjustedEntries[lastExemptIndex];
+      entry.base = round2(entry.base + diff);
+      entry.gross = entry.base;
+      total = round2(targetTotal);
+    }
   }
+
+  let net = 0;
+  let exempt = 0;
+  let iva = 0;
+  const ivaItems: IvaItem[] = [];
+
+  adjustedEntries.forEach((entry) => {
+    if (entry.rate === 0) {
+      exempt = round2(exempt + entry.base);
+    } else {
+      net = round2(net + entry.base);
+      iva = round2(iva + entry.iva);
+    }
+    ivaItems.push({
+      Id: mapRateToId(entry.rate),
+      BaseImp: entry.base,
+      Importe: entry.iva,
+    });
+  });
+  total = round2(net + iva + exempt);
 
   ensurePositiveTotals([
     net,

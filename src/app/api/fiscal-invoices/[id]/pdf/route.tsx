@@ -9,6 +9,7 @@ import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   normalizeCustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
 
 export const runtime = "nodejs";
 
@@ -17,16 +18,25 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { membership } = await requireRole(req, [
-      "OWNER",
-      "ADMIN",
-      "SALES",
-      "CASHIER",
-    ]);
     const params = await context.params;
+    const sharedOrganizationId = await resolvePdfShareOrganizationId(
+      req,
+      "fiscalInvoice",
+      params.id,
+    );
+    const organizationId =
+      sharedOrganizationId ??
+      (
+        await requireRole(req, [
+          "OWNER",
+          "ADMIN",
+          "SALES",
+          "CASHIER",
+        ])
+      ).membership.organizationId;
 
     const invoice = await prisma.fiscalInvoice.findFirst({
-      where: { id: params.id, organizationId: membership.organizationId },
+      where: { id: params.id, organizationId },
       include: {
         sale: {
           include: {
@@ -46,7 +56,7 @@ export async function GET(
     }
 
     const config = await prisma.organizationFiscalConfig.findUnique({
-      where: { organizationId: membership.organizationId },
+      where: { organizationId },
     });
 
     const payload = invoice.payloadAfip as Record<string, unknown> | null;

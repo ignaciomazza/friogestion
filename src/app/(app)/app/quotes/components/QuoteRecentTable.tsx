@@ -8,6 +8,7 @@ import {
   PencilSquareIcon,
   TrashIcon,
 } from "@/components/icons";
+import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { formatCurrencyARS } from "@/lib/format";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { QUOTE_STATUS_LABELS, QUOTE_STATUS_STYLES } from "../constants";
@@ -206,6 +207,18 @@ export function QuoteRecentTable({
                             <ArrowDownTrayIcon className="size-4" />
                             PDF
                           </a>
+                          <WhatsappPdfButton
+                            documentType="quote"
+                            documentId={quote.id}
+                            documentLabel={
+                              quote.quoteNumber
+                                ? `Presupuesto ${quote.quoteNumber}`
+                                : "Presupuesto"
+                            }
+                            customerName={quote.customerName}
+                            customerPhone={quote.customerPhone}
+                            stopPropagation
+                          />
                           <button
                             type="button"
                             className="btn btn-emerald text-xs transition-transform hover:-translate-y-0.5"

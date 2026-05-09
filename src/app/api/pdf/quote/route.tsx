@@ -6,16 +6,24 @@ import { requireAuth, requireOrg } from "@/lib/auth/tenant";
 import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
+import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = await requireOrg(req);
-    await requireAuth(req);
     const id = req.nextUrl.searchParams.get("id");
     if (!id) {
       return NextResponse.json({ error: "Falta id" }, { status: 400 });
+    }
+    const sharedOrganizationId = await resolvePdfShareOrganizationId(
+      req,
+      "quote",
+      id,
+    );
+    const organizationId = sharedOrganizationId ?? (await requireOrg(req));
+    if (!sharedOrganizationId) {
+      await requireAuth(req);
     }
 
     const quote = await prisma.quote.findFirst({

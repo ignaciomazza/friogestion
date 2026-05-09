@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { mapAfipError } from "@/lib/afip/errors";
 import {
+  extractJobResolution,
   enqueueFiscalInvoiceIssueJob,
   extractJobWarnings,
   getFiscalInvoiceIssueJob,
@@ -82,6 +83,7 @@ export async function GET(req: NextRequest) {
         issuedAt: invoice.issuedAt?.toISOString() ?? null,
         createdAt: invoice.createdAt.toISOString(),
         customerName: invoice.sale.customer.displayName,
+        customerPhone: invoice.sale.customer.phone,
         status: invoice.cae ? "APPROVED" : "PENDING",
       }))
     );
@@ -213,6 +215,7 @@ export async function POST(req: NextRequest) {
         {
           code: resolvedJob.errorCode ?? "AFIP_ERROR",
           error: resolvedJob.errorMessage ?? "Error en ARCA.",
+          resolution: extractJobResolution(resolvedJob.responsePayload),
         },
         { status: 400 }
       );

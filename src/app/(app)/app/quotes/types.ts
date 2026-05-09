@@ -3,6 +3,7 @@ import type { CustomerFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
 export type QuoteRow = {
   id: string;
   customerName: string;
+  customerPhone?: string | null;
   quoteNumber: string | null;
   validUntil: string | null;
   createdAt: string;

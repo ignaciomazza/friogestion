@@ -248,7 +248,12 @@ async function claimNextPendingJob(organizationId: string, workerToken: string) 
 
 async function markJobAsError(
   jobId: string,
-  mapped: { code: string; error: string; details?: string }
+  mapped: {
+    code: string;
+    error: string;
+    details?: string;
+    resolution?: Record<string, unknown>;
+  }
 ) {
   logServerWarn("fiscal.issue-queue.job.error", mapped.error, {
     jobId,
@@ -261,8 +266,11 @@ async function markJobAsError(
       status: "ERROR",
       errorCode: mapped.code,
       errorMessage: mapped.error,
-      responsePayload: mapped.details
-        ? ({ details: mapped.details } as Prisma.JsonObject)
+      responsePayload: mapped.details || mapped.resolution
+        ? ({
+            details: mapped.details ?? null,
+            resolution: mapped.resolution ?? null,
+          } as Prisma.JsonObject)
         : Prisma.DbNull,
       finishedAt: new Date(),
     },
@@ -552,4 +560,15 @@ export function extractJobWarnings(payload: Prisma.JsonValue | null) {
   return record.warnings.filter(
     (item): item is string => typeof item === "string" && item.trim().length > 0
   );
+}
+
+export function extractJobResolution(payload: Prisma.JsonValue | null) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const resolution = (payload as Record<string, unknown>).resolution;
+  if (!resolution || typeof resolution !== "object" || Array.isArray(resolution)) {
+    return null;
+  }
+  return resolution;
 }

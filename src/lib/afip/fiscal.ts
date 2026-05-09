@@ -64,6 +64,33 @@ function formatAfipDate(date: Date) {
   return Number(local.toISOString().slice(0, 10).replace(/-/g, ""));
 }
 
+function formatLocalDateKey(date: Date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 10);
+}
+
+function parseAfipDateKey(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+}
+
+function buildIssueDateSequenceError({
+  suggestedIssueDate,
+  lastVoucherDate,
+  lastVoucherNumber,
+}: {
+  suggestedIssueDate: string;
+  lastVoucherDate: string;
+  lastVoucherNumber: number;
+}) {
+  return Object.assign(new Error("ISSUE_DATE_BEFORE_LAST_AUTHORIZED"), {
+    suggestedIssueDate,
+    lastVoucherDate,
+    lastVoucherNumber,
+  });
+}
+
 async function resolveCurrency(organizationId: string, input?: string | null) {
   if (input) return input.toUpperCase();
   const currency = await prisma.financeCurrency.findFirst({
@@ -156,6 +183,50 @@ function ensureNotFuture(date: Date) {
   const now = Date.now();
   if (date.getTime() > now + 5 * 60 * 1000) {
     throw new Error("ISSUE_DATE_IN_FUTURE");
+  }
+}
+
+async function ensureIssueDateKeepsVoucherSequence({
+  afip,
+  pointOfSale,
+  voucherType,
+  issueDate,
+}: {
+  afip: Awaited<ReturnType<typeof getAfipClient>>;
+  pointOfSale: number;
+  voucherType: number;
+  issueDate: Date;
+}) {
+  const billing = afip.ElectronicBilling as unknown as {
+    getLastVoucher: (salesPoint: number, type: number) => Promise<unknown>;
+    getVoucherInfo: (
+      number: number,
+      salesPoint: number,
+      type: number
+    ) => Promise<Record<string, unknown> | null>;
+  };
+  const lastVoucherNumber = Number(
+    await billing.getLastVoucher(pointOfSale, voucherType)
+  );
+  if (!Number.isFinite(lastVoucherNumber) || lastVoucherNumber <= 0) {
+    return;
+  }
+
+  const lastVoucher = await billing.getVoucherInfo(
+    lastVoucherNumber,
+    pointOfSale,
+    voucherType
+  );
+  const lastVoucherDate = parseAfipDateKey(lastVoucher?.CbteFch);
+  if (!lastVoucherDate) return;
+
+  const issueDateKey = formatLocalDateKey(issueDate);
+  if (issueDateKey < lastVoucherDate) {
+    throw buildIssueDateSequenceError({
+      suggestedIssueDate: lastVoucherDate,
+      lastVoucherDate,
+      lastVoucherNumber,
+    });
   }
 }
 
@@ -276,6 +347,12 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     afip,
     input.pointOfSale
   );
+  await ensureIssueDateKeepsVoucherSequence({
+    afip,
+    pointOfSale,
+    voucherType,
+    issueDate,
+  });
 
   const items = sale.items.map((item) => {
     const rate =

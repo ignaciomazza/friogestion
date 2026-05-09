@@ -1,6 +1,7 @@
 export type SaleRow = {
   id: string;
   customerName: string;
+  customerPhone?: string | null;
   customerTaxId?: string | null;
   customerType?: string | null;
   customerFiscalTaxProfile?: string | null;

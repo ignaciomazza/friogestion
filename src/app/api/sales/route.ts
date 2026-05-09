@@ -162,6 +162,7 @@ export async function GET(req: NextRequest) {
         ),
         id: sale.id,
         customerName: sale.customer.displayName,
+        customerPhone: sale.customer.phone,
         saleNumber: sale.saleNumber,
         saleDate: sale.saleDate?.toISOString() ?? null,
         createdAt: sale.createdAt.toISOString(),
@@ -346,6 +347,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       id: sale.id,
       customerName: sale.customer.displayName,
+      customerPhone: sale.customer.phone,
       saleNumber: sale.saleNumber,
       saleDate: sale.saleDate?.toISOString() ?? null,
       createdAt: sale.createdAt.toISOString(),

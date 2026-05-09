@@ -203,6 +203,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         id: quote.id,
         customerName: quote.customer.displayName,
+        customerPhone: quote.customer.phone,
         quoteNumber: quote.quoteNumber,
         validUntil: quote.validUntil?.toISOString() ?? null,
         createdAt: quote.createdAt.toISOString(),
@@ -273,6 +274,7 @@ export async function GET(req: NextRequest) {
       quotes.map((quote) => ({
         id: quote.id,
         customerName: quote.customer.displayName,
+        customerPhone: quote.customer.phone,
         quoteNumber: quote.quoteNumber,
         validUntil: quote.validUntil?.toISOString() ?? null,
         createdAt: quote.createdAt.toISOString(),
@@ -418,6 +420,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       id: quote.id,
       customerName: quote.customer.displayName,
+      customerPhone: quote.customer.phone,
       quoteNumber: quote.quoteNumber,
       validUntil: quote.validUntil?.toISOString() ?? null,
       createdAt: quote.createdAt.toISOString(),
@@ -586,6 +589,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({
       id: quote.id,
       customerName: quote.customer.displayName,
+      customerPhone: quote.customer.phone,
       quoteNumber: quote.quoteNumber,
       validUntil: quote.validUntil?.toISOString() ?? null,
       createdAt: quote.createdAt.toISOString(),

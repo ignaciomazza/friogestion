@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { requireRole } from "@/lib/auth/tenant";
 import { isAuthError } from "@/lib/auth/errors";
 import {
+  extractJobResolution,
   extractJobWarnings,
   getFiscalInvoiceIssueJob,
   runFiscalIssueQueue,
@@ -62,6 +63,7 @@ export async function GET(
       status: job.status,
       errorCode: job.errorCode,
       error: job.errorMessage,
+      resolution: extractJobResolution(job.responsePayload),
       warnings: extractJobWarnings(job.responsePayload),
       createdAt: job.createdAt.toISOString(),
       startedAt: job.startedAt?.toISOString() ?? null,
