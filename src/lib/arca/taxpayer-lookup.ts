@@ -2,6 +2,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAfipClient } from "@/lib/afip/client";
 import { normalizeCuit } from "@/lib/arca/normalization";
+import {
+  buildTaxpayerLookupWarnings,
+  readTaxpayerLookupWarnings,
+  type TaxpayerLookupWarning,
+} from "@/lib/arca/taxpayer-lookup-feedback";
 import { ensureArcaServiceAuthorized } from "@/lib/arca/service-authorization";
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -21,6 +26,7 @@ export type TaxpayerLookupData = {
   registeredAt: string | null;
   sourceLabel: string;
   raw: unknown;
+  warnings: TaxpayerLookupWarning[];
 };
 
 export type TaxpayerLookupResult = {
@@ -295,6 +301,33 @@ function isIvaRegisteredHint(value: string) {
   );
 }
 
+function normalizeTaxCode(value: string) {
+  return normalizeArcaText(value).replace(/[^A-Z0-9]/g, "");
+}
+
+function extractIvaStatusFromCodes(payload: unknown): string | null {
+  const codeHints = collectStringValuesByKeys(payload, [
+    "impIVA",
+    "impIva",
+    "impuestoIVA",
+    "impuestoIva",
+    "condicionIVA",
+    "condicionIva",
+    "codigoCondicionIVA",
+    "codigoCondicionIva",
+    "codCondicionIVA",
+    "codCondicionIva",
+  ]).map(normalizeTaxCode);
+
+  if (codeHints.includes("AC")) return "IVA Responsable inscripto";
+  if (codeHints.includes("EX")) return "IVA Sujeto Exento";
+  if (codeHints.includes("XN")) return "IVA Sujeto Exento";
+  if (codeHints.includes("NA")) return "IVA No Alcanzado";
+  if (codeHints.includes("AN")) return "IVA No Alcanzado";
+  if (codeHints.includes("NI")) return "Sujeto No Categorizado";
+  return null;
+}
+
 function extractTaxStatus(payload: unknown): string | null {
   const directTaxStatus =
     asString(
@@ -304,6 +337,7 @@ function extractTaxStatus(payload: unknown): string | null {
         "descripcionCondicionFiscal",
         "condicionIva",
         "descripcionCondicionIva",
+        "descripcionCondicionIVA",
       ])
     ) ?? null;
   const taxHints = compactStrings([
@@ -314,6 +348,7 @@ function extractTaxStatus(payload: unknown): string | null {
       "categoria",
       "categoriaMonotributo",
       "descripcionRegimen",
+      "descripcionEstado",
     ]),
   ]);
   const normalizedHints = taxHints.map(normalizeArcaText);
@@ -322,6 +357,21 @@ function extractTaxStatus(payload: unknown): string | null {
     "codigoImpuesto",
     "codImpuesto",
   ]).map((value) => value.trim());
+  const ivaStatusFromCodes = extractIvaStatusFromCodes(payload);
+
+  if (
+    normalizedHints.some((value) => value.includes("MONOTRIBUTO SOCIAL"))
+  ) {
+    return "Monotributo social";
+  }
+
+  if (
+    normalizedHints.some((value) =>
+      value.includes("TRABAJADOR INDEPENDIENTE PROMOVIDO")
+    )
+  ) {
+    return "Monotributo trabajador independiente promovido";
+  }
 
   if (
     normalizedHints.some((value) => value.includes("MONOTRIB")) ||
@@ -329,6 +379,48 @@ function extractTaxStatus(payload: unknown): string | null {
     hasMeaningfulValueByKeys(payload, ["datosMonotributo", "monotributo"])
   ) {
     return "Monotributo";
+  }
+
+  if (ivaStatusFromCodes) {
+    return ivaStatusFromCodes;
+  }
+
+  if (
+    normalizedHints.some(
+      (value) =>
+        value.includes("SUJETO NO CATEGORIZADO") ||
+        value.includes("NO CATEGORIZADO")
+    )
+  ) {
+    return "Sujeto No Categorizado";
+  }
+
+  if (
+    normalizedHints.some(
+      (value) => value.includes("LIBERADO") || value.includes("19640")
+    )
+  ) {
+    return "IVA Liberado Ley 19.640";
+  }
+
+  if (
+    normalizedHints.some(
+      (value) => value.includes("EXENTO") || value.includes("SUJETO EXENTO")
+    )
+  ) {
+    return "IVA Sujeto Exento";
+  }
+
+  if (
+    normalizedHints.some((value) => value.includes("NO ALCANZADO"))
+  ) {
+    return "IVA No Alcanzado";
+  }
+
+  if (
+    normalizedHints.some((value) => value.includes("NO INSCRIPTO"))
+  ) {
+    return "Sujeto No Categorizado";
   }
 
   if (
@@ -355,7 +447,17 @@ function normalizeCachedTaxpayerPayload(
     return normalizeTaxpayerPayload(cached.raw, cached.taxId ?? fallbackTaxId);
   }
 
-  return cached as TaxpayerLookupData;
+  const warnings = readTaxpayerLookupWarnings(cached);
+  return {
+    ...cached,
+    warnings:
+      warnings.length > 0
+        ? warnings
+        : buildTaxpayerLookupWarnings({
+            ...cached,
+            queriedTaxId: fallbackTaxId,
+          }),
+  } as TaxpayerLookupData;
 }
 
 export function normalizeTaxpayerPayload(
@@ -375,6 +477,11 @@ export function normalizeTaxpayerPayload(
       registeredAt: null,
       sourceLabel: "ARCA",
       raw: null,
+      warnings: buildTaxpayerLookupWarnings({
+        status: "NO_ENCONTRADO",
+        queriedTaxId: fallbackTaxId,
+        taxId: fallbackTaxId,
+      }),
     };
   }
 
@@ -436,7 +543,7 @@ export function normalizeTaxpayerPayload(
     ) ?? null;
   const address = extractAddress(payload);
 
-  return {
+  const taxpayer: Omit<TaxpayerLookupData, "warnings"> = {
     status: "FOUND",
     taxId,
     legalName,
@@ -448,6 +555,14 @@ export function normalizeTaxpayerPayload(
     registeredAt,
     sourceLabel: "ARCA",
     raw: payload,
+  };
+
+  return {
+    ...taxpayer,
+    warnings: buildTaxpayerLookupWarnings({
+      ...taxpayer,
+      queriedTaxId: fallbackTaxId,
+    }),
   };
 }
 

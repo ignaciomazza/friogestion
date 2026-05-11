@@ -12,6 +12,7 @@ import {
 } from "@/lib/afip/totals";
 import { resolveFiscalRecipientDocument } from "@/lib/afip/consumer-final";
 import {
+  requiresRecipientTaxIdForFiscalTaxProfile,
   resolveCondicionIvaReceptor,
   resolveInvoiceTypeFromFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
@@ -437,6 +438,12 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   });
   if (doc.requireIdentification && !doc.identificationProvided) {
     throw new Error("DOC_TYPE_REQUIRED");
+  }
+  if (
+    requiresRecipientTaxIdForFiscalTaxProfile(sale.customer.fiscalTaxProfile) &&
+    doc.docType !== 80
+  ) {
+    throw new Error("CUSTOMER_TAX_ID_INVALID");
   }
   if (resolvedType === "A" && doc.docType !== 80) {
     throw new Error("FACTURA_A_REQUIRES_CUIT");

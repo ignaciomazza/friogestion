@@ -978,7 +978,7 @@ export default function PurchasesPage() {
       : selectedSupplierVerificationStatus === "MISMATCH"
         ? "La razon social no coincide con ARCA."
         : selectedSupplierVerificationStatus === "NO_ENCONTRADO"
-          ? "ARCA no encontro el CUIT cargado."
+          ? "ARCA no encontro un proveedor para ese CUIT. Revisa que este bien escrito."
           : selectedSupplierVerificationStatus === "ERROR"
             ? selectedSupplier?.arcaVerificationMessage ??
               "No se pudo verificar el proveedor."

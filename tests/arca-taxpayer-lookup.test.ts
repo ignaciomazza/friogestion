@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeTaxpayerPayload } from "../src/lib/arca/taxpayer-lookup";
-import { inferFiscalTaxProfileFromArcaTaxStatus } from "../src/lib/customers/fiscal-profile";
+import {
+  inferFiscalTaxProfileFromArcaTaxStatus,
+  resolveCondicionIvaReceptor,
+  resolveInvoiceTypeFromFiscalTaxProfile,
+} from "../src/lib/customers/fiscal-profile";
 
 test("normalizeTaxpayerPayload is tolerant to changed getPersona_v2 tags", () => {
   const normalized = normalizeTaxpayerPayload(
@@ -44,6 +48,9 @@ test("normalizeTaxpayerPayload returns NO_ENCONTRADO snapshot when payload is em
   assert.equal(normalized.displayName, "No encontrado");
   assert.equal(normalized.address, null);
   assert.equal(normalized.raw, null);
+  assert.ok(
+    normalized.warnings.some((warning) => warning.code === "TAXPAYER_NOT_FOUND")
+  );
 });
 
 test("normalizeTaxpayerPayload infers monotributo from ARCA tax blocks", () => {
@@ -53,6 +60,9 @@ test("normalizeTaxpayerPayload infers monotributo from ARCA tax blocks", () => {
         datosGenerales: {
           idPersona: "20-11222333-4",
           razonSocial: "Servicio Austral",
+        },
+        datosRegimenGeneral: {
+          impIVA: "NI",
         },
         datosMonotributo: {
           categoriaMonotributo: {
@@ -96,4 +106,52 @@ test("normalizeTaxpayerPayload infers responsable inscripto from IVA tax blocks"
     inferFiscalTaxProfileFromArcaTaxStatus(normalized.taxStatus),
     "RESPONSABLE_INSCRIPTO"
   );
+});
+
+test("normalizeTaxpayerPayload infers IVA sujeto exento from ARCA status codes", () => {
+  const normalized = normalizeTaxpayerPayload(
+    {
+      personaReturn: {
+        datosGenerales: {
+          idPersona: "30-69999888-1",
+          razonSocial: "Municipalidad de Lago Frio",
+          domicilioFiscal: {
+            direccion: "San Martin",
+            numero: "100",
+            localidad: "Lago Frio",
+          },
+        },
+        datosRegimenGeneral: {
+          impIVA: "EX",
+        },
+      },
+    },
+    "30699998881"
+  );
+
+  assert.equal(normalized.taxStatus, "IVA Sujeto Exento");
+  assert.equal(
+    inferFiscalTaxProfileFromArcaTaxStatus(normalized.taxStatus),
+    "IVA_SUJETO_EXENTO"
+  );
+  assert.equal(resolveInvoiceTypeFromFiscalTaxProfile("IVA_SUJETO_EXENTO"), "B");
+  assert.equal(resolveCondicionIvaReceptor("IVA_SUJETO_EXENTO", "B"), 4);
+});
+
+test("fiscal profile maps monotributistas to Factura A and ARCA IVA condition 6", () => {
+  assert.equal(resolveInvoiceTypeFromFiscalTaxProfile("MONOTRIBUTISTA"), "A");
+  assert.equal(resolveCondicionIvaReceptor("MONOTRIBUTISTA", "A"), 6);
+});
+
+test("fiscal profile supports IVA no alcanzado and sujeto no categorizado", () => {
+  assert.equal(
+    inferFiscalTaxProfileFromArcaTaxStatus("IVA No Alcanzado"),
+    "IVA_NO_ALCANZADO"
+  );
+  assert.equal(resolveCondicionIvaReceptor("IVA_NO_ALCANZADO", "B"), 15);
+  assert.equal(
+    inferFiscalTaxProfileFromArcaTaxStatus("Sujeto No Categorizado"),
+    "SUJETO_NO_CATEGORIZADO"
+  );
+  assert.equal(resolveCondicionIvaReceptor("SUJETO_NO_CATEGORIZADO", "B"), 7);
 });

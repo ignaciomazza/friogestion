@@ -16,9 +16,15 @@ import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   inferFiscalTaxProfileFromArcaTaxStatus,
   normalizeCustomerFiscalTaxProfile,
+  requiresRecipientTaxIdForFiscalTaxProfile,
   resolveInvoiceTypeFromFiscalTaxProfile,
   type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import {
+  hasTaxpayerLookupError,
+  readTaxpayerLookupWarnings,
+  summarizeTaxpayerLookupWarnings,
+} from "@/lib/arca/taxpayer-lookup-feedback";
 import {
   buildAdjustedTotalsFromRates,
   buildTotalsFromRates,
@@ -547,6 +553,8 @@ export default function BillingClient({
     isConsumerFinal &&
     (invoiceTotal >= CONSUMER_FINAL_THRESHOLD ||
       invoiceForm.requiresIncomeTaxDeduction);
+  const requiresProfileTaxId =
+    requiresRecipientTaxIdForFiscalTaxProfile(customerFiscalTaxProfile);
   const hasRecipientDoc = normalizeTaxId(saleToInvoice?.customerTaxId).length === 11;
   const recipientDocumentLabel = hasRecipientDoc
     ? `CUIT ${saleToInvoice?.customerTaxId}`
@@ -602,6 +610,13 @@ export default function BillingClient({
         ok: false,
         error:
           "Factura A requiere CUIT valido del cliente. Actualizalo en Clientes antes de emitir.",
+      };
+    }
+    if (requiresProfileTaxId && !hasRecipientDoc) {
+      return {
+        ok: false,
+        error:
+          "Esta condicion fiscal requiere CUIT valido del cliente. Actualizalo antes de emitir.",
       };
     }
     if (requiresIdentification && !hasRecipientDoc) {
@@ -872,6 +887,9 @@ export default function BillingClient({
           typeof data?.taxpayer?.taxStatus === "string"
             ? data.taxpayer.taxStatus
             : null;
+        const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+        const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+        const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
         const suggestedFiscalTaxProfile =
           inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
         const currentProfile = normalizeCustomerFiscalTaxProfile(
@@ -884,9 +902,10 @@ export default function BillingClient({
         if (cancelled) return;
         if (!suggestedFiscalTaxProfile) {
           setArcaValidation({
-            status: "warning",
+            status: hasLookupError ? "error" : "warning",
             message:
-              "ARCA no devolvio condicion fiscal clara. Revisa el perfil fiscal del cliente.",
+              lookupWarningText ||
+              "No pudimos identificar automaticamente la condicion frente al IVA. Revisala en la ficha del cliente.",
             source,
             checkedAt,
             suggestedFiscalTaxProfile: null,
@@ -898,7 +917,9 @@ export default function BillingClient({
         if (currentProfile && suggestedFiscalTaxProfile !== currentProfile) {
           setArcaValidation({
             status: "warning",
-            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y el cliente esta guardado como ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.`,
+            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y el cliente esta guardado como ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.${
+              lookupWarningText ? ` ${lookupWarningText}` : ""
+            }`,
             source,
             checkedAt,
             suggestedFiscalTaxProfile,
@@ -908,8 +929,14 @@ export default function BillingClient({
         }
 
         setArcaValidation({
-          status: "ok",
-          message: "CUIT validado con ARCA.",
+          status: hasLookupError
+            ? "error"
+            : lookupWarnings.length
+              ? "warning"
+              : "ok",
+          message: lookupWarnings.length
+            ? `CUIT validado con ARCA. ${lookupWarningText}`
+            : "CUIT validado con ARCA.",
           source,
           checkedAt,
           suggestedFiscalTaxProfile,
@@ -978,6 +1005,9 @@ export default function BillingClient({
 
       const arcaTaxStatus =
         typeof data?.taxpayer?.taxStatus === "string" ? data.taxpayer.taxStatus : null;
+      const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
       const suggestedFiscalTaxProfile =
         inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
       const currentProfile = normalizeCustomerFiscalTaxProfile(
@@ -988,9 +1018,10 @@ export default function BillingClient({
 
       if (!suggestedFiscalTaxProfile) {
         setArcaValidation({
-          status: "warning",
+          status: hasLookupError ? "error" : "warning",
           message:
-            "ARCA no devolvio condicion fiscal clara. Revisa el perfil fiscal del cliente.",
+            lookupWarningText ||
+            "No pudimos identificar automaticamente la condicion frente al IVA. Revisala en la ficha del cliente.",
           source,
           checkedAt,
           suggestedFiscalTaxProfile: null,
@@ -1001,7 +1032,9 @@ export default function BillingClient({
       if (currentProfile && suggestedFiscalTaxProfile !== currentProfile) {
         setArcaValidation({
           status: "warning",
-          message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y el cliente esta guardado como ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.`,
+          message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y el cliente esta guardado como ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.${
+            lookupWarningText ? ` ${lookupWarningText}` : ""
+          }`,
           source,
           checkedAt,
           suggestedFiscalTaxProfile,
@@ -1011,8 +1044,14 @@ export default function BillingClient({
       }
 
       setArcaValidation({
-        status: "ok",
-        message: "CUIT validado con ARCA.",
+        status: hasLookupError
+          ? "error"
+          : lookupWarnings.length
+            ? "warning"
+            : "ok",
+        message: lookupWarnings.length
+          ? `CUIT validado con ARCA. ${lookupWarningText}`
+          : "CUIT validado con ARCA.",
         source,
         checkedAt,
         suggestedFiscalTaxProfile,
@@ -2098,6 +2137,12 @@ export default function BillingClient({
                 {resolvedInvoiceType === "A" && !hasRecipientDoc ? (
                   <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
                     Factura A requiere CUIT valido del cliente.
+                  </p>
+                ) : null}
+                {requiresProfileTaxId && !hasRecipientDoc && resolvedInvoiceType !== "A" ? (
+                  <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
+                    Esta condicion fiscal requiere CUIT valido para informar
+                    correctamente el receptor en ARCA.
                   </p>
                 ) : null}
                 {hasRegularSurchargeAdjustment ? (

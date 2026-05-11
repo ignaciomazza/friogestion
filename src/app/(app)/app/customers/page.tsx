@@ -18,6 +18,10 @@ import {
   inferFiscalTaxProfileFromArcaTaxStatus,
   type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import {
+  readTaxpayerLookupWarnings,
+  summarizeTaxpayerLookupWarnings,
+} from "@/lib/arca/taxpayer-lookup-feedback";
 
 type CustomerRow = {
   id: string;
@@ -189,6 +193,15 @@ export default function CustomersPage() {
         return;
       }
       const taxpayer = data?.taxpayer;
+      const lookupWarnings = readTaxpayerLookupWarnings(taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      if (taxpayer?.status === "NO_ENCONTRADO") {
+        setStatus(
+          lookupWarningText ||
+            "ARCA no encontro un contribuyente para ese CUIT. Revisa que este bien escrito.",
+        );
+        return;
+      }
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
       const address = taxpayer?.address ?? "";
       const fiscalTaxProfile = inferFiscalTaxProfileFromArcaTaxStatus(
@@ -213,8 +226,13 @@ export default function CustomersPage() {
       }
       const statusText = fiscalTaxProfile
         ? `Condicion fiscal aplicada al formulario: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
-        : "ARCA no devolvio condicion fiscal clara.";
-      setStatus(`Datos ARCA actualizados (${data.source}). ${statusText}`);
+        : lookupWarningText ||
+          "No pudimos identificar automaticamente la condicion frente al IVA. Elegila manualmente antes de guardar.";
+      setStatus(
+        `Datos ARCA actualizados (${data.source}). ${statusText}${
+          lookupWarningText && fiscalTaxProfile ? ` ${lookupWarningText}` : ""
+        }`,
+      );
     } catch {
       setStatus("No se pudo consultar ARCA");
     } finally {
@@ -369,6 +387,19 @@ export default function CustomersPage() {
     () => new Map(priceLists.map((priceList) => [priceList.id, priceList])),
     [priceLists],
   );
+  const normalizedStatus = status?.toLowerCase() ?? "";
+  const statusClass =
+    normalizedStatus.includes("no se pudo") ||
+    normalizedStatus.includes("no encontro") ||
+    normalizedStatus.includes("invalido")
+      ? "text-rose-700"
+      : normalizedStatus.includes("no devolvio") ||
+          normalizedStatus.includes("no pudimos") ||
+          normalizedStatus.includes("revisa") ||
+          normalizedStatus.includes("elegila") ||
+          normalizedStatus.includes("distinto")
+        ? "text-amber-700"
+        : "text-emerald-700";
 
   return (
     <div className="space-y-6">
@@ -573,7 +604,11 @@ export default function CustomersPage() {
             <CheckIcon className="size-4" />
             {isSubmitting ? "Guardando..." : "Guardar"}
           </button>
-          {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
+          {status ? (
+            <p className={`text-xs ${statusClass}`} role="status" aria-live="polite">
+              {status}
+            </p>
+          ) : null}
         </form>
       </div>
 
@@ -857,6 +892,15 @@ export default function CustomersPage() {
                                 Cancelar
                               </button>
                               </div>
+                              {status ? (
+                                <p
+                                  className={`text-xs ${statusClass}`}
+                                  role="status"
+                                  aria-live="polite"
+                                >
+                                  {status}
+                                </p>
+                              ) : null}
                             </form>
                           </td>
                         </motion.tr>

@@ -22,6 +22,11 @@ import {
   normalizeCustomerFiscalTaxProfile,
   type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import {
+  hasTaxpayerLookupError,
+  readTaxpayerLookupWarnings,
+  summarizeTaxpayerLookupWarnings,
+} from "@/lib/arca/taxpayer-lookup-feedback";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
 import { resolveSuggestedProductPrice } from "@/lib/pricing";
 import {
@@ -1066,6 +1071,9 @@ export default function QuotesClient({
           typeof data?.taxpayer?.taxStatus === "string"
             ? data.taxpayer.taxStatus
             : null;
+        const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+        const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+        const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
         const suggestedFiscalTaxProfile =
           inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
         const currentProfile = normalizeCustomerFiscalTaxProfile(
@@ -1077,8 +1085,10 @@ export default function QuotesClient({
 
         if (!suggestedFiscalTaxProfile) {
           setCustomerArcaValidation({
-            status: "warning",
-            message: "ARCA no devolvio condicion fiscal clara.",
+            status: hasLookupError ? "error" : "warning",
+            message:
+              lookupWarningText ||
+              "No pudimos identificar automaticamente la condicion frente al IVA. Revisala en la ficha del cliente.",
             suggestedFiscalTaxProfile: null,
             source,
             checkedAt,
@@ -1089,7 +1099,9 @@ export default function QuotesClient({
         if (currentProfile && suggestedFiscalTaxProfile !== currentProfile) {
           setCustomerArcaValidation({
             status: "warning",
-            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y la ficha tiene ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.`,
+            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y la ficha tiene ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.${
+              lookupWarningText ? ` ${lookupWarningText}` : ""
+            }`,
             suggestedFiscalTaxProfile,
             source,
             checkedAt,
@@ -1098,8 +1110,14 @@ export default function QuotesClient({
         }
 
         setCustomerArcaValidation({
-          status: "ok",
-          message: "CUIT validado con ARCA.",
+          status: hasLookupError
+            ? "error"
+            : lookupWarnings.length
+              ? "warning"
+              : "ok",
+          message: lookupWarnings.length
+            ? `CUIT validado con ARCA. ${lookupWarningText}`
+            : "CUIT validado con ARCA.",
           suggestedFiscalTaxProfile,
           source,
           checkedAt,
@@ -1573,6 +1591,9 @@ export default function QuotesClient({
       const source = typeof data?.source === "string" ? data.source : null;
       const checkedAt =
         typeof data?.checkedAt === "string" ? data.checkedAt : null;
+      const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
 
       if (!res.ok) {
         setCustomerArcaValidation({
@@ -1587,8 +1608,10 @@ export default function QuotesClient({
 
       if (data?.taxpayer?.status === "NO_ENCONTRADO") {
         setCustomerArcaValidation({
-          status: "warning",
-          message: "ARCA no encontro el CUIT cargado.",
+          status: "error",
+          message:
+            lookupWarningText ||
+            "ARCA no encontro un contribuyente para ese CUIT. Revisa que este bien escrito.",
           suggestedFiscalTaxProfile: null,
           source,
           checkedAt,
@@ -1619,11 +1642,12 @@ export default function QuotesClient({
 
       if (!suggestedFiscalTaxProfile) {
         setCustomerArcaValidation({
-          status: "warning",
+          status: hasLookupError ? "error" : "warning",
           message:
-            arcaDisplayName || arcaAddress
-              ? "ARCA no devolvio condicion fiscal clara. Revisa razon social y direccion antes de guardar."
-              : "ARCA no devolvio condicion fiscal clara.",
+            lookupWarningText ||
+            (arcaDisplayName || arcaAddress
+              ? "No pudimos identificar automaticamente la condicion frente al IVA. Revisa razon social, direccion y condicion fiscal antes de guardar."
+              : "No pudimos identificar automaticamente la condicion frente al IVA. Elegila manualmente antes de guardar."),
           suggestedFiscalTaxProfile: null,
           source,
           checkedAt,
@@ -1687,7 +1711,9 @@ export default function QuotesClient({
       if (didFiscalTaxProfileChange) {
         setCustomerArcaValidation({
           status: "warning",
-          message: `ARCA indica ${suggestedLabel}; la ficha tenia ${savedLabel}. Se actualizo automaticamente.`,
+          message: `ARCA indica ${suggestedLabel}; la ficha tenia ${savedLabel}. Se actualizo automaticamente.${
+            lookupWarningText ? ` ${lookupWarningText}` : ""
+          }`,
           suggestedFiscalTaxProfile: null,
           source,
           checkedAt,
@@ -1696,8 +1722,14 @@ export default function QuotesClient({
       }
 
       setCustomerArcaValidation({
-        status: "ok",
-        message: `CUIT validado con ARCA. Condicion fiscal: ${suggestedLabel}.`,
+        status: hasLookupError
+          ? "error"
+          : lookupWarnings.length
+            ? "warning"
+            : "ok",
+        message: lookupWarnings.length
+          ? `CUIT validado con ARCA. Condicion fiscal: ${suggestedLabel}. ${lookupWarningText}`
+          : `CUIT validado con ARCA. Condicion fiscal: ${suggestedLabel}.`,
         suggestedFiscalTaxProfile: null,
         source,
         checkedAt,
@@ -2302,6 +2334,15 @@ export default function QuotesClient({
         return;
       }
       const taxpayer = data?.taxpayer;
+      const lookupWarnings = readTaxpayerLookupWarnings(taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      if (taxpayer?.status === "NO_ENCONTRADO") {
+        setCustomerStatus(
+          lookupWarningText ||
+            "ARCA no encontro un contribuyente para ese CUIT. Revisa que este bien escrito.",
+        );
+        return;
+      }
       const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
       const address = taxpayer?.address ?? "";
       const fiscalTaxProfile = inferFiscalTaxProfileFromArcaTaxStatus(
@@ -2316,8 +2357,13 @@ export default function QuotesClient({
       }));
       const statusText = fiscalTaxProfile
         ? `Condicion fiscal aplicada al formulario: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
-        : "ARCA no devolvio condicion fiscal clara.";
-      setCustomerStatus(`Datos ARCA actualizados (${data.source}). ${statusText}`);
+        : lookupWarningText ||
+          "No pudimos identificar automaticamente la condicion frente al IVA. Elegila manualmente antes de guardar.";
+      setCustomerStatus(
+        `Datos ARCA actualizados (${data.source}). ${statusText}${
+          lookupWarningText && fiscalTaxProfile ? ` ${lookupWarningText}` : ""
+        }`,
+      );
     } catch {
       setCustomerStatus("No se pudo consultar ARCA");
     } finally {

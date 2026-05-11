@@ -59,8 +59,16 @@ export function InlineCustomerForm({
   const normalizedStatus = status?.toLowerCase() ?? "";
   const isErrorStatus =
     normalizedStatus.includes("no se pudo") ||
+    normalizedStatus.includes("no encontro") ||
+    normalizedStatus.includes("invalido") ||
     normalizedStatus.includes("requerido") ||
     normalizedStatus.includes("ingresa");
+  const isWarningStatus =
+    normalizedStatus.includes("no devolvio") ||
+    normalizedStatus.includes("no pudimos") ||
+    normalizedStatus.includes("revisa") ||
+    normalizedStatus.includes("elegila") ||
+    normalizedStatus.includes("distinto");
 
   return (
     <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
@@ -225,7 +233,11 @@ export function InlineCustomerForm({
       {status ? (
         <p
           className={`text-xs ${
-            isErrorStatus ? "text-rose-700" : "text-emerald-700"
+            isErrorStatus
+              ? "text-rose-700"
+              : isWarningStatus
+                ? "text-amber-700"
+                : "text-emerald-700"
           }`}
           role="status"
           aria-live="polite"
