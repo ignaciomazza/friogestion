@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { AUTH_COOKIE_NAME } from "@/lib/auth/constants";
-import { STOCK_PAGE_ENABLED } from "@/lib/features";
+import { PRICE_PAGE_ENABLED } from "@/lib/features";
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -21,7 +21,10 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  if (!STOCK_PAGE_ENABLED && pathname.startsWith("/app/stock")) {
+  if (
+    !PRICE_PAGE_ENABLED &&
+    (pathname.startsWith("/app/prices") || pathname.startsWith("/app/stock"))
+  ) {
     const productsUrl = req.nextUrl.clone();
     productsUrl.pathname = "/app/products";
     productsUrl.search = "";

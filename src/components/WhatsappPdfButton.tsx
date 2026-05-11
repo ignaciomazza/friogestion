@@ -19,43 +19,8 @@ type ShareTokenResponse = {
   error?: string;
 };
 
-type NavigatorWithFileShare = Navigator & {
-  canShare?: (data: ShareData) => boolean;
-};
-
-type NativeShareResult = "shared" | "cancelled" | "unsupported";
-
-const buildPdfUrl = (
-  documentType: PdfShareDocumentType,
-  documentId: string,
-) => {
-  if (documentType === "quote") {
-    return `/api/pdf/quote?id=${encodeURIComponent(documentId)}`;
-  }
-
-  if (documentType === "sale") {
-    return `/api/pdf/sale?id=${encodeURIComponent(documentId)}`;
-  }
-
-  if (documentType === "fiscalInvoice") {
-    return `/api/fiscal-invoices/${encodeURIComponent(documentId)}/pdf`;
-  }
-
-  return `/api/credit-notes/${encodeURIComponent(documentId)}/pdf`;
-};
-
 const toAbsoluteUrl = (path: string) =>
   new URL(path, window.location.origin).toString();
-
-const buildPdfFilename = (documentLabel: string) => {
-  const slug = documentLabel
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return `${slug || "documento"}.pdf`;
-};
 
 const normalizeWhatsappPhone = (phone?: string | null) => {
   if (!phone) return null;
@@ -102,64 +67,6 @@ const buildWhatsappMessage = ({
   ].join("\n");
 };
 
-const buildShareText = ({
-  customerName,
-  documentLabel,
-}: {
-  customerName: string;
-  documentLabel: string;
-}) => {
-  const greeting = customerName.trim() ? `Hola ${customerName.trim()},` : "Hola,";
-  return `${greeting} te enviamos ${documentLabel}.`;
-};
-
-const isFetchError = (error: unknown) =>
-  error instanceof TypeError && error.message.toLowerCase().includes("fetch");
-
-const canSharePdfFiles = () => {
-  const shareNavigator = navigator as NavigatorWithFileShare;
-  if (!shareNavigator.share || !shareNavigator.canShare) {
-    return false;
-  }
-
-  const testFile = new File([""], "documento.pdf", {
-    type: "application/pdf",
-  });
-  return shareNavigator.canShare({ files: [testFile] });
-};
-
-const fetchPdfFile = async ({
-  documentType,
-  documentId,
-  documentLabel,
-}: {
-  documentType: PdfShareDocumentType;
-  documentId: string;
-  documentLabel: string;
-}) => {
-  const response = await fetch(
-    toAbsoluteUrl(buildPdfUrl(documentType, documentId)),
-    {
-      cache: "no-store",
-      credentials: "same-origin",
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error("No se pudo preparar el PDF");
-  }
-
-  const contentType = response.headers.get("Content-Type") ?? "";
-  if (!contentType.toLowerCase().includes("application/pdf")) {
-    throw new Error("La respuesta no es un PDF valido");
-  }
-
-  const blob = await response.blob();
-  return new File([blob], buildPdfFilename(documentLabel), {
-    type: "application/pdf",
-  });
-};
-
 const requestShareUrl = async ({
   documentType,
   documentId,
@@ -185,49 +92,32 @@ const requestShareUrl = async ({
   return data.url;
 };
 
-const trySharePdfFile = async ({
-  documentType,
-  documentId,
-  documentLabel,
-  customerName,
-}: {
-  documentType: PdfShareDocumentType;
-  documentId: string;
-  documentLabel: string;
-  customerName: string;
-}): Promise<NativeShareResult> => {
-  if (!canSharePdfFiles()) {
-    return "unsupported";
-  }
+const reserveWhatsappTab = () => {
+  // Reserve the tab during the click gesture so the async token request
+  // does not trigger popup blockers before opening WhatsApp.
+  const popup = window.open("about:blank", "_blank");
 
-  try {
-    const shareNavigator = navigator as NavigatorWithFileShare;
-    const pdfFile = await fetchPdfFile({
-      documentType,
-      documentId,
-      documentLabel,
-    });
-    const shareData: ShareData = {
-      files: [pdfFile],
-      title: documentLabel,
-      text: buildShareText({ customerName, documentLabel }),
+  if (!popup) {
+    return {
+      close: () => undefined,
+      open: (url: string) => {
+        window.location.assign(url);
+      },
     };
-
-    if (!shareNavigator.canShare(shareData)) {
-      return "unsupported";
-    }
-
-    await shareNavigator.share(shareData);
-    return "shared";
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return "cancelled";
-    }
-    if (isFetchError(error)) {
-      throw new Error("No se pudo conectar con la app para preparar el PDF.");
-    }
-    return "unsupported";
   }
+
+  popup.opener = null;
+
+  return {
+    close: () => {
+      if (!popup.closed) {
+        popup.close();
+      }
+    },
+    open: (url: string) => {
+      popup.location.href = url;
+    },
+  };
 };
 
 const openWhatsappLink = async ({
@@ -243,16 +133,23 @@ const openWhatsappLink = async ({
   customerName: string;
   whatsappPhone: string;
 }) => {
-  const pdfUrl = await requestShareUrl({ documentType, documentId });
-  const message = buildWhatsappMessage({
-    customerName,
-    documentLabel,
-    pdfUrl,
-  });
-  const whatsappUrl = `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
-    message,
-  )}`;
-  window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+  const whatsappTab = reserveWhatsappTab();
+
+  try {
+    const pdfUrl = await requestShareUrl({ documentType, documentId });
+    const message = buildWhatsappMessage({
+      customerName,
+      documentLabel,
+      pdfUrl,
+    });
+    const whatsappUrl = `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(
+      message,
+    )}`;
+    whatsappTab.open(whatsappUrl);
+  } catch (error) {
+    whatsappTab.close();
+    throw error;
+  }
 };
 
 export function WhatsappPdfButton({
@@ -279,16 +176,6 @@ export function WhatsappPdfButton({
 
     setIsOpening(true);
     try {
-      const nativeShareResult = await trySharePdfFile({
-        documentType,
-        documentId,
-        documentLabel,
-        customerName,
-      });
-      if (nativeShareResult !== "unsupported") {
-        return;
-      }
-
       await openWhatsappLink({
         documentType,
         documentId,

@@ -39,6 +39,19 @@ const findListPriceItem = (
   priceListId: string,
 ) => prices?.find((price) => price.priceListId === priceListId) ?? null;
 
+const normalizePriceNumber = (value: number | null) => {
+  if (value === null || !Number.isFinite(value)) return null;
+  return Number(value.toFixed(2));
+};
+
+const calculatePriceFromPercentage = (
+  basePrice: number | null,
+  percentage: number | null,
+) => {
+  if (basePrice === null || percentage === null) return null;
+  return normalizePriceNumber(basePrice * (1 + percentage / 100));
+};
+
 const findChosenPriceListId = ({
   prices,
   preferredPriceListId,
@@ -56,71 +69,96 @@ const findChosenPriceListId = ({
   return null;
 };
 
+const resolvePercentageFromPriceItem = (
+  priceItem: ProductListPrice | null,
+  sourceBase: number,
+) => {
+  if (sourceBase < 0) return null;
+
+  const storedPercentage = validPercentage(priceItem?.percentage);
+  const percentage = toNumber(storedPercentage);
+  if (percentage !== null) {
+    return Number.isFinite(percentage) ? percentage : null;
+  }
+
+  const sourcePrice = toNumber(validPrice(priceItem?.price));
+  if (sourcePrice === null || sourcePrice < 0) return null;
+
+  if (sourceBase === 0) {
+    return sourcePrice === 0 ? 0 : null;
+  }
+
+  const derivedPercentage = ((sourcePrice - sourceBase) / sourceBase) * 100;
+  return Number.isFinite(derivedPercentage) ? derivedPercentage : null;
+};
+
+const resolveDefaultPriceListId = (
+  priceListOrderIds: string[],
+  defaultPriceListId: string | null | undefined,
+) =>
+  defaultPriceListId && priceListOrderIds.includes(defaultPriceListId)
+    ? defaultPriceListId
+    : (priceListOrderIds[0] ?? null);
+
 const deriveDynamicUsdListPrice = ({
   prices,
   chosenPriceListId,
+  defaultPriceListId,
   priceListOrderIds,
-  productCost,
   productCostUsd,
   usdRateArs,
 }: {
   prices: ProductListPrice[] | null | undefined;
   chosenPriceListId: string;
+  defaultPriceListId: string | null | undefined;
   priceListOrderIds: string[];
-  productCost: string | null | undefined;
   productCostUsd: string | null | undefined;
   usdRateArs: number;
 }) => {
   if (!prices?.length || !priceListOrderIds.length) return null;
+  if (!priceListOrderIds.includes(chosenPriceListId)) return null;
 
   const costUsd = toNumber(productCostUsd);
   if (costUsd === null) return null;
   if (costUsd < 0 || usdRateArs <= 0) return null;
 
-  let dynamicPrice = costUsd * usdRateArs;
-  let sourceBase = toNumber(productCost) ?? dynamicPrice;
-  if (sourceBase < 0) return null;
+  const dynamicCostArs = normalizePriceNumber(costUsd * usdRateArs);
+  if (dynamicCostArs === null) return null;
 
-  for (const priceListId of priceListOrderIds) {
-    const priceItem = findListPriceItem(prices, priceListId);
-    const storedPercentage = validPercentage(priceItem?.percentage);
-    const sourcePriceRaw = validPrice(priceItem?.price);
-    if (!storedPercentage && !sourcePriceRaw) return null;
-    const sourcePrice = toNumber(sourcePriceRaw);
-    if (!storedPercentage && (sourcePrice === null || sourcePrice < 0)) {
-      return null;
-    }
+  const dynamicDefaultPriceListId = resolveDefaultPriceListId(
+    priceListOrderIds,
+    defaultPriceListId,
+  );
+  if (!dynamicDefaultPriceListId) return null;
 
-    let percentage = toNumber(storedPercentage);
-    if (percentage === null) {
-      if (sourcePrice === null) return null;
-      if (sourceBase === 0) {
-        if (sourcePrice !== 0) return null;
-        percentage = 0;
-      } else {
-        percentage = ((sourcePrice - sourceBase) / sourceBase) * 100;
-      }
-    }
+  const defaultPriceItem = findListPriceItem(prices, dynamicDefaultPriceListId);
+  const defaultPercentage = resolvePercentageFromPriceItem(
+    defaultPriceItem,
+    dynamicCostArs,
+  );
+  const dynamicDefaultPrice = calculatePriceFromPercentage(
+    dynamicCostArs,
+    defaultPercentage,
+  );
+  if (dynamicDefaultPrice === null) return null;
 
-    if (!Number.isFinite(percentage)) {
-      return null;
-    }
-
-    dynamicPrice = dynamicPrice * (1 + percentage / 100);
-    if (!Number.isFinite(dynamicPrice) || dynamicPrice < 0) return null;
-
-    if (priceListId === chosenPriceListId) {
-      return dynamicPrice.toFixed(2);
-    }
-
-    if (sourcePrice !== null) {
-      sourceBase = sourcePrice;
-    } else {
-      sourceBase = dynamicPrice;
-    }
+  if (chosenPriceListId === dynamicDefaultPriceListId) {
+    return dynamicDefaultPrice.toFixed(2);
   }
 
-  return null;
+  const chosenPriceItem = findListPriceItem(prices, chosenPriceListId);
+  const storedDefaultPrice =
+    toNumber(validPrice(defaultPriceItem?.price)) ?? dynamicDefaultPrice;
+  const chosenPercentage = resolvePercentageFromPriceItem(
+    chosenPriceItem,
+    storedDefaultPrice,
+  );
+  const dynamicChosenPrice = calculatePriceFromPercentage(
+    dynamicDefaultPrice,
+    chosenPercentage,
+  );
+
+  return dynamicChosenPrice === null ? null : dynamicChosenPrice.toFixed(2);
 };
 
 export const resolveSuggestedProductPrice = ({
@@ -161,8 +199,8 @@ export const resolveSuggestedProductPrice = ({
       const dynamicPrice = deriveDynamicUsdListPrice({
         prices,
         chosenPriceListId,
+        defaultPriceListId,
         priceListOrderIds,
-        productCost,
         productCostUsd,
         usdRateArs,
       });

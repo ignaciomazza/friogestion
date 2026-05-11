@@ -371,9 +371,9 @@ export async function PATCH(req: NextRequest) {
         { status: authErrorStatus(error) },
       );
     }
-    logServerError("api.stock.patch", error);
+    logServerError("api.prices.patch", error);
     return NextResponse.json(
-      { error: "No se pudo actualizar stock/precio" },
+      { error: "No se pudo actualizar precio" },
       { status: 400 },
     );
   }

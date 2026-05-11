@@ -28,7 +28,7 @@ import {
 import { cn } from "@/lib/cn";
 import { ADMIN_ROLES, DASHBOARD_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
-import { STOCK_PAGE_ENABLED } from "@/lib/features";
+import { PRICE_PAGE_ENABLED } from "@/lib/features";
 import { requestAppNavigation } from "@/lib/navigation-guard";
 import { subscribeExchangeRateUpdated } from "@/lib/exchange-rate-events";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
@@ -106,8 +106,8 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Operacion",
     items: [
       { href: "/app/purchases", label: "Compras", Icon: ShoppingBagIcon },
-      ...(STOCK_PAGE_ENABLED
-        ? [{ href: "/app/stock", label: "Stock", Icon: CubeIcon }]
+      ...(PRICE_PAGE_ENABLED
+        ? [{ href: "/app/prices", label: "Precios", Icon: CubeIcon }]
         : []),
       { href: "/app/products", label: "Productos", Icon: DocumentTextIcon },
       { href: "/app/customers", label: "Clientes", Icon: UsersIcon },
