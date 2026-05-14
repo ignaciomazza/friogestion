@@ -46,7 +46,7 @@ export type ProductOption = {
   price: string | null;
   prices?: Array<{
     priceListId: string;
-    price: string;
+    price: string | null;
     percentage?: string | null;
   }>;
 };

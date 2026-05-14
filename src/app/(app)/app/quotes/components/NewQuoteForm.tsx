@@ -168,7 +168,7 @@ export function NewQuoteForm({
   };
 
   return (
-    <div className="card space-y-6 p-6 lg:p-7">
+    <div className="card space-y-6 p-4 sm:p-6 lg:p-7">
       <div>
         <h2 className="text-lg font-semibold text-zinc-900">
           Nuevo presupuesto
@@ -229,7 +229,7 @@ export function NewQuoteForm({
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: -8, scale: 0.98 }}
                     transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                    className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
+                    className="absolute z-[80] mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_18px_48px_-28px_rgba(24,24,27,0.6)] backdrop-blur-xl"
                   >
                     {hasCustomers ? (
                       customerMatches.length ? (
@@ -243,7 +243,7 @@ export function NewQuoteForm({
                               id={`quote-customer-option-${customer.id}`}
                               role="option"
                               aria-selected={isSelected}
-                              className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                              className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition ${
                                 isActive
                                   ? "bg-white text-sky-900"
                                   : isSelected
@@ -255,10 +255,10 @@ export function NewQuoteForm({
                                 onCustomerSelect(customer);
                               }}
                             >
-                              <span className="font-medium text-zinc-900">
+                              <span className="min-w-0 truncate font-medium text-zinc-900">
                                 {customer.displayName}
                               </span>
-                              <span className="text-xs text-zinc-500">
+                              <span className="shrink-0 text-xs text-zinc-500">
                                 {customer.taxId ?? "Sin CUIT"}
                               </span>
                             </button>
@@ -365,8 +365,8 @@ export function NewQuoteForm({
               Agregar item
             </button>
           </div>
-          <div className="relative table-scroll overflow-visible">
-            <table className="w-full min-w-[940px] table-fixed text-left text-sm">
+          <div className="relative table-scroll lg:overflow-visible">
+            <table className="w-full min-w-[860px] table-fixed text-left text-sm lg:min-w-[940px]">
               <colgroup>
                 <col />
                 <col className="w-28" />
@@ -461,7 +461,7 @@ export function NewQuoteForm({
                                     duration: 0.18,
                                     ease: [0.22, 1, 0.36, 1],
                                   }}
-                                  className="absolute z-50 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
+                                  className="absolute z-[80] mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_18px_48px_-28px_rgba(24,24,27,0.6)] backdrop-blur-xl"
                                 >
                                   {hasProducts ? (
                                     productMatches.length ? (
@@ -478,7 +478,7 @@ export function NewQuoteForm({
                                               id={`quote-product-option-${index}-${productOption.id}`}
                                               role="option"
                                               aria-selected={isSelected}
-                                              className={`flex w-full cursor-pointer items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                                              className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition ${
                                                 isActive
                                                   ? "bg-white text-sky-900"
                                                   : isSelected
@@ -493,12 +493,12 @@ export function NewQuoteForm({
                                                 );
                                               }}
                                             >
-                                              <span className="font-medium text-zinc-900">
+                                              <span className="min-w-0 truncate font-medium text-zinc-900">
                                                 {formatProductLabel(
                                                   productOption,
                                                 )}
                                               </span>
-                                              <span className="text-xs text-zinc-500">
+                                              <span className="shrink-0 text-xs text-zinc-500">
                                                 {formatUnit(
                                                   productOption.unit ?? null,
                                                 )}

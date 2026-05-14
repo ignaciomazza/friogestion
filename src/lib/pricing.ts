@@ -39,6 +39,18 @@ const findListPriceItem = (
   priceListId: string,
 ) => prices?.find((price) => price.priceListId === priceListId) ?? null;
 
+const findListPriceOrPercentage = (
+  prices: ProductListPrice[] | null | undefined,
+  priceListId: string | null | undefined,
+) => {
+  if (!priceListId || !prices?.length) return null;
+  const found = findListPriceItem(prices, priceListId);
+  if (validPrice(found?.price) || validPercentage(found?.percentage)) {
+    return priceListId;
+  }
+  return null;
+};
+
 const normalizePriceNumber = (value: number | null) => {
   if (value === null || !Number.isFinite(value)) return null;
   return Number(value.toFixed(2));
@@ -63,9 +75,12 @@ const findChosenPriceListId = ({
   customerPriceListId: string | null | undefined;
   defaultPriceListId: string | null | undefined;
 }) => {
-  if (findListPrice(prices, preferredPriceListId)) return preferredPriceListId ?? null;
-  if (findListPrice(prices, customerPriceListId)) return customerPriceListId ?? null;
-  if (findListPrice(prices, defaultPriceListId)) return defaultPriceListId ?? null;
+  const preferred = findListPriceOrPercentage(prices, preferredPriceListId);
+  if (preferred) return preferred;
+  const customer = findListPriceOrPercentage(prices, customerPriceListId);
+  if (customer) return customer;
+  const fallback = findListPriceOrPercentage(prices, defaultPriceListId);
+  if (fallback) return fallback;
   return null;
 };
 
@@ -100,30 +115,24 @@ const resolveDefaultPriceListId = (
     ? defaultPriceListId
     : (priceListOrderIds[0] ?? null);
 
-const deriveDynamicUsdListPrice = ({
+const deriveListPriceFromBaseCost = ({
   prices,
   chosenPriceListId,
   defaultPriceListId,
   priceListOrderIds,
-  productCostUsd,
-  usdRateArs,
+  baseCostArs,
 }: {
   prices: ProductListPrice[] | null | undefined;
   chosenPriceListId: string;
   defaultPriceListId: string | null | undefined;
   priceListOrderIds: string[];
-  productCostUsd: string | null | undefined;
-  usdRateArs: number;
+  baseCostArs: number;
 }) => {
   if (!prices?.length || !priceListOrderIds.length) return null;
   if (!priceListOrderIds.includes(chosenPriceListId)) return null;
 
-  const costUsd = toNumber(productCostUsd);
-  if (costUsd === null) return null;
-  if (costUsd < 0 || usdRateArs <= 0) return null;
-
-  const dynamicCostArs = normalizePriceNumber(costUsd * usdRateArs);
-  if (dynamicCostArs === null) return null;
+  const normalizedBaseCostArs = normalizePriceNumber(baseCostArs);
+  if (normalizedBaseCostArs === null || normalizedBaseCostArs < 0) return null;
 
   const dynamicDefaultPriceListId = resolveDefaultPriceListId(
     priceListOrderIds,
@@ -134,10 +143,10 @@ const deriveDynamicUsdListPrice = ({
   const defaultPriceItem = findListPriceItem(prices, dynamicDefaultPriceListId);
   const defaultPercentage = resolvePercentageFromPriceItem(
     defaultPriceItem,
-    dynamicCostArs,
+    normalizedBaseCostArs,
   );
   const dynamicDefaultPrice = calculatePriceFromPercentage(
-    dynamicCostArs,
+    normalizedBaseCostArs,
     defaultPercentage,
   );
   if (dynamicDefaultPrice === null) return null;
@@ -159,6 +168,34 @@ const deriveDynamicUsdListPrice = ({
   );
 
   return dynamicChosenPrice === null ? null : dynamicChosenPrice.toFixed(2);
+};
+
+const deriveDynamicUsdListPrice = ({
+  prices,
+  chosenPriceListId,
+  defaultPriceListId,
+  priceListOrderIds,
+  productCostUsd,
+  usdRateArs,
+}: {
+  prices: ProductListPrice[] | null | undefined;
+  chosenPriceListId: string;
+  defaultPriceListId: string | null | undefined;
+  priceListOrderIds: string[];
+  productCostUsd: string | null | undefined;
+  usdRateArs: number;
+}) => {
+  const costUsd = toNumber(productCostUsd);
+  if (costUsd === null) return null;
+  if (costUsd < 0 || usdRateArs <= 0) return null;
+
+  return deriveListPriceFromBaseCost({
+    prices,
+    chosenPriceListId,
+    defaultPriceListId,
+    priceListOrderIds,
+    baseCostArs: costUsd * usdRateArs,
+  });
 };
 
 export const resolveSuggestedProductPrice = ({
@@ -204,6 +241,26 @@ export const resolveSuggestedProductPrice = ({
         productCostUsd,
         usdRateArs,
       });
+      if (dynamicPrice) return dynamicPrice;
+    }
+
+    if (
+      chosenPriceListId &&
+      findListPrice(prices, chosenPriceListId) === null &&
+      productCost &&
+      priceListOrderIds?.length
+    ) {
+      const costArs = toNumber(validPrice(productCost));
+      const dynamicPrice =
+        costArs === null
+          ? null
+          : deriveListPriceFromBaseCost({
+              prices,
+              chosenPriceListId,
+              defaultPriceListId,
+              priceListOrderIds,
+              baseCostArs: costArs,
+            });
       if (dynamicPrice) return dynamicPrice;
     }
 

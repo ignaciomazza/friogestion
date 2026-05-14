@@ -37,6 +37,16 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
             executed = { method, payload };
             return {
               Resultado: "A",
+              CmpResp: {
+                CbteModo: "CAE",
+                CuitEmisor: 30712345678,
+                PtoVta: 5,
+                CbteTipo: 1,
+                CbteNro: 123,
+                CbteFch: 20260401,
+                ImpTotal: 150000.5,
+                CodAutorizacion: "12345678901234",
+              },
               Observaciones: {
                 Obs: [{ Msg: "Comprobante autorizado" }],
               },
@@ -69,6 +79,18 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
 
   assert.equal(result.status, "AUTHORIZED");
   assert.equal(result.message, "Comprobante autorizado");
+  assert.deepEqual(result.comprobante, {
+    mode: "CAE",
+    issuerTaxId: "30712345678",
+    pointOfSale: 5,
+    voucherType: 1,
+    voucherNumber: 123,
+    voucherDate: "2026-04-01",
+    totalAmount: 150000.5,
+    authorizationCode: "12345678901234",
+    receiverDocType: null,
+    receiverDocNumber: null,
+  });
 });
 
 test("validatePurchaseVoucherWithArca fails fast for invalid issuer CUIT", async () => {

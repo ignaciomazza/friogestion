@@ -1,0 +1,3 @@
+ALTER TABLE "PurchaseItem"
+ADD COLUMN "taxRate" DECIMAL(5,2),
+ADD COLUMN "taxAmount" DECIMAL(12,2);

@@ -106,6 +106,43 @@ test("resolveSuggestedProductPrice uses stored percentages with USD-only cost", 
   assert.equal(result, "180.00");
 });
 
+test("resolveSuggestedProductPrice uses percentage-only items with USD-only cost", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: null, percentage: "30.00" },
+      { priceListId: "special", price: null, percentage: "15.3846" },
+    ],
+    productCost: null,
+    productCostUsd: "10.00",
+    productPrice: null,
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+    usdRateArs: 12,
+    priceListOrderIds: ["general", "special"],
+  });
+
+  assert.equal(result, "180.00");
+});
+
+test("resolveSuggestedProductPrice uses percentage-only items with ARS cost", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: null, percentage: "30.00" },
+      { priceListId: "special", price: null, percentage: "15.3846" },
+    ],
+    productCost: "120.00",
+    productCostUsd: null,
+    productPrice: null,
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+    priceListOrderIds: ["general", "special"],
+  });
+
+  assert.equal(result, "180.00");
+});
+
 test("resolveSuggestedProductPrice applies non-default percentages over default list", () => {
   const result = resolveSuggestedProductPrice({
     prices: [

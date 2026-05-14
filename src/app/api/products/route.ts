@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
           isActive: product.isActive,
           prices: product.priceItems.map((priceItem) => ({
             priceListId: priceItem.priceListId,
-            price: priceItem.price.toString(),
+            price: priceItem.price?.toString() ?? null,
             percentage: priceItem.percentage?.toString() ?? null,
           })),
         })),

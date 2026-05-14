@@ -16,8 +16,7 @@ export function QuoteStats({
   totalEstimated,
 }: QuoteStatsProps) {
   return (
-    <div className="table-scroll pb-1">
-      <div className="grid min-w-[760px] grid-cols-4 gap-2">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <div className="card border !border-sky-200 p-3 !bg-white">
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs font-medium text-sky-700">
@@ -52,7 +51,6 @@ export function QuoteStats({
             </p>
           </div>
         </div>
-      </div>
     </div>
   );
 }

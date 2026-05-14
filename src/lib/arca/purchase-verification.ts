@@ -5,7 +5,11 @@ import {
   toWscdcValidationInput,
   type PurchaseValidationPayload,
 } from "@/lib/arca/purchase-validation";
-import { validatePurchaseVoucherWithArca } from "@/lib/arca/wscdc";
+import {
+  validatePurchaseVoucherWithArca,
+  type PurchaseValidationVoucherSnapshot,
+} from "@/lib/arca/wscdc";
+import { mapVoucherTypeToPurchaseKind } from "@/lib/purchases/fiscal";
 
 type PurchaseValidationStatus =
   | "PENDING"
@@ -36,6 +40,7 @@ export async function validatePurchaseVoucher(input: {
   let status: PurchaseValidationStatus = "ERROR";
   let message = "No se pudo validar el comprobante en ARCA.";
   let responsePayload: unknown = null;
+  let comprobante: PurchaseValidationVoucherSnapshot | null = null;
 
   try {
     const validation = await validatePurchaseVoucherWithArca({
@@ -45,10 +50,12 @@ export async function validatePurchaseVoucher(input: {
     status = validation.status;
     message = validation.message;
     responsePayload = validation.raw;
+    comprobante = validation.comprobante;
   } catch (error) {
     status = "ERROR";
     message = error instanceof Error ? error.message : "ARCA_VALIDATION_ERROR";
     responsePayload = null;
+    comprobante = null;
   }
 
   await prisma.$transaction(async (tx) => {
@@ -77,6 +84,12 @@ export async function validatePurchaseVoucher(input: {
           arcaValidationMessage: message,
           arcaValidationRequest: requestPayloadJson,
           arcaValidationResponse: responsePayloadJson,
+          fiscalVoucherKind: mapVoucherTypeToPurchaseKind(parsed.voucherType),
+          fiscalVoucherType: parsed.voucherType,
+          fiscalPointOfSale: parsed.pointOfSale,
+          fiscalVoucherNumber: parsed.voucherNumber,
+          authorizationMode: parsed.mode,
+          authorizationCode: parsed.authorizationCode,
         },
       });
     }
@@ -88,6 +101,7 @@ export async function validatePurchaseVoucher(input: {
     checkedAt: checkedAt.toISOString(),
     request: parsed,
     response: responsePayload,
+    comprobante,
   };
 }
 

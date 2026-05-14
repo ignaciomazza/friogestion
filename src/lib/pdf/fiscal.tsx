@@ -278,11 +278,27 @@ const styles = StyleSheet.create({
   },
 });
 
+function formatVoucherDisplay(
+  pointOfSale?: string | null,
+  number?: string | null,
+) {
+  const pointDigits = (pointOfSale ?? "").replace(/\D/g, "");
+  const numberDigits = (number ?? "").replace(/\D/g, "");
+
+  if (pointDigits && numberDigits) {
+    return `${pointDigits.padStart(4, "0")}-${numberDigits.padStart(8, "0")}`;
+  }
+
+  if (numberDigits) return numberDigits;
+  return number?.trim() || "-";
+}
+
 export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
   const currency = data.voucher.currencyCode === "USD" ? "USD" : "ARS";
-  const voucherNumber = [data.voucher.pointOfSale, data.voucher.number]
-    .filter(Boolean)
-    .join("-");
+  const voucherNumber = formatVoucherDisplay(
+    data.voucher.pointOfSale,
+    data.voucher.number,
+  );
   const totals = [
     { label: "Neto", value: data.voucher.net },
     { label: "IVA", value: data.voucher.iva },

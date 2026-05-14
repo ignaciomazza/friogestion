@@ -11,6 +11,10 @@ import { aggregateStockByProduct } from "@/lib/stock-balance";
 import { STOCK_ENABLED } from "@/lib/features";
 import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
+import {
+  normalizeSearchText,
+  rankProductsBySearchQuery,
+} from "@/lib/products-search";
 
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const MAX_STOCK_PAGE_SIZE = 200;
@@ -95,25 +99,35 @@ export async function GET(req: NextRequest) {
       ? Math.max(Math.trunc(requestedOffset), 0)
       : 0;
 
+    const normalizedQuery = normalizeSearchText(query);
     const productWhere: Prisma.ProductWhereInput = { organizationId };
-    if (query) {
-      productWhere.OR = [
-        { name: { contains: query } },
-        { sku: { contains: query } },
-        { purchaseCode: { contains: query } },
-        { brand: { contains: query } },
-        { model: { contains: query } },
-      ];
-    }
 
-    const [total, products, priceLists, latestUsdRate] = await Promise.all([
-      prisma.product.count({ where: productWhere }),
-      prisma.product.findMany({
+    let total = 0;
+    let products: Awaited<ReturnType<typeof prisma.product.findMany>> = [];
+
+    if (normalizedQuery) {
+      const allProducts = await prisma.product.findMany({
         where: productWhere,
         orderBy: productOrderBy(sort),
-        skip: offset,
-        take: limit,
-      }),
+      });
+      const rankedProducts = rankProductsBySearchQuery(allProducts, query);
+      total = rankedProducts.length;
+      products = rankedProducts.slice(offset, offset + limit);
+    } else {
+      const [count, pagedProducts] = await Promise.all([
+        prisma.product.count({ where: productWhere }),
+        prisma.product.findMany({
+          where: productWhere,
+          orderBy: productOrderBy(sort),
+          skip: offset,
+          take: limit,
+        }),
+      ]);
+      total = count;
+      products = pagedProducts;
+    }
+
+    const [priceLists, latestUsdRate] = await Promise.all([
       prisma.priceList.findMany({
         where: { organizationId, isActive: true },
         orderBy: PRICE_LIST_ORDER_BY,
@@ -159,14 +173,18 @@ export async function GET(req: NextRequest) {
       : new Map<string, number>();
     const pricesByProduct = new Map<
       string,
-      Array<{ priceListId: string; price: string; percentage: string | null }>
+      Array<{
+        priceListId: string;
+        price: string | null;
+        percentage: string | null;
+      }>
     >();
 
     for (const item of priceItems) {
       const current = pricesByProduct.get(item.productId) ?? [];
       current.push({
         priceListId: item.priceListId,
-        price: item.price.toString(),
+        price: item.price?.toString() ?? null,
         percentage: item.percentage?.toString() ?? null,
       });
       pricesByProduct.set(item.productId, current);
@@ -311,7 +329,10 @@ export async function PATCH(req: NextRequest) {
 
         const nextPrice = update.price;
         const nextPercentage = update.percentage;
-        if (nextPrice === null) {
+        const shouldDeletePriceItem =
+          nextPrice === null &&
+          (nextPercentage === undefined || nextPercentage === null);
+        if (shouldDeletePriceItem) {
           await tx.priceListItem.deleteMany({
             where: {
               productId: body.productId,
@@ -327,7 +348,7 @@ export async function PATCH(req: NextRequest) {
               },
             },
             update: {
-              price: nextPrice.toFixed(2),
+              price: nextPrice === null ? null : nextPrice.toFixed(2),
               ...(nextPercentage !== undefined
                 ? {
                     percentage:
@@ -338,7 +359,7 @@ export async function PATCH(req: NextRequest) {
             create: {
               priceListId,
               productId: body.productId,
-              price: nextPrice.toFixed(2),
+              price: nextPrice === null ? null : nextPrice.toFixed(2),
               ...(nextPercentage !== undefined
                 ? {
                     percentage:

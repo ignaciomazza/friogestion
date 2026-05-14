@@ -2694,7 +2694,7 @@ export default function QuotesClient({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative inline-grid grid-cols-2 rounded-2xl border border-zinc-200/70 bg-white/55 p-1.5">
+        <div className="relative inline-grid w-full grid-cols-2 rounded-2xl border border-zinc-200/70 bg-white/55 p-1.5 sm:w-auto">
           <span
             aria-hidden="true"
             className={`pointer-events-none absolute inset-y-1.5 left-1.5 w-[calc(50%-0.375rem)] rounded-xl border border-sky-200 bg-white shadow-[0_4px_10px_-8px_rgba(14,116,144,0.32)] transition-transform duration-200 ease-out ${
@@ -2703,7 +2703,7 @@ export default function QuotesClient({
           />
           <button
             type="button"
-            className={`relative z-10 inline-flex items-center justify-center rounded-xl px-6 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+            className={`relative z-10 inline-flex items-center justify-center rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 sm:px-6 sm:text-sm ${
               quoteView === "new" ? "text-sky-900" : "text-zinc-600"
             }`}
             onClick={() => setQuoteView("new")}
@@ -2713,7 +2713,7 @@ export default function QuotesClient({
           </button>
           <button
             type="button"
-            className={`relative z-10 inline-flex items-center justify-center rounded-xl px-6 py-2.5 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+            className={`relative z-10 inline-flex items-center justify-center rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 sm:px-6 sm:text-sm ${
               quoteView === "list" ? "text-sky-900" : "text-zinc-600"
             }`}
             onClick={() => setQuoteView("list")}
@@ -2819,8 +2819,8 @@ export default function QuotesClient({
 
       {quoteView === "list" ? (
         <>
-          <div className="card space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="card space-y-4 p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="field-stack">
                 <h3 className="section-title">Filtros de presupuestos</h3>
               </div>
@@ -2846,8 +2846,8 @@ export default function QuotesClient({
                   placeholder="Cliente o numero"
                 />
               </label>
-              <div className="flex h-full items-end justify-end text-right">
-                <div className="flex h-[38px] items-center justify-center gap-1.5 rounded-full border border-dashed border-sky-200 px-2">
+              <div className="flex h-full items-end justify-start text-right lg:justify-end">
+                <div className="flex h-[38px] w-full items-center justify-center gap-1.5 rounded-full border border-dashed border-sky-200 px-2 sm:w-auto">
                   <button
                     type="button"
                     className={`toggle-pill px-2.5 py-1 text-[10px] leading-none ${

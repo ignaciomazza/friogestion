@@ -537,7 +537,11 @@ export function SupplierPaymentsPanel({
   };
 
   return (
-    <div className="card space-y-4 p-6">
+    <div
+      className={`card relative space-y-4 p-4 sm:p-6 ${
+        isSupplierOpen ? "z-50" : "z-10"
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
@@ -561,7 +565,7 @@ export function SupplierPaymentsPanel({
         Proveedor
         <div className="relative">
           <input
-            className="input text-xs"
+            className="input w-full text-xs"
             value={supplierSearch}
             onChange={(event) => handleSupplierSearchChange(event.target.value)}
             onFocus={() => {
@@ -596,7 +600,7 @@ export function SupplierPaymentsPanel({
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -8, scale: 0.98 }}
                 transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-                className="absolute z-20 mt-2 w-full rounded-2xl border border-zinc-200/70 bg-white/90 p-2 shadow-[0_10px_20px_-16px_rgba(82,82,91,0.38)] backdrop-blur-xl"
+                className="absolute z-[80] mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_18px_48px_-28px_rgba(24,24,27,0.6)] backdrop-blur-xl"
               >
                 {supplierMatches.length ? (
                   supplierMatches.map((supplier, matchIndex) => {
@@ -609,7 +613,7 @@ export function SupplierPaymentsPanel({
                         id={`supplier-payments-option-${supplier.id}`}
                         role="option"
                         aria-selected={isSelected}
-                        className={`flex w-full items-center justify-between rounded-2xl px-3 py-2 text-left text-sm transition ${
+                        className={`flex w-full items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition ${
                           isActive
                             ? "bg-white text-sky-900"
                             : isSelected
@@ -621,10 +625,10 @@ export function SupplierPaymentsPanel({
                           handleSupplierSelect(supplier);
                         }}
                       >
-                        <span className="font-medium text-zinc-900">
+                        <span className="min-w-0 truncate font-medium text-zinc-900">
                           {supplier.displayName}
                         </span>
-                        <span className="text-xs text-zinc-500">
+                        <span className="shrink-0 text-xs text-zinc-500">
                           {supplier.taxId ?? "Sin CUIT"}
                         </span>
                       </button>
@@ -683,9 +687,9 @@ export function SupplierPaymentsPanel({
               return (
                 <div
                   key={`${line.paymentMethodId}-${index}`}
-                  className="flex flex-wrap items-end gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3"
+                  className="grid gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-2 lg:grid-cols-[minmax(150px,1.4fr)_minmax(150px,1.2fr)_90px_110px_120px_auto] lg:items-end"
                 >
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Metodo
                     <select
                       className="input text-xs"
@@ -702,7 +706,7 @@ export function SupplierPaymentsPanel({
                     </select>
                   </label>
                   {requiresAccount ? (
-                    <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
+                    <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                       Cuenta
                       <select
                         className="input text-xs"
@@ -720,7 +724,7 @@ export function SupplierPaymentsPanel({
                       </select>
                     </label>
                   ) : null}
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Moneda
                     <select
                       className="input text-xs"
@@ -736,7 +740,7 @@ export function SupplierPaymentsPanel({
                       ))}
                     </select>
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Importe
                     <input
                       className="input text-xs"
@@ -751,7 +755,7 @@ export function SupplierPaymentsPanel({
                     />
                   </label>
                   {line.currencyCode !== "ARS" ? (
-                    <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-28">
+                    <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                       Cotizacion
                       <input
                         className="input text-xs"
@@ -768,7 +772,7 @@ export function SupplierPaymentsPanel({
                   ) : null}
                   <button
                     type="button"
-                    className="btn btn-rose text-xs"
+                    className="btn btn-rose text-xs lg:self-end"
                     onClick={() => removeLine(index)}
                     disabled={lines.length <= 1}
                   >
@@ -791,9 +795,9 @@ export function SupplierPaymentsPanel({
               retentions.map((retention, index) => (
                 <div
                   key={`${retention.type}-${index}`}
-                  className="flex flex-wrap items-end gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3"
+                  className="grid gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-2 lg:grid-cols-[140px_110px_90px_110px_minmax(160px,1fr)_auto] lg:items-end"
                 >
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-36">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Tipo
                     <select
                       className="input text-xs"
@@ -809,7 +813,7 @@ export function SupplierPaymentsPanel({
                       ))}
                     </select>
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Base
                     <input
                       className="input text-xs"
@@ -822,7 +826,7 @@ export function SupplierPaymentsPanel({
                       }
                     />
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-20">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     % 
                     <input
                       className="input text-xs"
@@ -835,7 +839,7 @@ export function SupplierPaymentsPanel({
                       }
                     />
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Importe
                     <input
                       className="input text-xs"
@@ -848,7 +852,7 @@ export function SupplierPaymentsPanel({
                       }
                     />
                   </label>
-                  <label className="flex flex-1 flex-col gap-2 text-[11px] text-zinc-500">
+                  <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Nota
                     <input
                       className="input text-xs"
@@ -860,7 +864,7 @@ export function SupplierPaymentsPanel({
                   </label>
                   <button
                     type="button"
-                    className="btn btn-rose text-xs"
+                    className="btn btn-rose text-xs lg:self-end"
                     onClick={() => removeRetention(index)}
                   >
                     Quitar
@@ -900,9 +904,9 @@ export function SupplierPaymentsPanel({
                   return (
                     <div
                       key={purchase.id}
-                      className="flex flex-wrap items-center gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3 text-xs text-zinc-600"
+                      className="grid gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3 text-xs text-zinc-600 sm:grid-cols-[minmax(0,1fr)_150px] sm:items-center"
                     >
-                      <div className="flex-1">
+                      <div className="min-w-0">
                         <p className="font-semibold text-zinc-900">
                           {purchase.invoiceNumber ?? purchase.id}
                         </p>
@@ -954,9 +958,9 @@ export function SupplierPaymentsPanel({
             {payments.slice(0, 6).map((payment) => (
               <div
                 key={payment.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-zinc-200/70 bg-white/40 p-3"
+                className="grid gap-3 rounded-2xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-[minmax(130px,auto)_minmax(0,1fr)_auto] sm:items-center"
               >
-                <div>
+                <div className="min-w-0">
                   <p className="text-[11px] text-zinc-500">
                     {new Date(payment.paidAt).toLocaleDateString("es-AR")}
                   </p>
@@ -977,7 +981,7 @@ export function SupplierPaymentsPanel({
                     </p>
                   ) : null}
                 </div>
-                <div className="text-[11px] text-zinc-500">
+                <div className="min-w-0 text-[11px] text-zinc-500 sm:text-right">
                   {payment.lines
                     .map(
                       (line) =>
@@ -993,7 +997,7 @@ export function SupplierPaymentsPanel({
                         .join(" / ")}`
                     : ""}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   <a
                     className="btn text-xs"
                     href={`/api/pdf/supplier-payment?id=${payment.id}`}

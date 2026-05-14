@@ -15,6 +15,12 @@ import {
 } from "@/lib/arca/purchase-validation";
 import { validatePurchaseVoucher } from "@/lib/arca/purchase-verification";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
+import {
+  buildPurchaseFiscalTotals,
+  mapVoucherTypeToPurchaseKind,
+  purchaseFiscalInputSchema,
+} from "@/lib/purchases/fiscal";
+import { buildPurchaseInMovements } from "@/lib/stock";
 
 const stockAdjustmentSchema = z.object({
   productId: z.string().min(1),
@@ -23,16 +29,26 @@ const stockAdjustmentSchema = z.object({
   }),
 });
 
+const purchaseItemSchema = z.object({
+  productId: z.string().min(1),
+  qty: z.coerce.number().positive(),
+  unitCost: z.coerce.number().min(0),
+  taxRate: z.coerce.number().min(0).max(100).optional(),
+});
+
 const purchaseSchema = z.object({
   supplierId: z.string().min(1),
   invoiceNumber: z.string().min(1).optional(),
   invoiceDate: z.string().min(1).optional(),
   totalAmount: z.coerce.number().positive(),
   purchaseVatAmount: z.coerce.number().min(0).optional(),
+  currencyCode: z.string().min(1).optional(),
+  fiscalDetail: purchaseFiscalInputSchema.nullish(),
   impactCurrentAccount: z.boolean().optional(),
   hasInvoice: z.boolean().optional(),
   validateWithArca: z.boolean().optional(),
   arcaValidation: purchaseValidationInputSchema.optional(),
+  items: z.array(purchaseItemSchema).optional(),
   adjustStock: z.boolean().optional(),
   stockAdjustments: z.array(stockAdjustmentSchema).optional(),
   registerCashOut: z.boolean().optional(),
@@ -53,6 +69,7 @@ export async function GET(req: NextRequest) {
           select: { id: true },
           take: 1,
         },
+        fiscalLines: true,
       },
       orderBy: { createdAt: "desc" },
       take: 50,
@@ -69,6 +86,27 @@ export async function GET(req: NextRequest) {
         subtotal: purchase.subtotal?.toString() ?? null,
         taxes: purchase.taxes?.toString() ?? null,
         total: purchase.total?.toString() ?? null,
+        fiscalVoucherKind: purchase.fiscalVoucherKind,
+        fiscalVoucherType: purchase.fiscalVoucherType,
+        fiscalPointOfSale: purchase.fiscalPointOfSale,
+        fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+        authorizationMode: purchase.authorizationMode,
+        authorizationCode: purchase.authorizationCode,
+        currencyCode: purchase.currencyCode,
+        netTaxed: purchase.netTaxed.toString(),
+        netNonTaxed: purchase.netNonTaxed.toString(),
+        exemptAmount: purchase.exemptAmount.toString(),
+        vatTotal: purchase.vatTotal.toString(),
+        otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+        fiscalLines: purchase.fiscalLines.map((line) => ({
+          id: line.id,
+          type: line.type,
+          jurisdiction: line.jurisdiction,
+          baseAmount: line.baseAmount?.toString() ?? null,
+          rate: line.rate?.toString() ?? null,
+          amount: line.amount.toString(),
+          note: line.note,
+        })),
         paidTotal: purchase.paidTotal?.toString() ?? "0",
         balance: purchase.balance?.toString() ?? "0",
         paymentStatus: purchase.paymentStatus,
@@ -118,15 +156,28 @@ export async function POST(req: NextRequest) {
     }
     const invoiceDate = invoiceDateResult.date ?? undefined;
 
+    const purchaseItems = (body.items ?? []).filter(
+      (item) => Number(item.qty) > 0,
+    );
+    const purchaseItemsVatTotal = purchaseItems.reduce((sum, item) => {
+      const subtotal = item.qty * item.unitCost;
+      return sum + subtotal * ((item.taxRate ?? 0) / 100);
+    }, 0);
+
     const totalAmount = body.totalAmount;
-    const purchaseVatAmount = body.purchaseVatAmount ?? 0;
+    const purchaseVatAmount = body.purchaseVatAmount ?? purchaseItemsVatTotal;
     if (purchaseVatAmount > totalAmount) {
       return NextResponse.json(
         { error: "El IVA compra no puede superar el total" },
         { status: 400 },
       );
     }
-    const subtotalAmount = totalAmount - purchaseVatAmount;
+    const fiscalTotals = buildPurchaseFiscalTotals({
+      totalAmount,
+      purchaseVatAmount,
+      fiscalDetail: body.fiscalDetail ?? null,
+      currencyCode: body.currencyCode,
+    });
 
     const impactCurrentAccount = body.impactCurrentAccount ?? false;
     const adjustStock = STOCK_ENABLED && (body.adjustStock ?? false);
@@ -136,9 +187,9 @@ export async function POST(req: NextRequest) {
       (adjustment) => Number(adjustment.qty) !== 0,
     );
 
-    if (adjustStock && stockAdjustments.length === 0) {
+    if (adjustStock && purchaseItems.length === 0 && stockAdjustments.length === 0) {
       return NextResponse.json(
-        { error: "Agrega items para ajustar stock" },
+        { error: "Agrega productos para ingresar stock" },
         { status: 400 },
       );
     }
@@ -226,17 +277,23 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (adjustStock) {
-      const productIds = Array.from(
-        new Set(stockAdjustments.map((adjustment) => adjustment.productId)),
-      );
+    const productIds = Array.from(
+      new Set([
+        ...purchaseItems.map((item) => item.productId),
+        ...(adjustStock
+          ? stockAdjustments.map((adjustment) => adjustment.productId)
+          : []),
+      ]),
+    );
+
+    if (productIds.length) {
       const products = await prisma.product.findMany({
         where: { organizationId, id: { in: productIds } },
         select: { id: true },
       });
       if (products.length !== productIds.length) {
         return NextResponse.json(
-          { error: "Hay productos invalidos en el ajuste de stock" },
+          { error: "Hay productos invalidos en la compra" },
           { status: 400 },
         );
       }
@@ -276,14 +333,77 @@ export async function POST(req: NextRequest) {
           paymentStatus: impactCurrentAccount ? "UNPAID" : "PAID",
           invoiceNumber,
           invoiceDate,
-          subtotal: subtotalAmount.toFixed(2),
-          taxes: purchaseVatAmount ? purchaseVatAmount.toFixed(2) : undefined,
-          total: totalAmount.toFixed(2),
+          subtotal: fiscalTotals.subtotal.toFixed(2),
+          taxes: fiscalTotals.taxes.toFixed(2),
+          total: fiscalTotals.total.toFixed(2),
+          fiscalVoucherKind: arcaValidationPayload
+            ? mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType)
+            : undefined,
+          fiscalVoucherType: arcaValidationPayload?.voucherType,
+          fiscalPointOfSale: arcaValidationPayload?.pointOfSale,
+          fiscalVoucherNumber: arcaValidationPayload?.voucherNumber,
+          authorizationMode: arcaValidationPayload?.mode,
+          authorizationCode: arcaValidationPayload?.authorizationCode,
+          currencyCode: fiscalTotals.currencyCode,
+          netTaxed: fiscalTotals.netTaxed.toFixed(2),
+          netNonTaxed: fiscalTotals.netNonTaxed.toFixed(2),
+          exemptAmount: fiscalTotals.exemptAmount.toFixed(2),
+          vatTotal: fiscalTotals.vatTotal.toFixed(2),
+          otherTaxesTotal: fiscalTotals.otherTaxesTotal.toFixed(2),
           paidTotal: impactCurrentAccount ? "0.00" : totalAmount.toFixed(2),
           balance: impactCurrentAccount ? totalAmount.toFixed(2) : "0.00",
+          items: purchaseItems.length
+            ? {
+                create: purchaseItems.map((item) => {
+                  const itemSubtotal = item.qty * item.unitCost;
+                  const itemTaxRate = item.taxRate ?? 0;
+                  return {
+                    productId: item.productId,
+                    qty: item.qty.toFixed(3),
+                    unitCost: item.unitCost.toFixed(2),
+                    total: itemSubtotal.toFixed(2),
+                    taxRate: itemTaxRate.toFixed(2),
+                    taxAmount: (itemSubtotal * (itemTaxRate / 100)).toFixed(2),
+                  };
+                }),
+              }
+            : undefined,
+          fiscalLines: fiscalTotals.lines.length
+            ? {
+                create: fiscalTotals.lines.map((line) => ({
+                  type: line.type,
+                  jurisdiction: line.jurisdiction,
+                  baseAmount:
+                    line.baseAmount === null
+                      ? undefined
+                      : line.baseAmount.toFixed(2),
+                  rate:
+                    line.rate === null ? undefined : line.rate.toFixed(4),
+                  amount: line.amount.toFixed(2),
+                  note: line.note,
+                })),
+              }
+            : undefined,
         },
-        include: { supplier: true, items: true },
+        include: { supplier: true, items: true, fiscalLines: true },
       });
+
+      if (purchaseItems.length) {
+        const latestCostsByProductId = new Map<string, number>();
+        for (const item of purchaseItems) {
+          latestCostsByProductId.set(item.productId, item.unitCost);
+        }
+
+        await Promise.all(
+          Array.from(latestCostsByProductId.entries()).map(
+            ([productId, unitCost]) =>
+              tx.product.updateMany({
+                where: { id: productId, organizationId },
+                data: { cost: unitCost.toFixed(2) },
+              }),
+          ),
+        );
+      }
 
       if (impactCurrentAccount) {
         await tx.currentAccountEntry.create({
@@ -301,7 +421,21 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      if (adjustStock && stockAdjustments.length) {
+      if (adjustStock && purchaseInvoice.items.length) {
+        const stockMovements = buildPurchaseInMovements({
+          organizationId,
+          occurredAt: invoiceDate ?? new Date(),
+          note: `Ingreso por compra ${purchaseInvoice.invoiceNumber ?? purchaseInvoice.id}`,
+          items: purchaseInvoice.items.map((item) => ({
+            id: item.id,
+            productId: item.productId,
+            qty: Number(item.qty),
+          })),
+        });
+        if (stockMovements.length) {
+          await tx.stockMovement.createMany({ data: stockMovements });
+        }
+      } else if (adjustStock && stockAdjustments.length) {
         await tx.stockMovement.createMany({
           data: stockAdjustments.map((adjustment) => ({
             organizationId,
@@ -360,6 +494,27 @@ export async function POST(req: NextRequest) {
       subtotal: purchase.subtotal?.toString() ?? null,
       taxes: purchase.taxes?.toString() ?? null,
       total: purchase.total?.toString() ?? null,
+      fiscalVoucherKind: purchase.fiscalVoucherKind,
+      fiscalVoucherType: purchase.fiscalVoucherType,
+      fiscalPointOfSale: purchase.fiscalPointOfSale,
+      fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+      authorizationMode: purchase.authorizationMode,
+      authorizationCode: purchase.authorizationCode,
+      currencyCode: purchase.currencyCode,
+      netTaxed: purchase.netTaxed.toString(),
+      netNonTaxed: purchase.netNonTaxed.toString(),
+      exemptAmount: purchase.exemptAmount.toString(),
+      vatTotal: purchase.vatTotal.toString(),
+      otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+      fiscalLines: purchase.fiscalLines.map((line) => ({
+        id: line.id,
+        type: line.type,
+        jurisdiction: line.jurisdiction,
+        baseAmount: line.baseAmount?.toString() ?? null,
+        rate: line.rate?.toString() ?? null,
+        amount: line.amount.toString(),
+        note: line.note,
+      })),
       paidTotal: purchase.paidTotal?.toString() ?? "0",
       balance: purchase.balance?.toString() ?? "0",
       paymentStatus: purchase.paymentStatus,
@@ -367,7 +522,7 @@ export async function POST(req: NextRequest) {
       status: purchase.status,
       hasInvoice,
       impactsAccount: impactCurrentAccount,
-      adjustedStock: false,
+      adjustedStock: adjustStock,
       cashOutRegistered: Boolean(registerCashOut && cashOutAccount),
       arcaValidationStatus:
         arcaValidation?.status ?? purchase.arcaValidationStatus,
@@ -386,6 +541,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: "No autorizado" },
         { status: authErrorStatus(error) },
+      );
+    }
+    if (
+      error instanceof Error &&
+      error.message.startsWith("PURCHASE_FISCAL_")
+    ) {
+      const fiscalErrors: Record<string, string> = {
+        PURCHASE_FISCAL_VAT_EXCEEDS_TOTAL:
+          "El IVA compra no puede superar el total",
+        PURCHASE_FISCAL_TOTAL_MISMATCH:
+          "El detalle fiscal no coincide con el total de la compra",
+      };
+      return NextResponse.json(
+        { error: fiscalErrors[error.message] ?? "Detalle fiscal invalido" },
+        { status: 400 },
       );
     }
     const mapped = mapArcaValidationError(error);

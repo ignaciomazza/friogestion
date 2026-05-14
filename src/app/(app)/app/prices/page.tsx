@@ -37,7 +37,7 @@ type PriceListOption = {
 
 type StockPrice = {
   priceListId: string;
-  price: string;
+  price: string | null;
   percentage: string | null;
 };
 
@@ -153,7 +153,6 @@ type StockRowChangeState = {
   pricesChanged: boolean;
   adjustment: number;
   adjustmentChanged: boolean;
-  hasPercentagesWithoutCost: boolean;
   hasUsdCostWithoutRate: boolean;
   hasRowChanges: boolean;
 };
@@ -485,13 +484,6 @@ const getStockRowChangeState = (
       normalizePercentageNumber(draft.percentages[priceList.id]) !==
       normalizePercentageNumber(derivedPercentages[priceList.id]),
   );
-  const hasDraftPercentages = priceLists.some(
-    (priceList) => parseNumber(draft.percentages[priceList.id]) !== null,
-  );
-  const hasPercentagesWithoutCost =
-    effectiveCost === null &&
-    hasDraftPercentages &&
-    (costChanged || costUsdChanged || percentagesChanged);
   const hasUsdCostWithoutRate =
     currentCostUsd !== null &&
     latestUsdRate === null &&
@@ -527,7 +519,6 @@ const getStockRowChangeState = (
     pricesChanged,
     adjustment,
     adjustmentChanged,
-    hasPercentagesWithoutCost,
     hasUsdCostWithoutRate,
     hasRowChanges:
       costChanged ||
@@ -535,8 +526,7 @@ const getStockRowChangeState = (
       percentagesChanged ||
       pricesChanged ||
       adjustmentChanged ||
-      hasUsdCostWithoutRate ||
-      hasPercentagesWithoutCost,
+      hasUsdCostWithoutRate,
   };
 };
 
@@ -561,13 +551,6 @@ const buildStockSaveJob = (
     return {
       ok: false,
       error: "Configura la cotizacion interna USD -> ARS para usar costo USD",
-    };
-  }
-
-  if (rowState.hasPercentagesWithoutCost) {
-    return {
-      ok: false,
-      error: "Carga costo ARS o costo USD para calcular precios por porcentaje",
     };
   }
 
@@ -1473,7 +1456,7 @@ export default function PricesPage() {
           );
           const formattedPrice =
             update.price === null ? null : update.price.toFixed(2);
-          if (formattedPrice !== null) {
+          if (formattedPrice !== null || update.percentage !== null) {
             nextPrices.push({
               priceListId: update.priceListId,
               price: formattedPrice,

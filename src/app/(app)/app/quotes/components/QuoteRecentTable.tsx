@@ -97,12 +97,12 @@ export function QuoteRecentTable({
   };
 
   return (
-    <div className="card space-y-5 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="card space-y-5 p-4 sm:p-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h3 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
           Presupuestos recientes
         </h3>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 sm:justify-end">
           {quotes.length === 0 ? (
             <span className="pill border border-emerald-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
               0 resultados
@@ -113,7 +113,7 @@ export function QuoteRecentTable({
             </span>
           )}
           <select
-            className="input cursor-pointer text-xs"
+            className="input w-full cursor-pointer text-xs sm:w-auto"
             value={sortOrder}
             onChange={(event) => onSortOrderChange(event.target.value)}
             aria-label="Ordenar presupuestos"
@@ -123,8 +123,8 @@ export function QuoteRecentTable({
           </select>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
+      <div className="table-scroll">
+        <table className="w-full min-w-[900px] text-left text-xs">
           <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
             <tr>
               <th className="py-2 pr-4">Presupuesto</th>
@@ -164,8 +164,8 @@ export function QuoteRecentTable({
                         {quote.quoteNumber ?? "-"}
                       </td>
                       <td className="py-2 pr-4 text-zinc-900">
-                        <div className="space-y-0.5">
-                          <p>{quote.customerName}</p>
+                        <div className="max-w-[220px] space-y-0.5">
+                          <p className="truncate">{quote.customerName}</p>
                           {quote.priceListName ? (
                             <p className="text-[11px] text-zinc-500">
                               Lista: {quote.priceListName}
@@ -196,7 +196,7 @@ export function QuoteRecentTable({
                         {total ? formatCurrencyARS(total) : "-"}
                       </td>
                       <td className="py-2 pr-4">
-                        <div className="flex flex-wrap items-center justify-end gap-3">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
                           <a
                             className="btn text-xs transition-transform hover:-translate-y-0.5"
                             href={`/api/pdf/quote?id=${quote.id}`}
@@ -324,8 +324,8 @@ export function QuoteRecentTable({
                                     </div>
                                   </div>
 
-                                  <div className="overflow-x-auto">
-                                    <table className="w-full text-left text-xs">
+                                  <div className="table-scroll">
+                                    <table className="w-full min-w-[760px] text-left text-xs">
                                       <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
                                         <tr>
                                           <th className="py-2 pr-3">Producto</th>

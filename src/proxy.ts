@@ -10,14 +10,13 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const isSharedPdfRequest =
-    req.nextUrl.searchParams.has("shareToken") &&
-    (pathname === "/api/pdf/quote" ||
-      pathname === "/api/pdf/sale" ||
-      /^\/api\/fiscal-invoices\/[^/]+\/pdf$/.test(pathname) ||
-      /^\/api\/credit-notes\/[^/]+\/pdf$/.test(pathname));
+  const isPdfEndpointRequest =
+    pathname === "/api/pdf/quote" ||
+    pathname === "/api/pdf/sale" ||
+    /^\/api\/fiscal-invoices\/[^/]+\/pdf$/.test(pathname) ||
+    /^\/api\/credit-notes\/[^/]+\/pdf$/.test(pathname);
 
-  if (isSharedPdfRequest) {
+  if (isPdfEndpointRequest) {
     return NextResponse.next();
   }
 

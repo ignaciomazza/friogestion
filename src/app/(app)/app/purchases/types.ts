@@ -33,6 +33,27 @@ export type PurchaseRow = {
   subtotal?: string | null;
   taxes?: string | null;
   total: string | null;
+  fiscalVoucherKind?: string | null;
+  fiscalVoucherType?: number | null;
+  fiscalPointOfSale?: number | null;
+  fiscalVoucherNumber?: number | null;
+  authorizationMode?: string | null;
+  authorizationCode?: string | null;
+  currencyCode?: string | null;
+  netTaxed?: string | null;
+  netNonTaxed?: string | null;
+  exemptAmount?: string | null;
+  vatTotal?: string | null;
+  otherTaxesTotal?: string | null;
+  fiscalLines?: Array<{
+    id: string;
+    type: string;
+    jurisdiction: string | null;
+    baseAmount: string | null;
+    rate: string | null;
+    amount: string;
+    note: string | null;
+  }>;
   paidTotal?: string | null;
   balance?: string | null;
   paymentStatus?: string | null;

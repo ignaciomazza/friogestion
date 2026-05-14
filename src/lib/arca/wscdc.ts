@@ -33,6 +33,20 @@ export type PurchaseValidationResult = {
   status: PurchaseValidationStatus;
   message: string;
   raw: unknown;
+  comprobante: PurchaseValidationVoucherSnapshot | null;
+};
+
+export type PurchaseValidationVoucherSnapshot = {
+  mode: string | null;
+  issuerTaxId: string | null;
+  pointOfSale: number | null;
+  voucherType: number | null;
+  voucherNumber: number | null;
+  voucherDate: string | null;
+  totalAmount: number | null;
+  authorizationCode: string | null;
+  receiverDocType: string | null;
+  receiverDocNumber: string | null;
 };
 
 function normalizeKey(value: string) {
@@ -53,6 +67,28 @@ function asString(value: unknown) {
     return String(value);
   }
   return null;
+}
+
+function asNumber(value: unknown) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.replace(",", ".").trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeArcaDate(value: unknown) {
+  const text = asString(value);
+  if (!text) return null;
+  const digits = text.replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  const year = digits.slice(0, 4);
+  const month = digits.slice(4, 6);
+  const day = digits.slice(6, 8);
+  return `${year}-${month}-${day}`;
 }
 
 function extractValueByKeys(value: unknown, keys: string[], depth = 0): unknown {
@@ -100,8 +136,7 @@ function collectMessages(value: unknown, depth = 0): string[] {
     }
     return messages;
   }
-  const text = asString(value);
-  return text ? [text] : [];
+  return [];
 }
 
 function toDateNumber(value: Date) {
@@ -118,7 +153,49 @@ function normalizeResultWord(value: string | null) {
     .trim();
 }
 
+function normalizeVoucherSnapshot(
+  payload: unknown,
+): PurchaseValidationVoucherSnapshot | null {
+  const cmpResp = extractValueByKeys(payload, ["CmpResp", "cmpResp"]);
+  if (!cmpResp || typeof cmpResp !== "object") {
+    return null;
+  }
+
+  const issuerTaxId = asString(
+    extractValueByKeys(cmpResp, ["CuitEmisor", "cuitEmisor"]),
+  )
+    ?.replace(/\D/g, "")
+    .trim();
+  const receiverDocNumber = asString(
+    extractValueByKeys(cmpResp, ["DocNroReceptor", "docNroReceptor"]),
+  )
+    ?.replace(/\D/g, "")
+    .trim();
+
+  return {
+    mode: asString(extractValueByKeys(cmpResp, ["CbteModo", "cbteModo"])),
+    issuerTaxId: issuerTaxId || null,
+    pointOfSale: asNumber(extractValueByKeys(cmpResp, ["PtoVta", "ptoVta"])),
+    voucherType: asNumber(extractValueByKeys(cmpResp, ["CbteTipo", "cbteTipo"])),
+    voucherNumber: asNumber(extractValueByKeys(cmpResp, ["CbteNro", "cbteNro"])),
+    voucherDate: normalizeArcaDate(
+      extractValueByKeys(cmpResp, ["CbteFch", "cbteFch"]),
+    ),
+    totalAmount: asNumber(extractValueByKeys(cmpResp, ["ImpTotal", "impTotal"])),
+    authorizationCode:
+      asString(
+        extractValueByKeys(cmpResp, ["CodAutorizacion", "codAutorizacion"]),
+      ) ?? null,
+    receiverDocType:
+      asString(
+        extractValueByKeys(cmpResp, ["DocTipoReceptor", "docTipoReceptor"]),
+      ) ?? null,
+    receiverDocNumber: receiverDocNumber || null,
+  };
+}
+
 export function normalizeWscdcResponse(payload: unknown): PurchaseValidationResult {
+  const comprobante = normalizeVoucherSnapshot(payload);
   const resultWord = normalizeResultWord(
     asString(
       extractValueByKeys(payload, [
@@ -158,7 +235,7 @@ export function normalizeWscdcResponse(payload: unknown): PurchaseValidationResu
     resultWord.includes("APROB") ||
     resultWord.includes("AUTORIZ")
   ) {
-    return { status: "AUTHORIZED", message, raw: payload };
+    return { status: "AUTHORIZED", message, raw: payload, comprobante };
   }
 
   if (
@@ -166,7 +243,7 @@ export function normalizeWscdcResponse(payload: unknown): PurchaseValidationResu
     resultWord.includes("RECHAZ") ||
     resultWord.includes("INVALID")
   ) {
-    return { status: "REJECTED", message, raw: payload };
+    return { status: "REJECTED", message, raw: payload, comprobante };
   }
 
   if (
@@ -174,17 +251,18 @@ export function normalizeWscdcResponse(payload: unknown): PurchaseValidationResu
     resultWord.includes("OBS") ||
     messages.some((item) => normalizeResultWord(item).includes("OBS"))
   ) {
-    return { status: "OBSERVED", message, raw: payload };
+    return { status: "OBSERVED", message, raw: payload, comprobante };
   }
 
   if (!resultWord && messages.length > 0) {
-    return { status: "OBSERVED", message, raw: payload };
+    return { status: "OBSERVED", message, raw: payload, comprobante };
   }
 
   return {
     status: "ERROR",
     message: message || "No se pudo interpretar la respuesta de ARCA.",
     raw: payload,
+    comprobante,
   };
 }
 
