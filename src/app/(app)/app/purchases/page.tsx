@@ -1,6 +1,6 @@
 "use client";
 
-import type { FormEvent, KeyboardEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
@@ -912,6 +912,11 @@ export default function PurchasesPage() {
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   const [isQrScannerActive, setIsQrScannerActive] = useState(false);
   const [qrScannerError, setQrScannerError] = useState<string | null>(null);
+  const [qrVideoDevices, setQrVideoDevices] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
+  const [qrSelectedDeviceId, setQrSelectedDeviceId] = useState("");
+  const [isImportingQrFromImage, setIsImportingQrFromImage] = useState(false);
   const [isPortalReady, setIsPortalReady] = useState(false);
   const [highlightedFields, setHighlightedFields] = useState<
     Partial<Record<PurchaseArcaMismatchField | "totals.vatAmount" | "totals.netTaxed", true>>
@@ -927,6 +932,7 @@ export default function PurchasesPage() {
   const fieldHighlightTimeoutRef = useRef<number | null>(null);
   const sectionHighlightTimeoutRef = useRef<number | null>(null);
   const qrVideoRef = useRef<HTMLVideoElement | null>(null);
+  const qrImageInputRef = useRef<HTMLInputElement | null>(null);
   const qrStreamRef = useRef<MediaStream | null>(null);
   const qrScannerIntervalRef = useRef<number | null>(null);
   const qrScannerBusyRef = useRef(false);
@@ -1084,10 +1090,11 @@ export default function PurchasesPage() {
         }
 
         setQrScannerError(null);
+        const videoConstraint: MediaTrackConstraints = qrSelectedDeviceId
+          ? { deviceId: { exact: qrSelectedDeviceId } }
+          : { facingMode: { ideal: "environment" } };
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: "environment" },
-          },
+          video: videoConstraint,
           audio: false,
         });
         qrStreamRef.current = stream;
@@ -1100,6 +1107,26 @@ export default function PurchasesPage() {
 
         video.srcObject = stream;
         await video.play();
+
+        if (navigator.mediaDevices?.enumerateDevices) {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const nextVideoDevices = devices
+            .filter((device) => device.kind === "videoinput")
+            .map((device, index) => ({
+              id: device.deviceId,
+              label: device.label || `Camara ${index + 1}`,
+            }));
+          setQrVideoDevices(nextVideoDevices);
+          if (!qrSelectedDeviceId && nextVideoDevices.length > 0) {
+            const preferred =
+              nextVideoDevices.find((device) =>
+                /(back|rear|environment|trasera|posterior)/i.test(device.label),
+              ) ?? nextVideoDevices[0];
+            if (preferred) {
+              setQrSelectedDeviceId(preferred.id);
+            }
+          }
+        }
 
         const detectorCtor = (
           window as Window & {
@@ -1179,7 +1206,18 @@ export default function PurchasesPage() {
             qrScannerBusyRef.current = false;
           }
         }, 360);
-      } catch {
+      } catch (error) {
+        if (qrSelectedDeviceId) {
+          setQrSelectedDeviceId("");
+          setQrScannerError("No se pudo abrir esa camara. Probando otra...");
+          return;
+        }
+        if (error instanceof DOMException && error.name === "NotAllowedError") {
+          setQrScannerError(
+            "Permite el acceso a camara en el navegador para escanear QR.",
+          );
+          return;
+        }
         setQrScannerError("No se pudo abrir la camara.");
       }
     };
@@ -1191,7 +1229,7 @@ export default function PurchasesPage() {
     return () => {
       stopQrScanner();
     };
-  }, [isQrScannerOpen]);
+  }, [isQrScannerOpen, qrSelectedDeviceId]);
 
   useEffect(() => {
     if (!isSupplierOpen) return;
@@ -1930,6 +1968,75 @@ export default function PurchasesPage() {
       window.prompt("Escanea y pega el texto/URL del QR de ARCA")?.trim() ?? "";
     if (!qrText) return;
     await importPurchaseFromQrText(qrText);
+  };
+
+  const decodeQrFromImageFile = async (file: File) => {
+    const imageUrl = URL.createObjectURL(file);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error("IMAGE_LOAD_ERROR"));
+        img.src = imageUrl;
+      });
+
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return null;
+
+      const sourceWidth = image.naturalWidth || image.width;
+      const sourceHeight = image.naturalHeight || image.height;
+      if (!sourceWidth || !sourceHeight) return null;
+
+      const maxSide = 2200;
+      const baseScale = Math.min(1, maxSide / Math.max(sourceWidth, sourceHeight));
+      const scaleCandidates = [1, 0.8, 0.6, 0.45, 0.3];
+      for (const scaleFactor of scaleCandidates) {
+        const scale = baseScale * scaleFactor;
+        const width = Math.max(240, Math.round(sourceWidth * scale));
+        const height = Math.max(240, Math.round(sourceHeight * scale));
+        canvas.width = width;
+        canvas.height = height;
+        context.drawImage(image, 0, 0, width, height);
+        const imageData = context.getImageData(0, 0, width, height);
+        const decoded = jsQR(imageData.data, width, height, {
+          inversionAttempts: "attemptBoth",
+        });
+        const rawValue = decoded?.data?.trim();
+        if (rawValue) return rawValue;
+      }
+
+      return null;
+    } finally {
+      URL.revokeObjectURL(imageUrl);
+    }
+  };
+
+  const handleImportQrFromImage = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsImportingQrFromImage(true);
+    setQrScannerError(null);
+    try {
+      const rawValue = await decodeQrFromImageFile(file);
+      if (!rawValue) {
+        setQrScannerError(
+          "No se detecto un QR en la imagen. Intenta con otra foto mas nitida.",
+        );
+        return;
+      }
+      setIsQrScannerOpen(false);
+      stopQrScanner();
+      await importQrTextHandlerRef.current(rawValue);
+    } catch {
+      setQrScannerError("No se pudo leer la imagen seleccionada.");
+    } finally {
+      setIsImportingQrFromImage(false);
+    }
   };
 
   const openQrScanner = () => {
@@ -5155,6 +5262,23 @@ export default function PurchasesPage() {
                   </button>
                 </div>
 
+                {qrVideoDevices.length > 1 ? (
+                  <label className="field-stack mt-3">
+                    <span className="input-label">Camara</span>
+                    <select
+                      className="input cursor-pointer"
+                      value={qrSelectedDeviceId}
+                      onChange={(event) => setQrSelectedDeviceId(event.target.value)}
+                    >
+                      {qrVideoDevices.map((device) => (
+                        <option key={`qr-device-${device.id}`} value={device.id}>
+                          {device.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
                 <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-900/95">
                   <video
                     ref={qrVideoRef}
@@ -5174,7 +5298,30 @@ export default function PurchasesPage() {
                   </p>
                 )}
 
+                {isImportingQrFromImage ? (
+                  <p className="mt-2 text-xs text-zinc-500">
+                    Procesando imagen para detectar QR...
+                  </p>
+                ) : null}
+
+                <input
+                  ref={qrImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={handleImportQrFromImage}
+                />
+
                 <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full text-xs sm:w-auto"
+                    onClick={() => qrImageInputRef.current?.click()}
+                    disabled={isImportingQr || isImportingQrFromImage}
+                  >
+                    Foto QR
+                  </button>
                   <button
                     type="button"
                     className="btn w-full text-xs sm:w-auto"
@@ -5182,6 +5329,7 @@ export default function PurchasesPage() {
                       closeQrScanner();
                       await handleImportQrFromPrompt();
                     }}
+                    disabled={isImportingQr || isImportingQrFromImage}
                   >
                     Pegar texto QR
                   </button>
