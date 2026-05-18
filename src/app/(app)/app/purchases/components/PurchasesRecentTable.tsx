@@ -11,6 +11,17 @@ import {
 } from "../constants";
 import type { PurchaseRow } from "../types";
 
+const formatPurchaseDate = (value: string | null | undefined) => {
+  if (!value) return "-";
+  const normalized = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (normalized) {
+    return `${normalized[3]}/${normalized[2]}/${normalized[1]}`;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("es-AR");
+};
+
 type PurchasesRecentTableProps = {
   purchases: PurchaseRow[];
   sortOrder: string;
@@ -87,9 +98,7 @@ export function PurchasesRecentTable({
                       {purchase.supplierName}
                     </td>
                     <td className="py-3 pr-4 whitespace-nowrap text-zinc-600">
-                      {date
-                        ? new Date(date).toLocaleDateString("es-AR")
-                        : "-"}
+                      {formatPurchaseDate(date)}
                     </td>
                     <td className="py-3 pr-4">
                       <span

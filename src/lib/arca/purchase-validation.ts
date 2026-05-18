@@ -106,6 +106,52 @@ const parseVoucherNumber = (value: unknown) => {
   return null;
 };
 
+const parseVoucherDate = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const parseParts = (year: number, month: number, day: number) => {
+    const date = new Date(year, month - 1, day, 12, 0, 0, 0);
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month - 1 ||
+      date.getDate() !== day
+    ) {
+      return null;
+    }
+    return date;
+  };
+
+  const compact = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compact) {
+    return parseParts(Number(compact[1]), Number(compact[2]), Number(compact[3]));
+  }
+
+  const dashed = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dashed) {
+    return parseParts(Number(dashed[1]), Number(dashed[2]), Number(dashed[3]));
+  }
+
+  const slashed = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (slashed) {
+    return parseParts(Number(slashed[3]), Number(slashed[2]), Number(slashed[1]));
+  }
+
+  const fallback = new Date(trimmed);
+  if (Number.isNaN(fallback.getTime())) {
+    return null;
+  }
+  return new Date(
+    fallback.getFullYear(),
+    fallback.getMonth(),
+    fallback.getDate(),
+    12,
+    0,
+    0,
+    0,
+  );
+};
+
 export function buildPurchaseValidationPayload(
   input: unknown,
   defaults?: {
@@ -170,8 +216,8 @@ export function buildPurchaseValidationPayload(
 export function toWscdcValidationInput(
   input: PurchaseValidationPayload,
 ): PurchaseValidationInput {
-  const voucherDate = new Date(input.voucherDate);
-  if (Number.isNaN(voucherDate.getTime())) {
+  const voucherDate = parseVoucherDate(input.voucherDate);
+  if (!voucherDate) {
     throw new Error("PURCHASE_VALIDATION_DATE_INVALID");
   }
 

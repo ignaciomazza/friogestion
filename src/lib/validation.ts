@@ -13,11 +13,13 @@ export function parseOptionalDate(value?: string | null): DateParseResult {
     const year = Number(dateOnlyMatch[1]);
     const month = Number(dateOnlyMatch[2]);
     const day = Number(dateOnlyMatch[3]);
-    const parsedDateOnly = new Date(year, month - 1, day);
+    // Use UTC midday for date-only inputs to avoid timezone drift
+    // when serializing to ISO and rendering in clients across timezones.
+    const parsedDateOnly = new Date(Date.UTC(year, month - 1, day, 12));
     if (
-      parsedDateOnly.getFullYear() !== year ||
-      parsedDateOnly.getMonth() !== month - 1 ||
-      parsedDateOnly.getDate() !== day
+      parsedDateOnly.getUTCFullYear() !== year ||
+      parsedDateOnly.getUTCMonth() !== month - 1 ||
+      parsedDateOnly.getUTCDate() !== day
     ) {
       return { date: null, error: "DATE_INVALID" };
     }

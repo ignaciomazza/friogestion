@@ -2,18 +2,21 @@
 
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import {
+  ArrowPathIcon,
   ChevronDownIcon,
   CheckIcon,
+  CurrencyDollarIcon,
   ExclamationTriangleIcon,
+  PencilSquareIcon,
   PlusIcon,
   TrashIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
-import { canCancelSupplierPayments } from "@/lib/auth/rbac";
 import { STOCK_ENABLED } from "@/lib/features";
 import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
@@ -28,7 +31,6 @@ import {
   type PurchaseArcaVoucherSnapshot,
   type PurchaseTotalsSource,
 } from "@/lib/purchases/new-purchase";
-import { SupplierPaymentsPanel } from "./components/SupplierPaymentsPanel";
 import type { ProductOption, PurchaseRow, SupplierOption } from "./types";
 import {
   formatProductLabel,
@@ -53,19 +55,12 @@ type AccountOption = {
   isActive?: boolean;
 };
 
-type CurrencyOption = {
-  id: string;
-  code: string;
-  name: string;
-  symbol?: string | null;
-  isDefault: boolean;
-};
-
 type PurchaseProductForm = {
   productId: string;
   productSearch: string;
   qty: string;
   unitCost: string;
+  discountPercent: string;
   taxRate: string;
 };
 
@@ -154,11 +149,75 @@ type PreparedPurchase = {
   fiscalDifference: number;
 };
 
+type PurchaseQrImportResponse = {
+  issuerTaxId: string;
+  pointOfSale: number;
+  voucherType: number;
+  voucherKind: "A" | "B" | "C" | null;
+  voucherNumber: number;
+  invoiceNumber: string;
+  voucherDate: string;
+  totalAmount: number;
+  authorizationCode: string | null;
+  warning?: string | null;
+  arcaValidation: Record<string, string | number>;
+};
+
+type PurchaseArcaRevalidationFeedback = {
+  purchaseId: string;
+  status: string;
+  message: string;
+  checkedAt?: string | null;
+  request?: Record<string, unknown> | null;
+  rawResponse?: unknown;
+  details: Array<{
+    label: string;
+    value: string;
+  }>;
+  hints: string[];
+};
+
+type PurchaseEditResponse = {
+  id: string;
+  supplier: SupplierOption;
+  invoiceNumber: string | null;
+  invoiceDate: string | null;
+  total: string | null;
+  taxes: string | null;
+  netTaxed: string | null;
+  netNonTaxed: string | null;
+  exemptAmount: string | null;
+  vatTotal: string | null;
+  otherTaxesTotal: string | null;
+  fiscalVoucherKind: string | null;
+  fiscalVoucherType: number | null;
+  authorizationCode: string | null;
+  items: Array<{
+    productId: string;
+    qty: string;
+    unitCost: string;
+    taxRate: string | null;
+    product: ProductOption;
+  }>;
+  fiscalLines: Array<{
+    type: PurchaseFiscalLineType;
+    jurisdiction: string | null;
+    baseAmount: string | null;
+    rate: string | null;
+    amount: string;
+    note: string | null;
+  }>;
+  impactsAccount: boolean;
+  confirmedAllocatedTotal: string;
+  hasStockMovements: boolean;
+};
+
 const emptyPurchaseProduct = (): PurchaseProductForm => ({
   productId: "",
   productSearch: "",
   qty: "1",
   unitCost: "",
+  discountPercent: "0",
   taxRate: "21",
 });
 
@@ -211,6 +270,318 @@ const formatDateInputLabel = (value: string) => {
   if (!year || !month || !day) return value;
   return `${day}/${month}/${year}`;
 };
+
+const toCalendarDateInput = (value: string | null | undefined) => {
+  if (!value) return "";
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/\//g, "-");
+  const dashedMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (dashedMatch) {
+    return `${dashedMatch[1]}-${dashedMatch[2]}-${dashedMatch[3]}`;
+  }
+  const compactMatch = normalized.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (compactMatch) {
+    return `${compactMatch[1]}-${compactMatch[2]}-${compactMatch[3]}`;
+  }
+  return "";
+};
+
+const formatCalendarDate = (value: string | null | undefined) => {
+  const normalized = toCalendarDateInput(value);
+  if (!normalized) return "-";
+  return formatDateInputLabel(normalized);
+};
+
+const formatTimestampDate = (value: string | null | undefined) => {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("es-AR");
+};
+
+const toCalendarDateTimestamp = (value: string | null | undefined) => {
+  const normalized = toCalendarDateInput(value);
+  if (!normalized) return Number.NaN;
+  const [year, month, day] = normalized.split("-").map(Number);
+  if (!year || !month || !day) return Number.NaN;
+  return new Date(year, month - 1, day, 12, 0, 0, 0).getTime();
+};
+
+const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode =>
+  purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK";
+
+const formatPurchaseDateLabel = (purchase: PurchaseRow) =>
+  purchase.invoiceDate
+    ? formatCalendarDate(purchase.invoiceDate)
+    : formatTimestampDate(purchase.createdAt);
+
+const normalizeArcaText = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const collectArcaMessages = (value: unknown, depth = 0): string[] => {
+  if (depth > 6 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectArcaMessages(item, depth + 1));
+  }
+  if (typeof value !== "object") {
+    if (typeof value === "string" && value.trim()) return [value.trim()];
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  const messages: string[] = [];
+  for (const [key, raw] of Object.entries(record)) {
+    const normalized = normalizeArcaText(key);
+    if (
+      normalized.includes("msg") ||
+      normalized.includes("observ") ||
+      normalized.includes("error") ||
+      normalized.includes("descripcion")
+    ) {
+      if (typeof raw === "string" && raw.trim()) {
+        messages.push(raw.trim());
+      }
+    }
+    messages.push(...collectArcaMessages(raw, depth + 1));
+  }
+  return messages;
+};
+
+const buildArcaHints = (messages: string[]) => {
+  const text = normalizeArcaText(messages.join(" "));
+  const hints: string[] = [];
+  if (text.includes("cuit")) {
+    hints.push("Revisa el CUIT del proveedor y que coincida con el comprobante.");
+  }
+  if (text.includes("punto") || text.includes("ptovta") || text.includes("vta")) {
+    hints.push("Verifica el punto de venta del comprobante.");
+  }
+  if (text.includes("fecha") || text.includes("cbtefch")) {
+    hints.push("Confirma la fecha del comprobante.");
+  }
+  if (text.includes("importe") || text.includes("total") || text.includes("imptotal")) {
+    hints.push("Corrobora que el total cargado sea igual al del comprobante.");
+  }
+  if (text.includes("cae") || text.includes("codautorizacion")) {
+    hints.push("Valida que el CAE esté completo y sin errores.");
+  }
+  if (text.includes("tipo") || text.includes("cbtetipo")) {
+    hints.push("Revisa el tipo de comprobante (A/B/C).");
+  }
+  if (text.includes("numero") || text.includes("cbtenro")) {
+    hints.push("Verifica el número de comprobante.");
+  }
+  return Array.from(new Set(hints));
+};
+
+const ARCA_DETAIL_LABELS: Array<{ includes: string[]; label: string }> = [
+  { includes: ["cae", "caea", "codautorizacion"], label: "Código CAE/CAEA" },
+  { includes: ["cbtemodo", "modo"], label: "Modo de comprobante" },
+  { includes: ["cbtetipo"], label: "Tipo de comprobante" },
+  { includes: ["ptovta", "puntoventa"], label: "Punto de venta" },
+  { includes: ["cbtenro", "numerocomprobante"], label: "Número de comprobante" },
+  { includes: ["cbtefch"], label: "Fecha del comprobante" },
+  { includes: ["imptotal"], label: "Importe total" },
+  { includes: ["cuitemisor", "issuertaxid"], label: "CUIT emisor" },
+  {
+    includes: ["doctiporeceptor", "tipodocreceptor"],
+    label: "Tipo de documento receptor",
+  },
+  {
+    includes: ["docnroreceptor", "nrodocreceptor"],
+    label: "Documento receptor",
+  },
+  { includes: ["resultado"], label: "Resultado" },
+  { includes: ["observacion", "observaciones"], label: "Observación ARCA" },
+  { includes: ["descripcion", "detalle"], label: "Detalle ARCA" },
+];
+
+const resolveArcaDetailLabel = (normalizedKey: string) => {
+  const match = ARCA_DETAIL_LABELS.find((item) =>
+    item.includes.some((candidate) => normalizedKey.includes(candidate)),
+  );
+  return match?.label ?? null;
+};
+
+const formatArcaReceiverDocTypeLabel = (value: unknown) => {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) return String(value ?? "-");
+  const labels: Record<number, string> = {
+    80: "CUIT",
+    86: "CUIL",
+    87: "CDI",
+    89: "LE",
+    90: "LC",
+    94: "Pasaporte",
+    96: "DNI",
+    99: "Consumidor final",
+  };
+  const label = labels[numeric];
+  return label ? `${label} (${numeric})` : `Tipo ${numeric}`;
+};
+
+const formatArcaAuthorizationModeLabel = (value: unknown) => {
+  const mode = String(value ?? "").trim().toUpperCase();
+  if (!mode) return "-";
+  if (mode === "CAE" || mode === "E") return "CAE";
+  if (mode === "CAEA" || mode === "A") return "CAEA";
+  return mode;
+};
+
+const formatArcaDetailValue = (label: string, rawValue: unknown) => {
+  if (rawValue === null || rawValue === undefined) return null;
+  if (label === "Tipo de comprobante") {
+    return formatArcaVoucherTypeLabel(rawValue);
+  }
+  if (label === "Tipo de documento receptor") {
+    return formatArcaReceiverDocTypeLabel(rawValue);
+  }
+  if (label === "Modo de comprobante") {
+    return formatArcaAuthorizationModeLabel(rawValue);
+  }
+  if (label === "Importe total") {
+    return formatArcaRequestAmount(rawValue);
+  }
+  if (label === "Fecha del comprobante") {
+    return formatArcaRequestDate(rawValue);
+  }
+  if (typeof rawValue === "string") {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return null;
+    const dateMatch = /^(\d{4})(\d{2})(\d{2})$/.exec(trimmed);
+    if (dateMatch) {
+      return `${dateMatch[3]}/${dateMatch[2]}/${dateMatch[1]}`;
+    }
+    return trimmed;
+  }
+  if (typeof rawValue === "number" || typeof rawValue === "bigint") {
+    return String(rawValue);
+  }
+  return null;
+};
+
+const collectArcaFriendlyDetails = (
+  value: unknown,
+  depth = 0,
+): Array<{ label: string; value: string }> => {
+  if (depth > 6 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectArcaFriendlyDetails(item, depth + 1));
+  }
+  if (typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const details: Array<{ label: string; value: string }> = [];
+  for (const [key, raw] of Object.entries(record)) {
+    const normalizedKey = normalizeArcaText(key).replace(/[^a-z0-9]/g, "");
+    const detailLabel = resolveArcaDetailLabel(normalizedKey);
+    const detailValue = detailLabel ? formatArcaDetailValue(detailLabel, raw) : null;
+    if (detailLabel && detailValue) {
+      details.push({ label: detailLabel, value: detailValue });
+    }
+    details.push(...collectArcaFriendlyDetails(raw, depth + 1));
+  }
+  return details;
+};
+
+const dedupeArcaFriendlyDetails = (
+  details: Array<{ label: string; value: string }>,
+) => {
+  const unique = new Map<string, { label: string; value: string }>();
+  for (const item of details) {
+    const key = `${item.label}::${item.value}`;
+    if (!unique.has(key)) {
+      unique.set(key, item);
+    }
+  }
+  return Array.from(unique.values());
+};
+
+const normalizeArcaDetailCompare = (value: string) =>
+  normalizeArcaText(value)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const isLowSignalArcaMessage = (value: string) => {
+  const normalized = normalizeArcaDetailCompare(value);
+  if (!normalized) return true;
+  if (normalized.length <= 1) return true;
+  if (/^\d{6,18}$/.test(normalized)) return true;
+  if (/^(cae|caea|r|a|e)$/.test(normalized)) return true;
+  const words = normalized.split(" ").filter(Boolean);
+  return words.length === 1 && words[0].length <= 3;
+};
+
+const formatArcaVoucherTypeLabel = (value: unknown) => {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) return String(value ?? "-");
+  if (numeric === 1) return "Factura A (1)";
+  if (numeric === 6) return "Factura B (6)";
+  if (numeric === 11) return "Factura C (11)";
+  return `Tipo ${numeric}`;
+};
+
+const formatArcaRequestDate = (value: unknown) => {
+  if (typeof value !== "string") return String(value ?? "-");
+  const normalized = toCalendarDateInput(value);
+  return normalized ? formatDateInputLabel(normalized) : value;
+};
+
+const formatArcaRequestAmount = (value: unknown) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return formatCurrencyARS(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return formatCurrencyARS(parsed);
+    }
+    return value;
+  }
+  return String(value ?? "-");
+};
+
+const normalizeCalendarDateForCompare = (value: string | null | undefined) => {
+  if (!value) return null;
+  const normalized = toCalendarDateInput(value);
+  if (normalized) return normalized;
+  const localMatch = value.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (localMatch) {
+    return `${localMatch[3]}-${localMatch[2]}-${localMatch[1]}`;
+  }
+  return null;
+};
+
+const purchaseVoucherKindFromFiscalType = (
+  voucherType: number | null | undefined,
+): "A" | "B" | "C" => {
+  if (voucherType === 1) return "A";
+  if (voucherType === 6) return "B";
+  if (voucherType === 11) return "C";
+  return "B";
+};
+
+const extractPointOfSaleFromInvoiceNumber = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const withDash = /^(\d{1,5})-(\d{1,12})$/.exec(trimmed);
+  return withDash?.[1] ? String(Number(withDash[1])) : "";
+};
+
+const isInvoiceNumberWithDashFormat = (value: string) =>
+  /^(\d{1,5})-(\d{1,12})$/.test(value.trim());
 
 const arcaStatusLabel = (value: string | null | undefined) => {
   const labels: Record<string, string> = {
@@ -417,9 +788,6 @@ export default function PurchasesPage() {
     [],
   );
   const [accounts, setAccounts] = useState<AccountOption[]>([]);
-  const [currencies, setCurrencies] = useState<CurrencyOption[]>([]);
-  const [latestUsdRate, setLatestUsdRate] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
 
   const [supplierSearch, setSupplierSearch] = useState("");
   const [supplierId, setSupplierId] = useState("");
@@ -438,13 +806,13 @@ export default function PurchasesPage() {
 
   const [hasInvoice, setHasInvoice] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
-  const [invoiceDate, setInvoiceDate] = useState(
-    new Date().toISOString().slice(0, 10),
-  );
+  const [invoiceDate, setInvoiceDate] = useState(() => toDateInputValue(new Date()));
+  const [isImportingQr, setIsImportingQr] = useState(false);
   const [simpleNetAmount, setSimpleNetAmount] = useState("");
   const [simpleFiscalCondition, setSimpleFiscalCondition] =
     useState<SimpleFiscalCondition>("GRAVADO");
   const [purchaseVatAmount, setPurchaseVatAmount] = useState("");
+  const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
   const [totalsSource, setTotalsSource] =
     useState<PurchaseTotalsSource>("AUTO_FROM_PRODUCTS");
   const [showFiscalDetail, setShowFiscalDetail] = useState(false);
@@ -452,7 +820,9 @@ export default function PurchasesPage() {
   const [netNonTaxedAmount, setNetNonTaxedAmount] = useState("");
   const [exemptAmount, setExemptAmount] = useState("");
   const [fiscalLines, setFiscalLines] = useState<PurchaseFiscalLineForm[]>([]);
-  const [paymentMode, setPaymentMode] = useState<PurchasePaymentMode>("OFF_BOOK");
+  const [paymentMode, setPaymentMode] = useState<PurchasePaymentMode>(
+    "CURRENT_ACCOUNT",
+  );
 
   const [includeProductDetails, setIncludeProductDetails] = useState(false);
   const [adjustStock, setAdjustStock] = useState(false);
@@ -476,7 +846,6 @@ export default function PurchasesPage() {
     "B",
   );
   const [arcaAuthorizationCode, setArcaAuthorizationCode] = useState("");
-  const [arcaPointOfSale, setArcaPointOfSale] = useState("");
   const [arcaValidationResult, setArcaValidationResult] = useState<{
     status: string;
     message: string;
@@ -493,6 +862,10 @@ export default function PurchasesPage() {
   );
 
   const [purchaseView, setPurchaseView] = useState<"new" | "list">("new");
+  const [editingPurchaseId, setEditingPurchaseId] = useState<string | null>(
+    null,
+  );
+  const [isLoadingPurchaseEdit, setIsLoadingPurchaseEdit] = useState(false);
   const [openPurchaseSection, setOpenPurchaseSection] =
     useState<PurchaseSectionId>("supplier");
   const [pendingPurchase, setPendingPurchase] = useState<PreparedPurchase | null>(
@@ -506,6 +879,39 @@ export default function PurchasesPage() {
   const [revalidatingPurchaseId, setRevalidatingPurchaseId] = useState<
     string | null
   >(null);
+  const [deletingPurchaseId, setDeletingPurchaseId] = useState<string | null>(
+    null,
+  );
+  const [revalidationFeedback, setRevalidationFeedback] =
+    useState<PurchaseArcaRevalidationFeedback | null>(null);
+  const [editingInvoicePurchase, setEditingInvoicePurchase] =
+    useState<PurchaseRow | null>(null);
+  const [editingInvoiceNumber, setEditingInvoiceNumber] = useState("");
+  const [editingInvoiceDate, setEditingInvoiceDate] = useState(() =>
+    toDateInputValue(new Date()),
+  );
+  const [editingVoucherKind, setEditingVoucherKind] = useState<"A" | "B" | "C">(
+    "B",
+  );
+  const [editingAuthorizationCode, setEditingAuthorizationCode] = useState("");
+  const [isSavingInvoiceEdit, setIsSavingInvoiceEdit] = useState(false);
+  const [revalidateAfterInvoiceEdit, setRevalidateAfterInvoiceEdit] =
+    useState(false);
+  const [editingPaymentPurchase, setEditingPaymentPurchase] =
+    useState<PurchaseRow | null>(null);
+  const [editingPaymentMode, setEditingPaymentMode] =
+    useState<PurchasePaymentMode>("OFF_BOOK");
+  const [editingPaidAt, setEditingPaidAt] = useState(() =>
+    toDateInputValue(new Date()),
+  );
+  const [editingCashOutPaymentMethodId, setEditingCashOutPaymentMethodId] =
+    useState("");
+  const [editingCashOutAccountId, setEditingCashOutAccountId] = useState("");
+  const [isUpdatingPaymentMode, setIsUpdatingPaymentMode] = useState(false);
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
+  const [isQrScannerActive, setIsQrScannerActive] = useState(false);
+  const [qrScannerError, setQrScannerError] = useState<string | null>(null);
+  const [isPortalReady, setIsPortalReady] = useState(false);
   const [highlightedFields, setHighlightedFields] = useState<
     Partial<Record<PurchaseArcaMismatchField | "totals.vatAmount" | "totals.netTaxed", true>>
   >({});
@@ -519,6 +925,13 @@ export default function PurchasesPage() {
   );
   const fieldHighlightTimeoutRef = useRef<number | null>(null);
   const sectionHighlightTimeoutRef = useRef<number | null>(null);
+  const qrVideoRef = useRef<HTMLVideoElement | null>(null);
+  const qrStreamRef = useRef<MediaStream | null>(null);
+  const qrScannerIntervalRef = useRef<number | null>(null);
+  const qrScannerBusyRef = useRef(false);
+  const importQrTextHandlerRef = useRef<(qrText: string) => Promise<void>>(
+    async () => undefined,
+  );
 
   const productMap = useMemo(
     () => new Map(Object.values(selectedProductsById).map((product) => [product.id, product])),
@@ -538,6 +951,17 @@ export default function PurchasesPage() {
   const paymentModeLabel =
     PURCHASE_PAYMENT_MODE_OPTIONS.find((option) => option.value === paymentMode)
       ?.label ?? "Sin impacto";
+  const inferredPointOfSale = extractPointOfSaleFromInvoiceNumber(invoiceNumber);
+  const hasInvoiceNumberDashFormat = isInvoiceNumberWithDashFormat(invoiceNumber);
+  const invoiceFormatWarning =
+    hasInvoice && invoiceNumber.trim() && !hasInvoiceNumberDashFormat
+      ? "Formato requerido: 0001-00001234 (con guion)."
+      : null;
+
+  const renderModalPortal = (content: ReactNode) => {
+    if (!isPortalReady) return null;
+    return createPortal(content, document.body);
+  };
 
   const highlightFields = (
     fields: Array<PurchaseArcaMismatchField | "totals.vatAmount" | "totals.netTaxed">,
@@ -590,13 +1014,10 @@ export default function PurchasesPage() {
   };
 
   const loadFinance = async () => {
-    const [methodsRes, accountsRes, currenciesRes, ratesRes, meRes] =
+    const [methodsRes, accountsRes] =
       await Promise.all([
         fetch("/api/payment-methods", { cache: "no-store" }),
         fetch("/api/accounts", { cache: "no-store" }),
-        fetch("/api/currencies", { cache: "no-store" }),
-        fetch("/api/config/exchange-rate", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
       ]);
 
     if (methodsRes.ok) {
@@ -607,32 +1028,31 @@ export default function PurchasesPage() {
       const data = (await accountsRes.json()) as AccountOption[];
       setAccounts(data.filter((account) => account.isActive !== false));
     }
-    if (currenciesRes.ok) {
-      const data = (await currenciesRes.json()) as CurrencyOption[];
-      setCurrencies(data);
+  };
+
+  const stopQrScanner = () => {
+    if (qrScannerIntervalRef.current) {
+      window.clearInterval(qrScannerIntervalRef.current);
+      qrScannerIntervalRef.current = null;
     }
-    if (ratesRes.ok) {
-      const data = (await ratesRes.json()) as Array<{
-        baseCode: string;
-        quoteCode: string;
-        rate: string | number;
-      }>;
-      const latestUsd = data.find(
-        (rate) => rate.baseCode === "USD" && rate.quoteCode === "ARS",
-      );
-      if (latestUsd) {
-        setLatestUsdRate(latestUsd.rate.toString());
-      }
+    if (qrStreamRef.current) {
+      qrStreamRef.current.getTracks().forEach((track) => track.stop());
+      qrStreamRef.current = null;
     }
-    if (meRes.ok) {
-      const data = (await meRes.json()) as { role?: string };
-      setRole(data.role ?? null);
+    if (qrVideoRef.current) {
+      qrVideoRef.current.srcObject = null;
     }
+    qrScannerBusyRef.current = false;
+    setIsQrScannerActive(false);
   };
 
   useEffect(() => {
     loadPurchases().catch(() => undefined);
     loadFinance().catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    setIsPortalReady(true);
   }, []);
 
   useEffect(() => {
@@ -643,8 +1063,102 @@ export default function PurchasesPage() {
       if (sectionHighlightTimeoutRef.current) {
         window.clearTimeout(sectionHighlightTimeoutRef.current);
       }
+      stopQrScanner();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isQrScannerOpen) {
+      stopQrScanner();
+      return;
+    }
+
+    const start = async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setQrScannerError(
+            "Este dispositivo no permite abrir camara para escanear QR.",
+          );
+          return;
+        }
+
+        setQrScannerError(null);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+          },
+          audio: false,
+        });
+        qrStreamRef.current = stream;
+
+        const video = qrVideoRef.current;
+        if (!video) {
+          stopQrScanner();
+          return;
+        }
+
+        video.srcObject = stream;
+        await video.play();
+
+        const detectorCtor = (
+          window as Window & {
+            BarcodeDetector?: new (options?: {
+              formats?: string[];
+            }) => {
+              detect: (source: ImageBitmapSource) => Promise<
+                Array<{ rawValue?: string | null }>
+              >;
+            };
+          }
+        ).BarcodeDetector;
+
+        if (!detectorCtor) {
+          setQrScannerError(
+            "Tu navegador no soporta escaneo nativo de QR. Usa 'Pegar texto QR'.",
+          );
+          return;
+        }
+
+        const detector = new detectorCtor({ formats: ["qr_code"] });
+        setIsQrScannerActive(true);
+        qrScannerIntervalRef.current = window.setInterval(async () => {
+          if (!isQrScannerOpen || qrScannerBusyRef.current || !qrVideoRef.current) {
+            return;
+          }
+          if (qrVideoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            return;
+          }
+          qrScannerBusyRef.current = true;
+          try {
+            const codes = await detector.detect(qrVideoRef.current);
+            const rawValue = codes.find(
+              (candidate) =>
+                typeof candidate.rawValue === "string" &&
+                candidate.rawValue.trim().length > 0,
+            )?.rawValue;
+            if (!rawValue) return;
+            setIsQrScannerOpen(false);
+            stopQrScanner();
+            await importQrTextHandlerRef.current(rawValue);
+          } catch {
+            // Keep scanner alive until a valid frame is detected or user closes.
+          } finally {
+            qrScannerBusyRef.current = false;
+          }
+        }, 360);
+      } catch {
+        setQrScannerError("No se pudo abrir la camara.");
+      }
+    };
+
+    start().catch(() => {
+      setQrScannerError("No se pudo iniciar el scanner.");
+    });
+
+    return () => {
+      stopQrScanner();
+    };
+  }, [isQrScannerOpen]);
 
   useEffect(() => {
     if (!isSupplierOpen) return;
@@ -1171,7 +1685,8 @@ export default function PurchasesPage() {
     if (!invoiceDate || !amount || !arcaAuthorizationCode.trim()) return null;
 
     const normalizedInvoiceNumber = invoiceNumber.trim();
-    if (!normalizedInvoiceNumber) return null;
+    if (!normalizedInvoiceNumber || !hasInvoiceNumberDashFormat) return null;
+    if (!inferredPointOfSale) return null;
 
     const payload: Record<string, string | number> = {
       voucherKind: arcaVoucherKind,
@@ -1179,11 +1694,8 @@ export default function PurchasesPage() {
       voucherDate: invoiceDate,
       totalAmount: amount,
       authorizationCode: arcaAuthorizationCode.trim(),
+      pointOfSale: Number(inferredPointOfSale),
     };
-
-    if (arcaPointOfSale.trim()) {
-      payload.pointOfSale = Number(arcaPointOfSale);
-    }
 
     return payload;
   };
@@ -1192,6 +1704,16 @@ export default function PurchasesPage() {
     if (!supplierId) {
       setStatus("Selecciona un proveedor");
       toast.error("Selecciona un proveedor antes de validar ARCA.");
+      return;
+    }
+    if (!hasInvoiceNumberDashFormat) {
+      const message =
+        "El numero de comprobante debe tener formato 0001-00001234 (con guion).";
+      setStatus(message);
+      toast.error(message);
+      setOpenPurchaseSection("invoice");
+      highlightSection("invoice");
+      highlightFields(["invoice.invoiceNumber"]);
       return;
     }
     const payload = buildArcaPayload();
@@ -1236,12 +1758,167 @@ export default function PurchasesPage() {
     }
   };
 
+  const findSupplierByTaxId = async (taxId: string) => {
+    const normalizedTaxId = normalizeTaxId(taxId);
+    if (!normalizedTaxId) return null;
+
+    const params = new URLSearchParams();
+    params.set("limit", "8");
+    params.set("offset", "0");
+    params.set("sort", "az");
+    params.set("q", normalizedTaxId);
+
+    const res = await fetch(`/api/suppliers?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { items: SupplierOption[] };
+    return (
+      data.items.find(
+        (candidate) => normalizeTaxId(candidate.taxId ?? "") === normalizedTaxId,
+      ) ?? null
+    );
+  };
+
+  const syncTotalsFromQr = (totalAmount: number) => {
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return;
+    setTotalsSource("MANUAL");
+    setSimpleFiscalCondition("GRAVADO");
+    setShowFiscalDetail(false);
+    setNetTaxedAmount("");
+    setNetNonTaxedAmount("");
+    setExemptAmount("");
+    setSimpleNetAmount(toMoneyValue(totalAmount));
+    setPurchaseVatAmount("0");
+    setGlobalDiscountAmount("");
+  };
+
+  const importPurchaseFromQrText = async (qrText: string) => {
+    const normalizedQr = qrText.trim();
+    if (!normalizedQr) return;
+    setIsImportingQr(true);
+    setStatus(null);
+    try {
+      const qrRes = await fetch("/api/purchases/qr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qrText: normalizedQr,
+          supplierId: supplierId || undefined,
+        }),
+      });
+      const qrData = (await qrRes.json()) as
+        | PurchaseQrImportResponse
+        | { error?: string };
+      if (!qrRes.ok) {
+        const message =
+          "error" in qrData && qrData.error
+            ? qrData.error
+            : "No se pudo importar el QR";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      const parsedQr = qrData as PurchaseQrImportResponse;
+      setHasInvoice(true);
+      if (parsedQr.voucherKind === "A" || parsedQr.voucherKind === "B" || parsedQr.voucherKind === "C") {
+        setArcaVoucherKind(parsedQr.voucherKind);
+      }
+      setInvoiceNumber(parsedQr.invoiceNumber ?? "");
+      setInvoiceDate(
+        toCalendarDateInput(parsedQr.voucherDate) || toDateInputValue(new Date()),
+      );
+      setArcaAuthorizationCode(parsedQr.authorizationCode ?? "");
+      setArcaValidationResult(null);
+      syncTotalsFromQr(parsedQr.totalAmount);
+      setOpenPurchaseSection("invoice");
+      highlightSection("invoice");
+
+      let resolvedSupplierId = supplierId;
+      if (!resolvedSupplierId && parsedQr.issuerTaxId) {
+        const matchedSupplier = await findSupplierByTaxId(parsedQr.issuerTaxId);
+        if (matchedSupplier) {
+          handleSupplierSelect(matchedSupplier);
+          resolvedSupplierId = matchedSupplier.id;
+          toast.success("Proveedor detectado automaticamente por CUIT del QR.");
+        }
+      }
+
+      if (!resolvedSupplierId) {
+        const message =
+          "Selecciona proveedor para completar validacion automatica ARCA.";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      const validateRes = await fetch("/api/purchases/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...parsedQr.arcaValidation,
+          supplierId: resolvedSupplierId,
+        }),
+      });
+      const validateData = await validateRes.json();
+      if (!validateRes.ok) {
+        const message = validateData?.error ?? "No se pudo validar con ARCA";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      setArcaValidationResult({
+        status: validateData.status,
+        message: validateData.message,
+        checkedAt: validateData.checkedAt,
+        comprobante: (validateData.comprobante ?? null) as PurchaseArcaVoucherSnapshot | null,
+      });
+      const normalizedStatus = arcaStatusLabel(validateData.status);
+      setStatus(`QR importado y ARCA validado (${normalizedStatus})`);
+      toast.success(`QR importado · ARCA: ${normalizedStatus}`);
+
+      if (parsedQr.warning) {
+        toast.error(parsedQr.warning);
+      }
+    } catch {
+      setStatus("No se pudo importar el QR");
+      toast.error("No se pudo importar el QR.");
+    } finally {
+      setIsImportingQr(false);
+    }
+  };
+
+  importQrTextHandlerRef.current = importPurchaseFromQrText;
+
+  const handleImportQrFromPrompt = async () => {
+    const qrText =
+      window.prompt("Escanea y pega el texto/URL del QR de ARCA")?.trim() ?? "";
+    if (!qrText) return;
+    await importPurchaseFromQrText(qrText);
+  };
+
+  const openQrScanner = () => {
+    setQrScannerError(null);
+    setIsQrScannerOpen(true);
+  };
+
+  const closeQrScanner = () => {
+    setIsQrScannerOpen(false);
+    stopQrScanner();
+  };
+
   const normalizedPurchaseProducts = useMemo(() => {
     return purchaseProducts
       .map((item) => ({
         productId: item.productId,
         qty: parseOptionalNumber(item.qty),
         unitCost: parseOptionalNumber(item.unitCost),
+        discountPercent: Math.max(
+          0,
+          parseOptionalNumber(item.discountPercent) ?? 0,
+        ),
         taxRate: parseOptionalNumber(item.taxRate) ?? 0,
       }))
       .filter(
@@ -1249,6 +1926,7 @@ export default function PurchasesPage() {
           productId: string;
           qty: number;
           unitCost: number;
+          discountPercent: number;
           taxRate: number;
         } =>
           Boolean(item.productId) &&
@@ -1258,6 +1936,9 @@ export default function PurchasesPage() {
           item.unitCost !== null &&
           Number.isFinite(item.unitCost) &&
           item.unitCost >= 0 &&
+          Number.isFinite(item.discountPercent) &&
+          item.discountPercent >= 0 &&
+          item.discountPercent <= 100 &&
           Number.isFinite(item.taxRate) &&
           item.taxRate >= 0 &&
           item.taxRate <= 100,
@@ -1267,15 +1948,21 @@ export default function PurchasesPage() {
   const productTotals = useMemo(() => {
     return normalizedPurchaseProducts.reduce(
       (totals, item) => {
-        const subtotal = item.qty * item.unitCost;
+        const grossSubtotal = item.qty * item.unitCost;
+        const discountAmount = roundMoney(
+          grossSubtotal * (item.discountPercent / 100),
+        );
+        const subtotal = Math.max(0, grossSubtotal - discountAmount);
         const tax = subtotal * (item.taxRate / 100);
         return {
+          grossSubtotal: totals.grossSubtotal + grossSubtotal,
+          discountTotal: totals.discountTotal + discountAmount,
           subtotal: totals.subtotal + subtotal,
           tax: totals.tax + tax,
           total: totals.total + subtotal + tax,
         };
       },
-      { subtotal: 0, tax: 0, total: 0 },
+      { grossSubtotal: 0, discountTotal: 0, subtotal: 0, tax: 0, total: 0 },
     );
   }, [normalizedPurchaseProducts]);
 
@@ -1299,6 +1986,10 @@ export default function PurchasesPage() {
     (sum, line) => sum + (line.amount ?? 0),
     0,
   );
+  const globalDiscountValue = Math.max(
+    parseOptionalNumber(globalDiscountAmount) ?? 0,
+    0,
+  );
   const simpleNetValue = Math.max(parseOptionalNumber(simpleNetAmount) ?? 0, 0);
   const simpleVatInputValue = Math.max(parseOptionalNumber(purchaseVatAmount) ?? 0, 0);
   const effectivePurchaseVatAmount =
@@ -1310,23 +2001,52 @@ export default function PurchasesPage() {
     simpleFiscalCondition === "NO_GRAVADO" ? simpleNetValue : 0;
   const simpleExempt = simpleFiscalCondition === "EXENTO" ? simpleNetValue : 0;
   const simpleTotal = roundMoney(
-    simpleNetTaxed + simpleNetNonTaxed + simpleExempt + simpleVatValue + fiscalOtherTotal,
+    Math.max(
+      0,
+      simpleNetTaxed +
+        simpleNetNonTaxed +
+        simpleExempt +
+        simpleVatValue +
+        fiscalOtherTotal -
+        globalDiscountValue,
+    ),
   );
   const advancedNetTaxed = Math.max(parseOptionalNumber(netTaxedAmount) ?? 0, 0);
   const advancedNetNonTaxed = Math.max(parseOptionalNumber(netNonTaxedAmount) ?? 0, 0);
   const advancedExempt = Math.max(parseOptionalNumber(exemptAmount) ?? 0, 0);
   const advancedTotal = roundMoney(
-    advancedNetTaxed + advancedNetNonTaxed + advancedExempt + simpleVatValue + fiscalOtherTotal,
+    Math.max(
+      0,
+      advancedNetTaxed +
+        advancedNetNonTaxed +
+        advancedExempt +
+        simpleVatValue +
+        fiscalOtherTotal -
+        globalDiscountValue,
+    ),
   );
   const hasAdvancedData =
     netTaxedAmount.trim() || netNonTaxedAmount.trim() || exemptAmount.trim();
   const effectiveTotalAmount = showFiscalDetail
-    ? hasAdvancedData || fiscalOtherTotal > 0
+    ? hasAdvancedData || fiscalOtherTotal > 0 || globalDiscountValue > 0
       ? toMoneyValue(advancedTotal)
       : ""
-    : simpleNetAmount.trim() || fiscalOtherTotal > 0
+    : simpleNetAmount.trim() || fiscalOtherTotal > 0 || globalDiscountValue > 0
       ? toMoneyValue(simpleTotal)
       : "";
+  const effectiveTotalNumeric = parseOptionalNumber(effectiveTotalAmount) ?? 0;
+  const expectedTotalFromProducts = Math.max(
+    0,
+    roundMoney(productTotals.total - globalDiscountValue),
+  );
+  const productTotalDifference =
+    includeProductDetails && hasPurchaseProductTotals
+      ? roundMoney(effectiveTotalNumeric - expectedTotalFromProducts)
+      : 0;
+  const hasProductTotalMismatch =
+    includeProductDetails &&
+    hasPurchaseProductTotals &&
+    Math.abs(productTotalDifference) > 0.01;
 
   const autoTotalsFromProducts = useMemo(
     () =>
@@ -1343,10 +2063,6 @@ export default function PurchasesPage() {
       return;
     }
     if (!hasPurchaseProductTotals) {
-      setSimpleNetAmount("");
-      setPurchaseVatAmount("");
-      setNetTaxedAmount("");
-      setSimpleFiscalCondition("GRAVADO");
       return;
     }
     setSimpleFiscalCondition("GRAVADO");
@@ -1361,6 +2077,7 @@ export default function PurchasesPage() {
     includeProductDetails,
     totalsSource,
   ]);
+
   const fiscalPreview = useMemo(() => {
     const total = parseOptionalNumber(effectiveTotalAmount) ?? 0;
     const vat = showFiscalDetail
@@ -1375,7 +2092,8 @@ export default function PurchasesPage() {
     const exempt = showFiscalDetail
       ? (parseOptionalNumber(exemptAmount) ?? 0)
       : simpleExempt;
-    const fiscalTotal = netTaxed + netNonTaxed + exempt + vat + fiscalOtherTotal;
+    const fiscalTotal =
+      netTaxed + netNonTaxed + exempt + vat + fiscalOtherTotal - globalDiscountValue;
     return {
       total,
       vat,
@@ -1396,6 +2114,7 @@ export default function PurchasesPage() {
     simpleNetNonTaxed,
     simpleNetTaxed,
     simpleVatValue,
+    globalDiscountValue,
     showFiscalDetail,
   ]);
   const fiscalDifferenceOk = Math.abs(fiscalPreview.difference) <= 0.01;
@@ -1403,6 +2122,7 @@ export default function PurchasesPage() {
     { label: "Neto", value: fiscalPreview.netTaxed },
     { label: "IVA", value: fiscalPreview.vat },
     { label: "Perc./otros", value: fiscalOtherTotal },
+    { label: "Desc.", value: -globalDiscountValue },
     { label: "Total fiscal", value: fiscalPreview.fiscalTotal },
     { label: "Diferencia", value: fiscalPreview.difference },
   ];
@@ -1430,7 +2150,7 @@ export default function PurchasesPage() {
     const mismatches = compareArcaVoucherAgainstForm({
       form: {
         voucherKind: arcaVoucherKind,
-        pointOfSale: arcaPointOfSale,
+        pointOfSale: inferredPointOfSale,
         invoiceNumber,
         invoiceDate,
         totalAmount: total,
@@ -1514,12 +2234,17 @@ export default function PurchasesPage() {
           item.productId ||
             item.productSearch.trim() ||
             item.unitCost.trim() ||
+            item.discountPercent.trim() !== "0" ||
             item.qty.trim() !== "1" ||
             item.taxRate.trim() !== "21",
         );
         if (!hasData) return false;
         const qty = parseOptionalNumber(item.qty);
         const unitCost = parseOptionalNumber(item.unitCost);
+        const discountPercent = Math.max(
+          0,
+          parseOptionalNumber(item.discountPercent) ?? 0,
+        );
         const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
         return (
           !item.productId ||
@@ -1527,6 +2252,8 @@ export default function PurchasesPage() {
           qty <= 0 ||
           unitCost === null ||
           unitCost < 0 ||
+          discountPercent < 0 ||
+          discountPercent > 100 ||
           taxRate < 0 ||
           taxRate > 100
         );
@@ -1586,7 +2313,12 @@ export default function PurchasesPage() {
         return null;
       }
       const fiscalTotal =
-        netTaxed + netNonTaxed + exempt + (vatAmount ?? 0) + fiscalOtherTotal;
+        netTaxed +
+        netNonTaxed +
+        exempt +
+        (vatAmount ?? 0) +
+        fiscalOtherTotal -
+        globalDiscountValue;
       if (Math.abs(total - fiscalTotal) > 0.01) {
         setStatus("El detalle fiscal no coincide con el total de la compra");
         setOpenPurchaseSection("totals");
@@ -1612,6 +2344,15 @@ export default function PurchasesPage() {
 
     if (hasInvoice && !invoiceNumber.trim()) {
       setStatus("Ingresa numero de comprobante");
+      setOpenPurchaseSection("invoice");
+      highlightSection("invoice");
+      highlightFields(["invoice.invoiceNumber"]);
+      return null;
+    }
+    if (hasInvoice && !hasInvoiceNumberDashFormat) {
+      setStatus(
+        "El numero de comprobante debe tener formato 0001-00001234 (con guion).",
+      );
       setOpenPurchaseSection("invoice");
       highlightSection("invoice");
       highlightFields(["invoice.invoiceNumber"]);
@@ -1669,10 +2410,17 @@ export default function PurchasesPage() {
         ? normalizedPurchaseProducts.map((item) => ({
             productId: item.productId,
             qty: item.qty,
-            unitCost: item.unitCost,
+            unitCost: roundMoney(
+              Math.max(
+                0,
+                item.unitCost * (1 - item.discountPercent / 100),
+              ),
+            ),
             taxRate: item.taxRate,
           }))
-        : undefined,
+        : editingPurchaseId
+          ? []
+          : undefined,
       adjustStock: shouldAdjustStock,
       registerCashOut,
       cashOutPaymentMethodId: registerCashOut
@@ -1698,6 +2446,187 @@ export default function PurchasesPage() {
     };
   };
 
+  const resetPurchaseForm = () => {
+    setSupplierSearch("");
+    setSupplierId("");
+    setSelectedSupplier(null);
+    setSelectedSupplierTaxId("");
+    setSupplierDataStatus(null);
+    setHasInvoice(false);
+    setInvoiceNumber("");
+    setInvoiceDate(toDateInputValue(new Date()));
+    setSimpleNetAmount("");
+    setSimpleFiscalCondition("GRAVADO");
+    setPurchaseVatAmount("");
+    setGlobalDiscountAmount("");
+    setTotalsSource("AUTO_FROM_PRODUCTS");
+    setShowFiscalDetail(false);
+    setNetTaxedAmount("");
+    setNetNonTaxedAmount("");
+    setExemptAmount("");
+    setFiscalLines([]);
+    setPaymentMode("CURRENT_ACCOUNT");
+    setIncludeProductDetails(false);
+    setAdjustStock(false);
+    setPurchaseProducts([emptyPurchaseProduct()]);
+    setSelectedProductsById({});
+    setCashOutPaymentMethodId("");
+    setCashOutAccountId("");
+    setArcaVoucherKind("B");
+    setArcaAuthorizationCode("");
+    setArcaValidationResult(null);
+    setHighlightedFields({});
+    setHighlightedSection(null);
+    setPendingPurchase(null);
+    setOpenPurchaseSection("supplier");
+    setEditingPurchaseId(null);
+  };
+
+  const handleStartPurchaseEdit = async (purchaseId: string) => {
+    setStatus(null);
+    setIsLoadingPurchaseEdit(true);
+    try {
+      const res = await fetch(`/api/purchases/${purchaseId}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json()) as PurchaseEditResponse | { error?: string };
+      if (!res.ok) {
+        const message =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "No se pudo cargar la compra para editar";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      const purchase = data as PurchaseEditResponse;
+      const supplier = purchase.supplier;
+      const toNumber = (value: string | null | undefined) => {
+        const parsed = Number(value ?? 0);
+        return Number.isFinite(parsed) ? parsed : 0;
+      };
+      const total = toNumber(purchase.total);
+      const netTaxed = toNumber(purchase.netTaxed);
+      const netNonTaxed = toNumber(purchase.netNonTaxed);
+      const exemptAmount = toNumber(purchase.exemptAmount);
+      const vatTotal = toNumber(purchase.vatTotal || purchase.taxes);
+      const otherTaxesTotal = toNumber(purchase.otherTaxesTotal);
+      const grossBeforeDiscount =
+        netTaxed + netNonTaxed + exemptAmount + vatTotal + otherTaxesTotal;
+      const inferredGlobalDiscount = Math.max(
+        0,
+        roundMoney(grossBeforeDiscount - total),
+      );
+      const fiscalCondition: SimpleFiscalCondition =
+        netTaxed > 0 && netNonTaxed <= 0 && exemptAmount <= 0
+          ? "GRAVADO"
+          : netNonTaxed > 0 && netTaxed <= 0 && exemptAmount <= 0
+            ? "NO_GRAVADO"
+            : exemptAmount > 0 && netTaxed <= 0 && netNonTaxed <= 0
+              ? "EXENTO"
+              : "GRAVADO";
+
+      const purchaseProductsFromEdit = purchase.items.length
+        ? purchase.items.map((item) => ({
+            productId: item.productId,
+            productSearch: formatProductLabel(item.product),
+            qty: String(toNumber(item.qty)),
+            unitCost: toMoneyValue(toNumber(item.unitCost)),
+            discountPercent: "0",
+            taxRate: String(toNumber(item.taxRate)),
+          }))
+        : [emptyPurchaseProduct()];
+
+      const selectedProducts = purchase.items.reduce(
+        (accumulator, item) => ({
+          ...accumulator,
+          [item.productId]: item.product,
+        }),
+        {} as Record<string, ProductOption>,
+      );
+
+      const voucherKind =
+        purchase.fiscalVoucherKind === "A" ||
+        purchase.fiscalVoucherKind === "B" ||
+        purchase.fiscalVoucherKind === "C"
+          ? purchase.fiscalVoucherKind
+          : purchaseVoucherKindFromFiscalType(purchase.fiscalVoucherType);
+
+      setSupplierId(supplier.id);
+      setSelectedSupplier(supplier);
+      setSupplierSearch(formatSupplierLabel(supplier));
+      setSelectedSupplierTaxId(normalizeTaxId(supplier.taxId ?? ""));
+      setHasInvoice(Boolean(purchase.invoiceNumber));
+      setInvoiceNumber(purchase.invoiceNumber ?? "");
+      setInvoiceDate(
+        toCalendarDateInput(purchase.invoiceDate) || toDateInputValue(new Date()),
+      );
+      setSimpleFiscalCondition(fiscalCondition);
+      setSimpleNetAmount(
+        toMoneyValue(
+          fiscalCondition === "GRAVADO"
+            ? netTaxed
+            : fiscalCondition === "NO_GRAVADO"
+              ? netNonTaxed
+              : exemptAmount,
+        ),
+      );
+      setPurchaseVatAmount(toMoneyValue(vatTotal));
+      setGlobalDiscountAmount(
+        inferredGlobalDiscount > 0.01 ? toMoneyValue(inferredGlobalDiscount) : "",
+      );
+      setTotalsSource("MANUAL");
+      setShowFiscalDetail(true);
+      setNetTaxedAmount(toMoneyValue(netTaxed));
+      setNetNonTaxedAmount(toMoneyValue(netNonTaxed));
+      setExemptAmount(toMoneyValue(exemptAmount));
+      setFiscalLines(
+        purchase.fiscalLines.map((line) => ({
+          type: line.type,
+          jurisdiction: line.jurisdiction ?? "",
+          baseAmount: line.baseAmount ?? "",
+          rate: line.rate ?? "",
+          amount: line.amount,
+          manualAmountOverride: true,
+          note: line.note ?? "",
+        })),
+      );
+      setIncludeProductDetails(purchase.items.length > 0);
+      setPurchaseProducts(purchaseProductsFromEdit);
+      setSelectedProductsById(selectedProducts);
+      setAdjustStock(false);
+      setPaymentMode(purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK");
+      setCashOutPaymentMethodId("");
+      setCashOutAccountId("");
+      setArcaVoucherKind(voucherKind);
+      setArcaAuthorizationCode(purchase.authorizationCode ?? "");
+      setArcaValidationResult(null);
+      setPendingPurchase(null);
+      setEditingPurchaseId(purchase.id);
+      setOpenPurchaseSection("supplier");
+      setPurchaseView("new");
+      const statusMessage = purchase.hasStockMovements
+        ? "Editando compra. Esta compra ya impacto stock: puedes corregir datos fiscales, proveedor y montos, pero no cambiar productos/cantidades."
+        : "Editando compra. Revisa y guarda los cambios.";
+      setStatus(statusMessage);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch {
+      setStatus("No se pudo cargar la compra para editar");
+      toast.error("No se pudo cargar la compra para editar.");
+    } finally {
+      setIsLoadingPurchaseEdit(false);
+    }
+  };
+
+  const handleCancelPurchaseEdit = () => {
+    resetPurchaseForm();
+    setStatus("Edicion cancelada.");
+  };
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const prepared = preparePurchaseForConfirmation();
@@ -1709,8 +2638,14 @@ export default function PurchasesPage() {
     if (!pendingPurchase) return;
     setIsSubmitting(true);
     try {
-      const res = await fetch("/api/purchases", {
-        method: "POST",
+      const isEditing = Boolean(editingPurchaseId);
+      const endpoint = isEditing
+        ? `/api/purchases/${editingPurchaseId}/full`
+        : "/api/purchases";
+      const method = isEditing ? "PATCH" : "POST";
+
+      const res = await fetch(endpoint, {
+        method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(pendingPurchase.payload),
       });
@@ -1722,38 +2657,12 @@ export default function PurchasesPage() {
         return;
       }
 
-      setSupplierSearch("");
-      setSupplierId("");
-      setSelectedSupplier(null);
-      setSelectedSupplierTaxId("");
-      setSupplierDataStatus(null);
-      setHasInvoice(false);
-      setInvoiceNumber("");
-      setSimpleNetAmount("");
-      setSimpleFiscalCondition("GRAVADO");
-      setPurchaseVatAmount("");
-      setTotalsSource("AUTO_FROM_PRODUCTS");
-      setShowFiscalDetail(false);
-      setNetTaxedAmount("");
-      setNetNonTaxedAmount("");
-      setExemptAmount("");
-      setFiscalLines([]);
-      setPaymentMode("OFF_BOOK");
-      setIncludeProductDetails(false);
-      setAdjustStock(false);
-      setPurchaseProducts([emptyPurchaseProduct()]);
-      setCashOutPaymentMethodId("");
-      setCashOutAccountId("");
-      setArcaVoucherKind("B");
-      setArcaAuthorizationCode("");
-      setArcaPointOfSale("");
-      setArcaValidationResult(null);
-      setHighlightedFields({});
-      setHighlightedSection(null);
-      setPendingPurchase(null);
-      setOpenPurchaseSection("supplier");
-      setStatus("Compra registrada");
-      toast.success("Compra registrada.");
+      resetPurchaseForm();
+      setStatus(isEditing ? "Compra actualizada" : "Compra registrada");
+      toast.success(isEditing ? "Compra actualizada." : "Compra registrada.");
+      if (isEditing) {
+        setPurchaseView("list");
+      }
       await loadPurchases();
     } catch {
       setStatus("No se pudo guardar");
@@ -1766,21 +2675,334 @@ export default function PurchasesPage() {
   const handleRevalidatePurchase = async (purchaseId: string) => {
     setStatus(null);
     setRevalidatingPurchaseId(purchaseId);
+    setRevalidationFeedback(null);
     try {
       const res = await fetch(`/api/purchases/${purchaseId}/revalidate`, {
         method: "POST",
       });
       const data = await res.json();
       if (!res.ok) {
-        setStatus(data?.error ?? "No se pudo revalidar");
+        const message = data?.error ?? "No se pudo revalidar";
+        setStatus(message);
+        toast.error(message);
+        setRevalidationFeedback({
+          purchaseId,
+          status: "ERROR",
+          message,
+          checkedAt: null,
+          request: null,
+          details: [],
+          hints: buildArcaHints([message]),
+        });
         return;
       }
-      setStatus(`Comprobante revalidado (${arcaStatusLabel(data.status)})`);
+      const detailedMessages = Array.from(
+        new Set([
+          ...(typeof data?.message === "string" ? [data.message] : []),
+          ...collectArcaMessages(data?.response ?? null),
+        ]),
+      );
+      const friendlyDetails = dedupeArcaFriendlyDetails(
+        collectArcaFriendlyDetails(data?.response ?? null),
+      );
+      const primaryMessage =
+        typeof data?.message === "string" ? data.message.trim() : "";
+      const primaryMessageKey = normalizeArcaDetailCompare(primaryMessage);
+      const friendlyValueKeys = new Set(
+        friendlyDetails
+          .map((item) => normalizeArcaDetailCompare(item.value))
+          .filter(Boolean),
+      );
+      const cleanedMessages = detailedMessages
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .filter((item) => !isLowSignalArcaMessage(item));
+      const fallbackHintMessage = primaryMessage;
+      const hintMessages = Array.from(
+        new Set(
+          cleanedMessages.length
+            ? cleanedMessages
+            : fallbackHintMessage
+              ? [fallbackHintMessage]
+              : [],
+        ),
+      );
+      const fallbackMessages = Array.from(
+        new Set(
+          cleanedMessages.filter((item) => {
+            const normalized = normalizeArcaDetailCompare(item);
+            if (!normalized) return false;
+            if (primaryMessageKey && normalized === primaryMessageKey) return false;
+            return !friendlyValueKeys.has(normalized);
+          }),
+        ),
+      ).slice(0, 6);
+      const fallbackMessageDetails = fallbackMessages.length
+        ? [
+            {
+              label: "Mensaje del organismo",
+              value: fallbackMessages.join(" • "),
+            },
+          ]
+        : [];
+      const details = dedupeArcaFriendlyDetails([
+        ...friendlyDetails,
+        ...fallbackMessageDetails,
+      ]).slice(0, 40);
+      const message = `Comprobante revalidado (${arcaStatusLabel(data.status)})`;
+      setStatus(message);
+      if (data.status === "AUTHORIZED") {
+        toast.success(message);
+      } else {
+        toast.error(message);
+      }
+      setRevalidationFeedback({
+        purchaseId,
+        status: String(data.status ?? "ERROR"),
+        message: String(data?.message ?? message),
+        checkedAt:
+          typeof data?.checkedAt === "string" ? data.checkedAt : undefined,
+        request:
+          data?.request && typeof data.request === "object"
+            ? (data.request as Record<string, unknown>)
+            : null,
+        rawResponse: data?.response ?? null,
+        details,
+        hints: buildArcaHints(hintMessages),
+      });
       await loadPurchases();
     } catch {
       setStatus("No se pudo revalidar");
+      toast.error("No se pudo revalidar.");
+      setRevalidationFeedback({
+        purchaseId,
+        status: "ERROR",
+        message: "No se pudo revalidar.",
+        checkedAt: null,
+        request: null,
+        details: [],
+        hints: [],
+      });
     } finally {
       setRevalidatingPurchaseId(null);
+    }
+  };
+
+  const handleDeletePurchase = async (purchase: PurchaseRow) => {
+    const reference = purchase.invoiceNumber?.trim() || purchase.id;
+    const shouldDelete = window.confirm(
+      `Vas a eliminar la compra ${reference} de ${purchase.supplierName}. Esta accion no se puede deshacer. Continuar?`,
+    );
+    if (!shouldDelete) return;
+
+    setStatus(null);
+    setDeletingPurchaseId(purchase.id);
+    try {
+      const res = await fetch(`/api/purchases/${purchase.id}`, {
+        method: "DELETE",
+      });
+      const data = (await res.json()) as { error?: string; ok?: boolean };
+      if (!res.ok) {
+        const message = data?.error ?? "No se pudo eliminar la compra";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      if (editingPurchaseId === purchase.id) {
+        resetPurchaseForm();
+        setPurchaseView("list");
+      }
+      if (revalidationFeedback?.purchaseId === purchase.id) {
+        setRevalidationFeedback(null);
+      }
+      if (editingInvoicePurchase?.id === purchase.id) {
+        setEditingInvoicePurchase(null);
+        setRevalidateAfterInvoiceEdit(false);
+      }
+      if (editingPaymentPurchase?.id === purchase.id) {
+        setEditingPaymentPurchase(null);
+      }
+
+      setStatus("Compra eliminada");
+      toast.success("Compra eliminada.");
+      await loadPurchases();
+    } catch {
+      setStatus("No se pudo eliminar la compra");
+      toast.error("No se pudo eliminar la compra.");
+    } finally {
+      setDeletingPurchaseId(null);
+    }
+  };
+
+  const openInvoiceEditor = (
+    purchase: PurchaseRow,
+    options?: { revalidateAfterSave?: boolean; closeRevalidation?: boolean },
+  ) => {
+    setEditingInvoicePurchase(purchase);
+    setEditingInvoiceNumber(purchase.invoiceNumber ?? "");
+    setEditingInvoiceDate(
+      toCalendarDateInput(purchase.invoiceDate) ||
+        toCalendarDateInput(purchase.createdAt) ||
+        toDateInputValue(new Date()),
+    );
+    const voucherKind =
+      purchase.fiscalVoucherKind === "A" ||
+      purchase.fiscalVoucherKind === "B" ||
+      purchase.fiscalVoucherKind === "C"
+        ? purchase.fiscalVoucherKind
+        : purchaseVoucherKindFromFiscalType(purchase.fiscalVoucherType);
+    setEditingVoucherKind(voucherKind);
+    setEditingAuthorizationCode(purchase.authorizationCode ?? "");
+    setRevalidateAfterInvoiceEdit(Boolean(options?.revalidateAfterSave));
+    if (options?.closeRevalidation) {
+      setRevalidationFeedback(null);
+    }
+  };
+
+  const closeInvoiceEditor = () => {
+    if (isSavingInvoiceEdit) return;
+    setEditingInvoicePurchase(null);
+    setRevalidateAfterInvoiceEdit(false);
+  };
+
+  const handleSaveInvoiceEdit = async () => {
+    if (!editingInvoicePurchase) return;
+    const normalizedInvoiceNumber = editingInvoiceNumber.trim();
+    if (!normalizedInvoiceNumber) {
+      const message = "Ingresa numero de comprobante.";
+      setStatus(message);
+      toast.error(message);
+      return;
+    }
+    if (!isInvoiceNumberWithDashFormat(normalizedInvoiceNumber)) {
+      const message =
+        "El numero de comprobante debe tener formato 0001-00001234 (con guion).";
+      setStatus(message);
+      toast.error(message);
+      return;
+    }
+    if (!editingInvoiceDate) {
+      const message = "Ingresa fecha del comprobante.";
+      setStatus(message);
+      toast.error(message);
+      return;
+    }
+
+    setStatus(null);
+    setIsSavingInvoiceEdit(true);
+    try {
+      const res = await fetch(
+        `/api/purchases/${editingInvoicePurchase.id}/invoice`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            hasInvoice: true,
+            invoiceNumber: normalizedInvoiceNumber,
+            invoiceDate: editingInvoiceDate,
+            voucherKind: editingVoucherKind,
+            authorizationCode: editingAuthorizationCode.trim() || null,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        const message = data?.error ?? "No se pudo guardar la edicion";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      const purchaseId = editingInvoicePurchase.id;
+      const shouldRevalidate = revalidateAfterInvoiceEdit;
+      const successMessage = data?.message ?? "Comprobante actualizado";
+
+      setStatus(successMessage);
+      toast.success(successMessage);
+      setEditingInvoicePurchase(null);
+      setRevalidateAfterInvoiceEdit(false);
+      await loadPurchases();
+
+      if (shouldRevalidate) {
+        await handleRevalidatePurchase(purchaseId);
+      }
+    } catch {
+      const message = "No se pudo guardar la edicion";
+      setStatus(message);
+      toast.error(message);
+    } finally {
+      setIsSavingInvoiceEdit(false);
+    }
+  };
+
+  const openPaymentModeEditor = (purchase: PurchaseRow) => {
+    setEditingPaymentPurchase(purchase);
+    setEditingPaymentMode(inferPurchasePaymentMode(purchase));
+    setEditingCashOutPaymentMethodId("");
+    setEditingCashOutAccountId("");
+    setEditingPaidAt(
+      toCalendarDateInput(purchase.invoiceDate) ||
+        toCalendarDateInput(purchase.createdAt) ||
+        toDateInputValue(new Date()),
+    );
+  };
+
+  const closePaymentModeEditor = () => {
+    if (isUpdatingPaymentMode) return;
+    setEditingPaymentPurchase(null);
+  };
+
+  const closeRevalidationFeedback = () => {
+    setRevalidationFeedback(null);
+  };
+
+  const handleUpdatePurchasePaymentMode = async () => {
+    if (!editingPaymentPurchase) return;
+    setIsUpdatingPaymentMode(true);
+    setStatus(null);
+    try {
+      const payload: Record<string, string> = {
+        paymentMode: editingPaymentMode,
+      };
+      if (editingPaidAt) {
+        payload.paidAt = editingPaidAt;
+      }
+      if (editingPaymentMode === "IMMEDIATE_CASH_OUT") {
+        if (!editingCashOutPaymentMethodId || !editingCashOutAccountId) {
+          const message =
+            "Selecciona metodo y cuenta para registrar pago inmediato.";
+          setStatus(message);
+          toast.error(message);
+          return;
+        }
+        payload.cashOutPaymentMethodId = editingCashOutPaymentMethodId;
+        payload.cashOutAccountId = editingCashOutAccountId;
+      }
+
+      const res = await fetch(`/api/purchases/${editingPaymentPurchase.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const message = data?.error ?? "No se pudo actualizar la compra";
+        setStatus(message);
+        toast.error(message);
+        return;
+      }
+
+      const message = data?.message ?? "Compra actualizada";
+      setStatus(message);
+      toast.success(message);
+      setEditingPaymentPurchase(null);
+      await loadPurchases();
+    } catch {
+      setStatus("No se pudo actualizar la compra");
+      toast.error("No se pudo actualizar la compra.");
+    } finally {
+      setIsUpdatingPaymentMode(false);
     }
   };
 
@@ -1811,8 +3033,12 @@ export default function PurchasesPage() {
     });
 
     next.sort((a, b) => {
-      const aTime = new Date(a.invoiceDate ?? a.createdAt).getTime();
-      const bTime = new Date(b.invoiceDate ?? b.createdAt).getTime();
+      const aTime =
+        toCalendarDateTimestamp(a.invoiceDate) ||
+        new Date(a.createdAt).getTime();
+      const bTime =
+        toCalendarDateTimestamp(b.invoiceDate) ||
+        new Date(b.createdAt).getTime();
       return sortOrder === "oldest" ? aTime - bTime : bTime - aTime;
     });
 
@@ -1934,6 +3160,22 @@ export default function PurchasesPage() {
         { label: "Pago", value: pendingPurchase.paymentLabel },
       ]
     : [];
+  const revalidationPurchase = revalidationFeedback
+    ? purchases.find((purchase) => purchase.id === revalidationFeedback.purchaseId) ??
+      null
+    : null;
+  const revalidationArcaVoucherDate = revalidationFeedback
+    ? revalidationFeedback.details.find((detail) => detail.label === "Fecha del comprobante")
+        ?.value ?? null
+    : null;
+  const revalidationRequestVoucherDate = revalidationFeedback?.request
+    ? formatArcaRequestDate(revalidationFeedback.request.voucherDate)
+    : null;
+  const hasRevalidationDateMismatch =
+    Boolean(revalidationArcaVoucherDate) &&
+    Boolean(revalidationRequestVoucherDate) &&
+    normalizeCalendarDateForCompare(revalidationArcaVoucherDate) !==
+      normalizeCalendarDateForCompare(revalidationRequestVoucherDate);
 
   return (
     <div className="space-y-6">
@@ -2008,7 +3250,20 @@ export default function PurchasesPage() {
 
       {purchaseView === "new" ? (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-zinc-900">Nueva compra</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-lg font-semibold text-zinc-900">
+              {editingPurchaseId ? "Editar compra" : "Nueva compra"}
+            </h2>
+            {editingPurchaseId ? (
+              <button
+                type="button"
+                className="btn text-xs"
+                onClick={handleCancelPurchaseEdit}
+              >
+                Cancelar edicion
+              </button>
+            ) : null}
+          </div>
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-3">
             <PurchaseSection
@@ -2134,7 +3389,7 @@ export default function PurchasesPage() {
               className="order-4"
             >
               <div className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                   <label className="field-stack min-w-0">
                     <span className="input-label">Neto</span>
                     <div className="relative">
@@ -2206,6 +3461,21 @@ export default function PurchasesPage() {
                       />
                     </div>
                   </label>
+                  <label className="field-stack min-w-0">
+                    <span className="input-label">Descuento global</span>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                        $
+                      </span>
+                      <MoneyInput
+                        className="input no-spinner w-full pl-10 text-right tabular-nums"
+                        value={globalDiscountAmount}
+                        onValueChange={setGlobalDiscountAmount}
+                        placeholder="0,00"
+                        maxDecimals={2}
+                      />
+                    </div>
+                  </label>
                   <div className="field-stack min-w-0">
                     <span className="input-label text-right">Total compra</span>
                     <div className="flex min-h-11 w-full items-center justify-end text-right text-lg font-semibold tabular-nums text-zinc-900">
@@ -2219,14 +3489,23 @@ export default function PurchasesPage() {
                   <div className="space-y-1">
                     {totalsSource === "MANUAL" && hasPurchaseProductTotals ? (
                       <p className="text-[11px] font-medium text-amber-700">
-                        Origen de totales - Manual (Auto desde productos pausado por
-                        modificacion).
+                        Modo manual activo: el calculo automatico desde productos
+                        quedo pausado porque editaste importes.
                       </p>
                     ) : null}
                     {totalsSource === "AUTO_FROM_PRODUCTS" && !hasPurchaseProductTotals ? (
                       <p className="text-xs text-amber-700">
                         Carga al menos un producto completo para calcular total e IVA en modo
                         automatico.
+                      </p>
+                    ) : null}
+                    {hasProductTotalMismatch ? (
+                      <p className="text-xs text-amber-700">
+                        El total esperado por productos ({formatCurrencyARS(
+                          expectedTotalFromProducts,
+                        )}) no coincide con el monto de compra ({formatCurrencyARS(
+                          effectiveTotalNumeric,
+                        )}). Diferencia {formatCurrencyARS(productTotalDifference)}.
                       </p>
                     ) : null}
                   </div>
@@ -2290,7 +3569,7 @@ export default function PurchasesPage() {
                   ) : null}
                 </AnimatePresence>
 
-                <div className="grid gap-3 border-y border-zinc-200/70 py-3 sm:grid-cols-2 lg:grid-cols-5">
+                <div className="grid gap-3 border-y border-zinc-200/70 py-3 sm:grid-cols-2 lg:grid-cols-6">
                   {fiscalSummaryItems.map((item) => {
                     const isDifference = item.label === "Diferencia";
                     return (
@@ -2369,7 +3648,11 @@ export default function PurchasesPage() {
                       setAdjustStock(false);
                       setOpenProductIndex(null);
                     } else {
-                      setTotalsSource("AUTO_FROM_PRODUCTS");
+                      setTotalsSource(
+                        parsePositiveNumber(effectiveTotalAmount)
+                          ? "MANUAL"
+                          : "AUTO_FROM_PRODUCTS",
+                      );
                     }
                   }}
                   label="Cargar productos"
@@ -2385,8 +3668,22 @@ export default function PurchasesPage() {
                       const selectedProduct = productMap.get(item.productId);
                       const qty = parseOptionalNumber(item.qty) ?? 0;
                       const unitCost = parseOptionalNumber(item.unitCost) ?? 0;
+                      const discountPercent = Math.max(
+                        0,
+                        Math.min(
+                          100,
+                          parseOptionalNumber(item.discountPercent) ?? 0,
+                        ),
+                      );
                       const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
-                      const lineSubtotal = qty * unitCost;
+                      const lineGrossSubtotal = qty * unitCost;
+                      const lineDiscount = roundMoney(
+                        lineGrossSubtotal * (discountPercent / 100),
+                      );
+                      const lineSubtotal = Math.max(
+                        0,
+                        lineGrossSubtotal - lineDiscount,
+                      );
                       const lineTax = lineSubtotal * (taxRate / 100);
                       const lineTotal = lineSubtotal + lineTax;
                       const searchedProductName = item.productSearch.trim();
@@ -2402,7 +3699,7 @@ export default function PurchasesPage() {
                       return (
                         <div
                           key={`purchase-product-${index}`}
-                          className="grid gap-4 border-t border-zinc-200/70 py-3 first:border-t-0 lg:grid-cols-[minmax(220px,1fr)_96px_140px_112px_104px_40px] lg:items-start xl:grid-cols-[minmax(280px,1fr)_100px_148px_120px_112px_40px]"
+                          className="grid gap-4 border-t border-zinc-200/70 py-3 first:border-t-0 lg:grid-cols-[minmax(220px,1fr)_96px_136px_108px_112px_104px_40px] lg:items-start xl:grid-cols-[minmax(280px,1fr)_100px_144px_112px_120px_112px_40px]"
                         >
                           <label className="field-stack min-w-0">
                             <span className="input-label">Producto</span>
@@ -2599,13 +3896,36 @@ export default function PurchasesPage() {
                             </select>
                           </label>
 
+                          <label className="field-stack min-w-0">
+                            <span className="input-label">Desc. %</span>
+                            <div className="relative min-w-0">
+                              <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                                %
+                              </span>
+                              <input
+                                className="input w-full min-w-0 pl-8 text-right text-xs tabular-nums"
+                                inputMode="decimal"
+                                value={item.discountPercent}
+                                onChange={(event) =>
+                                  handlePurchaseProductChange(
+                                    index,
+                                    "discountPercent",
+                                    normalizeDecimalInput(event.target.value, 2),
+                                  )
+                                }
+                                placeholder="0"
+                              />
+                            </div>
+                          </label>
+
                           <div className="field-stack min-w-0">
                             <span className="input-label">Total item</span>
                             <div className="flex h-10 items-center justify-end text-sm font-semibold tabular-nums text-zinc-900">
                               {formatCurrencyARS(lineTotal)}
                             </div>
                             <span className="text-right text-[11px] text-zinc-500">
-                              IVA {formatCurrencyARS(lineTax)}
+                              Desc. {formatCurrencyARS(lineDiscount)} · IVA{" "}
+                              {formatCurrencyARS(lineTax)}
                             </span>
                           </div>
 
@@ -2624,7 +3944,19 @@ export default function PurchasesPage() {
                   </div>
 
                   <div className="flex flex-col gap-3 border-t border-zinc-200/70 pt-3 md:flex-row md:items-center md:justify-between">
-                    <div className="grid gap-2 text-xs text-zinc-600 sm:grid-cols-3">
+                    <div className="grid gap-2 text-xs text-zinc-600 sm:grid-cols-4">
+                      <span>
+                        Bruto:{" "}
+                        <strong className="text-zinc-900">
+                          {formatCurrencyARS(productTotals.grossSubtotal)}
+                        </strong>
+                      </span>
+                      <span>
+                        Desc.:{" "}
+                        <strong className="text-zinc-900">
+                          -{formatCurrencyARS(productTotals.discountTotal)}
+                        </strong>
+                      </span>
                       <span>
                         Neto:{" "}
                         <strong className="text-zinc-900">
@@ -2940,7 +4272,6 @@ export default function PurchasesPage() {
                     if (!next) {
                       setInvoiceNumber("");
                       setArcaAuthorizationCode("");
-                      setArcaPointOfSale("");
                       setArcaValidationResult(null);
                     }
                   }}
@@ -2950,7 +4281,7 @@ export default function PurchasesPage() {
 
               {hasInvoice ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     <label className="field-stack min-w-0 w-full">
                       <span className="input-label">Tipo</span>
                       <select
@@ -2973,18 +4304,18 @@ export default function PurchasesPage() {
                         onChange={(event) => setInvoiceNumber(event.target.value)}
                         placeholder="0001-00001234"
                       />
-                    </label>
-                    <label className="field-stack min-w-0 w-full">
-                      <span className="input-label">Punto de venta</span>
-                      <input
-                        className={`input w-full min-w-0 ${getHighlightClass("invoice.pointOfSale")}`}
-                        inputMode="numeric"
-                        placeholder="Ej: 1"
-                        value={arcaPointOfSale}
-                        onChange={(event) =>
-                          setArcaPointOfSale(event.target.value.replace(/\D/g, ""))
-                        }
-                      />
+                      <p className="text-[11px] text-zinc-500">
+                        Formato obligatorio: 0001-00001234 (con guion).
+                      </p>
+                      {invoiceFormatWarning ? (
+                        <p className="text-[11px] text-amber-700">
+                          {invoiceFormatWarning}
+                        </p>
+                      ) : inferredPointOfSale ? (
+                        <p className="text-[11px] text-zinc-500">
+                          Punto de venta detectado: {inferredPointOfSale}.
+                        </p>
+                      ) : null}
                     </label>
                     <label className="field-stack min-w-0 w-full">
                       <span className="input-label">CAE</span>
@@ -3002,9 +4333,25 @@ export default function PurchasesPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
-                      className="btn btn-sky text-xs"
+                      className="btn btn-sky w-full text-xs sm:w-auto"
+                      onClick={openQrScanner}
+                      disabled={isImportingQr || isArcaValidating}
+                    >
+                      {isImportingQr ? "Importando..." : "Escanear QR"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn w-full text-xs sm:w-auto"
+                      onClick={handleImportQrFromPrompt}
+                      disabled={isImportingQr || isArcaValidating}
+                    >
+                      Pegar texto QR
+                    </button>
+                    <button
+                      type="button"
+                      className="btn text-xs"
                       onClick={handleValidateArcaOnly}
-                      disabled={isArcaValidating}
+                      disabled={isArcaValidating || isImportingQr}
                     >
                       {isArcaValidating ? "Validando..." : "Validar ARCA"}
                     </button>
@@ -3126,7 +4473,11 @@ export default function PurchasesPage() {
               disabled={isSubmitting}
             >
               <CheckIcon className="size-4" />
-              {isSubmitting ? "Guardando..." : "Revisar compra"}
+              {isSubmitting
+                ? "Guardando..."
+                : editingPurchaseId
+                  ? "Revisar cambios"
+                  : "Revisar compra"}
             </button>
           </form>
         </div>
@@ -3176,22 +4527,12 @@ export default function PurchasesPage() {
             </div>
           </div>
 
-          <SupplierPaymentsPanel
-            purchases={purchases}
-            paymentMethods={paymentMethods}
-            accounts={accounts}
-            currencies={currencies}
-            latestUsdRate={latestUsdRate}
-            canCancelPayments={canCancelSupplierPayments(role)}
-            onPaymentCreated={() => loadPurchases().catch(() => undefined)}
-          />
-
           <div className="card space-y-4 p-4 sm:p-6">
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
                 Compras registradas
               </h2>
-              <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_auto] md:w-auto">
+              <div className="grid gap-2 sm:grid-cols-[minmax(340px,1fr)_180px] md:w-[720px]">
                 <input
                   className="input w-full"
                   value={query}
@@ -3224,9 +4565,7 @@ export default function PurchasesPage() {
                         </p>
                         <p className="mt-0.5 text-[11px] text-zinc-500">
                           {purchase.invoiceNumber ?? "Sin comprobante"} -{" "}
-                          {new Date(
-                            purchase.invoiceDate ?? purchase.createdAt,
-                          ).toLocaleDateString("es-AR")}
+                          {formatPurchaseDateLabel(purchase)}
                         </p>
                       </div>
                       <p className="shrink-0 text-sm font-semibold tabular-nums text-zinc-900">
@@ -3277,18 +4616,80 @@ export default function PurchasesPage() {
                             : "-"}
                         </span>
                       </div>
-                      {purchase.hasInvoice ? (
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          className="btn text-[11px]"
-                          onClick={() => handleRevalidatePurchase(purchase.id)}
-                          disabled={revalidatingPurchaseId === purchase.id}
+                          className="btn btn-sky h-8 w-8 p-0 text-[11px]"
+                          onClick={() => handleStartPurchaseEdit(purchase.id)}
+                          disabled={
+                            purchase.status === "CANCELLED" ||
+                            isLoadingPurchaseEdit ||
+                            deletingPurchaseId === purchase.id
+                          }
+                          title="Editar compra"
+                          aria-label="Editar compra"
                         >
-                          {revalidatingPurchaseId === purchase.id
-                            ? "Revalidando..."
-                            : "Revalidar"}
+                          <PencilSquareIcon className="size-4" />
+                          <span className="sr-only">Editar compra</span>
                         </button>
-                      ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-emerald text-[11px]"
+                          onClick={() => openPaymentModeEditor(purchase)}
+                          disabled={
+                            purchase.status === "CANCELLED" ||
+                            deletingPurchaseId === purchase.id
+                          }
+                          title="Ajustar cobro"
+                          aria-label="Ajustar cobro"
+                        >
+                          <CurrencyDollarIcon className="size-4" />
+                          <span>Cobro</span>
+                        </button>
+                        {purchase.hasInvoice ? (
+                          <button
+                            type="button"
+                            className="btn btn-sky text-[11px]"
+                            onClick={() => handleRevalidatePurchase(purchase.id)}
+                            disabled={
+                              revalidatingPurchaseId === purchase.id ||
+                              deletingPurchaseId === purchase.id
+                            }
+                            title="Revalidar ARCA"
+                            aria-label="Revalidar ARCA"
+                          >
+                            <ArrowPathIcon
+                              className={`size-4 ${
+                                revalidatingPurchaseId === purchase.id
+                                  ? "animate-spin"
+                                  : ""
+                              }`}
+                            />
+                            <span>
+                              {revalidatingPurchaseId === purchase.id
+                                ? "Procesando ARCA..."
+                                : "ARCA"}
+                            </span>
+                          </button>
+                        ) : null}
+                        <button
+                          type="button"
+                          className="btn btn-rose h-8 w-8 p-0 text-[11px]"
+                          onClick={() => handleDeletePurchase(purchase)}
+                          disabled={deletingPurchaseId === purchase.id}
+                          title="Eliminar compra"
+                          aria-label="Eliminar compra"
+                        >
+                          <TrashIcon
+                            className={`size-4 ${
+                              deletingPurchaseId === purchase.id
+                                ? "animate-pulse"
+                                : ""
+                            }`}
+                          />
+                          <span className="sr-only">Eliminar compra</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))
@@ -3327,9 +4728,7 @@ export default function PurchasesPage() {
                           {purchase.supplierName}
                         </td>
                         <td className="py-3 pr-3 text-zinc-600">
-                          {new Date(
-                            purchase.invoiceDate ?? purchase.createdAt,
-                          ).toLocaleDateString("es-AR")}
+                          {formatPurchaseDateLabel(purchase)}
                         </td>
                         <td className="py-3 pr-3 text-right text-zinc-700">
                           {purchase.itemsCount}
@@ -3360,20 +4759,80 @@ export default function PurchasesPage() {
                             : "-"}
                         </td>
                         <td className="py-3 pr-3 text-right">
-                          {purchase.hasInvoice ? (
+                          <div className="flex justify-end gap-2">
                             <button
                               type="button"
-                              className="btn text-[11px]"
-                              onClick={() => handleRevalidatePurchase(purchase.id)}
-                              disabled={revalidatingPurchaseId === purchase.id}
+                              className="btn btn-sky h-8 w-8 p-0 text-[11px]"
+                              onClick={() => handleStartPurchaseEdit(purchase.id)}
+                              disabled={
+                                purchase.status === "CANCELLED" ||
+                                isLoadingPurchaseEdit ||
+                                deletingPurchaseId === purchase.id
+                              }
+                              title="Editar compra"
+                              aria-label="Editar compra"
                             >
-                              {revalidatingPurchaseId === purchase.id
-                                ? "Revalidando..."
-                                : "Revalidar"}
+                              <PencilSquareIcon className="size-4" />
+                              <span className="sr-only">Editar compra</span>
                             </button>
-                          ) : (
-                            <span className="text-[11px] text-zinc-400">-</span>
-                          )}
+                            <button
+                              type="button"
+                              className="btn btn-emerald text-[11px]"
+                              onClick={() => openPaymentModeEditor(purchase)}
+                              disabled={
+                                purchase.status === "CANCELLED" ||
+                                deletingPurchaseId === purchase.id
+                              }
+                              title="Ajustar cobro"
+                              aria-label="Ajustar cobro"
+                            >
+                              <CurrencyDollarIcon className="size-4" />
+                              <span>Cobro</span>
+                            </button>
+                            {purchase.hasInvoice ? (
+                              <button
+                                type="button"
+                                className="btn btn-sky text-[11px]"
+                                onClick={() => handleRevalidatePurchase(purchase.id)}
+                                disabled={
+                                  revalidatingPurchaseId === purchase.id ||
+                                  deletingPurchaseId === purchase.id
+                                }
+                                title="Revalidar ARCA"
+                                aria-label="Revalidar ARCA"
+                              >
+                                <ArrowPathIcon
+                                  className={`size-4 ${
+                                    revalidatingPurchaseId === purchase.id
+                                      ? "animate-spin"
+                                      : ""
+                                  }`}
+                                />
+                                <span>
+                                  {revalidatingPurchaseId === purchase.id
+                                    ? "Procesando ARCA..."
+                                    : "ARCA"}
+                                </span>
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="btn btn-rose h-8 w-8 p-0 text-[11px]"
+                              onClick={() => handleDeletePurchase(purchase)}
+                              disabled={deletingPurchaseId === purchase.id}
+                              title="Eliminar compra"
+                              aria-label="Eliminar compra"
+                            >
+                              <TrashIcon
+                                className={`size-4 ${
+                                  deletingPurchaseId === purchase.id
+                                    ? "animate-pulse"
+                                    : ""
+                                }`}
+                              />
+                              <span className="sr-only">Eliminar compra</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -3392,84 +4851,627 @@ export default function PurchasesPage() {
         </>
       )}
 
-      <AnimatePresence>
-        {pendingPurchase ? (
-          <motion.div
-            className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25 px-4 py-6 backdrop-blur-sm"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
+      {renderModalPortal(
+        <AnimatePresence>
+          {pendingPurchase ? (
             <motion.div
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="confirm-purchase-title"
-              className="w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
-              initial={{ opacity: 0, y: 12, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 12, scale: 0.98 }}
-              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
             >
-              <div className="flex items-start justify-between gap-4">
-                <div>
+              <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="confirm-purchase-title"
+                className="mx-4 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <h2
+                      id="confirm-purchase-title"
+                      className="text-lg font-semibold text-zinc-900"
+                    >
+                      {editingPurchaseId ? "Confirmar cambios" : "Confirmar compra"}
+                    </h2>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {editingPurchaseId
+                        ? "Revisa los datos principales antes de actualizar."
+                        : "Revisa los datos principales antes de registrar."}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-700">
+                    {formatCurrencyARS(pendingPurchase.total)}
+                  </span>
+                </div>
+
+                <div className="mt-4 divide-y divide-zinc-200/70 rounded-xl border border-zinc-200/70">
+                  {confirmationRows.map((row) => (
+                    <div
+                      key={row.label}
+                      className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)]"
+                    >
+                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                        {row.label}
+                      </span>
+                      <span className="min-w-0 break-words text-zinc-900">
+                        {row.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {status ? (
+                  <p className="mt-3 text-xs text-rose-600">{status}</p>
+                ) : null}
+
+                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full sm:w-auto"
+                    onClick={() => setPendingPurchase(null)}
+                    disabled={isSubmitting}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-emerald w-full sm:w-auto"
+                    onClick={handleConfirmPurchase}
+                    disabled={isSubmitting}
+                  >
+                    <CheckIcon className="size-4" />
+                    {isSubmitting
+                      ? "Confirmando..."
+                      : editingPurchaseId
+                        ? "Confirmar cambios"
+                        : "Confirmar compra"}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+      )}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {editingPaymentPurchase ? (
+            <motion.div
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="purchase-payment-mode-title"
+                className="mx-4 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <div className="space-y-1">
                   <h2
-                    id="confirm-purchase-title"
+                    id="purchase-payment-mode-title"
                     className="text-lg font-semibold text-zinc-900"
                   >
-                    Confirmar compra
+                    Ajustar cobro de compra
                   </h2>
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Revisa los datos principales antes de registrar.
+                  <p className="text-xs text-zinc-500">
+                    {editingPaymentPurchase.supplierName} ·{" "}
+                    {editingPaymentPurchase.invoiceNumber ?? "Sin comprobante"} ·{" "}
+                    {formatCurrencyARS(editingPaymentPurchase.total)}
                   </p>
                 </div>
-                <span className="rounded-full border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-700">
-                  {formatCurrencyARS(pendingPurchase.total)}
-                </span>
-              </div>
 
-              <div className="mt-4 divide-y divide-zinc-200/70 rounded-xl border border-zinc-200/70">
-                {confirmationRows.map((row) => (
-                  <div
-                    key={row.label}
-                    className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)]"
-                  >
-                    <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                      {row.label}
-                    </span>
-                    <span className="min-w-0 break-words text-zinc-900">
-                      {row.value}
-                    </span>
+                <div className="mt-4 space-y-4">
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {PURCHASE_PAYMENT_MODE_OPTIONS.map((option) => {
+                      const isActive = editingPaymentMode === option.value;
+                      return (
+                        <button
+                          key={`edit-${option.value}`}
+                          type="button"
+                          aria-pressed={isActive}
+                          onClick={() => {
+                            setEditingPaymentMode(option.value);
+                            if (option.value !== "IMMEDIATE_CASH_OUT") {
+                              setEditingCashOutPaymentMethodId("");
+                              setEditingCashOutAccountId("");
+                            }
+                          }}
+                          className={`rounded-xl border px-3 py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+                            isActive
+                              ? "border-sky-300 bg-sky-50/70 text-sky-950"
+                              : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
+                          }`}
+                        >
+                          <p className="text-sm font-semibold">{option.label}</p>
+                          <p
+                            className={`mt-1 text-[11px] ${
+                              isActive ? "text-sky-700" : "text-zinc-500"
+                            }`}
+                          >
+                            {option.description}
+                          </p>
+                        </button>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
 
-              {status ? (
-                <p className="mt-3 text-xs text-rose-600">{status}</p>
-              ) : null}
+                  <label className="field-stack">
+                    <span className="input-label">Fecha</span>
+                    <input
+                      type="date"
+                      className="input cursor-pointer"
+                      value={editingPaidAt}
+                      onChange={(event) => setEditingPaidAt(event.target.value)}
+                    />
+                  </label>
 
-              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                  className="btn w-full sm:w-auto"
-                  onClick={() => setPendingPurchase(null)}
-                  disabled={isSubmitting}
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-emerald w-full sm:w-auto"
-                  onClick={handleConfirmPurchase}
-                  disabled={isSubmitting}
-                >
-                  <CheckIcon className="size-4" />
-                  {isSubmitting ? "Confirmando..." : "Confirmar compra"}
-                </button>
-              </div>
+                  {editingPaymentMode === "IMMEDIATE_CASH_OUT" ? (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className="field-stack">
+                        <span className="input-label">Metodo de pago</span>
+                        <select
+                          className="input cursor-pointer"
+                          value={editingCashOutPaymentMethodId}
+                          onChange={(event) =>
+                            setEditingCashOutPaymentMethodId(event.target.value)
+                          }
+                          disabled={!paymentMethods.length}
+                        >
+                          <option value="">
+                            {paymentMethods.length
+                              ? "Selecciona metodo"
+                              : "Sin metodos activos"}
+                          </option>
+                          {paymentMethods.map((method) => (
+                            <option key={`edit-method-${method.id}`} value={method.id}>
+                              {method.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <label className="field-stack">
+                        <span className="input-label">Cuenta de egreso</span>
+                        <select
+                          className="input cursor-pointer"
+                          value={editingCashOutAccountId}
+                          onChange={(event) =>
+                            setEditingCashOutAccountId(event.target.value)
+                          }
+                        >
+                          <option value="">Selecciona cuenta</option>
+                          {accounts.map((account) => (
+                            <option key={`edit-account-${account.id}`} value={account.id}>
+                              {account.name} ({account.currencyCode})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full sm:w-auto"
+                    onClick={closePaymentModeEditor}
+                    disabled={isUpdatingPaymentMode}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-emerald w-full sm:w-auto"
+                    onClick={handleUpdatePurchasePaymentMode}
+                    disabled={isUpdatingPaymentMode}
+                  >
+                    {isUpdatingPaymentMode ? "Guardando..." : "Guardar ajuste"}
+                  </button>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+          ) : null}
+        </AnimatePresence>,
+      )}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {isQrScannerOpen ? (
+            <motion.div
+              className="fixed inset-0 z-[125] flex items-center justify-center bg-zinc-950/35 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="purchase-qr-scanner-title"
+                className="mx-3 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2
+                      id="purchase-qr-scanner-title"
+                      className="text-base font-semibold text-zinc-900"
+                    >
+                      Escanear QR ARCA
+                    </h2>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Apunta la camara al QR del comprobante.
+                    </p>
+                  </div>
+                  <button type="button" className="btn text-xs" onClick={closeQrScanner}>
+                    Cerrar
+                  </button>
+                </div>
+
+                <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-900/95">
+                  <video
+                    ref={qrVideoRef}
+                    className="h-[320px] w-full object-cover sm:h-[360px]"
+                    muted
+                    playsInline
+                  />
+                </div>
+
+                {qrScannerError ? (
+                  <p className="mt-3 text-xs text-rose-600">{qrScannerError}</p>
+                ) : (
+                  <p className="mt-3 text-xs text-zinc-500">
+                    {isQrScannerActive
+                      ? "Scanner activo. Se completa la compra al detectar un QR."
+                      : "Preparando camara..."}
+                  </p>
+                )}
+
+                <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full text-xs sm:w-auto"
+                    onClick={async () => {
+                      closeQrScanner();
+                      await handleImportQrFromPrompt();
+                    }}
+                  >
+                    Pegar texto QR
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+      )}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {revalidationFeedback ? (
+            <motion.div
+              className="fixed inset-0 z-[125] flex items-center justify-center overflow-y-auto bg-zinc-950/35 p-3 backdrop-blur-sm sm:p-4"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="purchase-revalidation-title"
+                className="flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2
+                      id="purchase-revalidation-title"
+                      className="text-lg font-semibold text-zinc-900"
+                    >
+                      Resultado de validacion en ARCA
+                    </h2>
+                    <p className="mt-1 truncate text-xs text-zinc-500">
+                      {revalidationPurchase?.supplierName ?? "Compra"} ·{" "}
+                      {revalidationPurchase?.invoiceNumber ?? "Sin comprobante"}
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase ${
+                      revalidationFeedback.status === "REJECTED"
+                        ? "border border-rose-200 bg-white text-rose-700"
+                        : revalidationFeedback.status === "OBSERVED"
+                          ? "border border-amber-200 bg-white text-amber-700"
+                          : "border border-zinc-200 bg-white text-zinc-700"
+                    }`}
+                  >
+                    {arcaStatusLabel(revalidationFeedback.status)}
+                  </span>
+                </div>
+
+                <div className="mt-3 flex-1 space-y-3 overflow-y-auto pr-1">
+                  <p className="text-sm text-zinc-700">{revalidationFeedback.message}</p>
+
+                  {hasRevalidationDateMismatch ? (
+                    <InlineDataNotice
+                      tone="amber"
+                      title="Fecha distinta entre ARCA y tu carga"
+                      message={`ARCA informa ${revalidationArcaVoucherDate} y se envio ${revalidationRequestVoucherDate}. Corrige la fecha del comprobante y revalida.`}
+                    />
+                  ) : null}
+
+                  {revalidationFeedback.details.length ? (
+                    <div className="space-y-2 rounded-xl border border-zinc-200/80 bg-zinc-50/70 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                        Lo que informo ARCA
+                      </p>
+                      <div className="space-y-1.5">
+                        {revalidationFeedback.details.map((detail, index) => (
+                          <div
+                            key={`arca-detail-${index}`}
+                            className="grid gap-1 text-xs text-zinc-700 sm:grid-cols-[180px_minmax(0,1fr)]"
+                          >
+                            <span className="font-semibold text-zinc-500">
+                              {detail.label}
+                            </span>
+                            <span className="min-w-0 break-words text-zinc-800">
+                              {detail.value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {revalidationFeedback.hints.length ? (
+                    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                        Como resolverlo
+                      </p>
+                      <ul className="space-y-1 text-xs text-amber-900">
+                        {revalidationFeedback.hints.map((hint, index) => (
+                          <li key={`arca-hint-${index}`}>• {hint}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {revalidationFeedback.request ? (
+                    <div className="rounded-xl border border-zinc-200/80 bg-white p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                        Datos enviados para validar
+                      </p>
+                      <div className="mt-2 grid gap-2 text-xs text-zinc-700 sm:grid-cols-2">
+                        <span>
+                          Modo:{" "}
+                          {formatArcaAuthorizationModeLabel(revalidationFeedback.request.mode)}
+                        </span>
+                        <span>
+                          Tipo:{" "}
+                          {formatArcaVoucherTypeLabel(
+                            revalidationFeedback.request.voucherType,
+                          )}
+                        </span>
+                        <span>
+                          Punto: {String(revalidationFeedback.request.pointOfSale ?? "-")}
+                        </span>
+                        <span>
+                          Numero: {String(revalidationFeedback.request.voucherNumber ?? "-")}
+                        </span>
+                        <span>
+                          Fecha:{" "}
+                          {formatArcaRequestDate(revalidationFeedback.request.voucherDate)}
+                        </span>
+                        <span>
+                          Total:{" "}
+                          {formatArcaRequestAmount(
+                            revalidationFeedback.request.totalAmount,
+                          )}
+                        </span>
+                        <span>
+                          CUIT emisor:{" "}
+                          {String(revalidationFeedback.request.issuerTaxId ?? "-")}
+                        </span>
+                        <span>
+                          Tipo doc. receptor:{" "}
+                          {formatArcaReceiverDocTypeLabel(
+                            revalidationFeedback.request.receiverDocType,
+                          )}
+                        </span>
+                        <span>
+                          Documento receptor:{" "}
+                          {String(revalidationFeedback.request.receiverDocNumber ?? "-")}
+                        </span>
+                        <span>
+                          CAE/CAEA:{" "}
+                          {String(revalidationFeedback.request.authorizationCode ?? "-")}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {revalidationFeedback.rawResponse ? (
+                    <details className="rounded-xl border border-zinc-200/80 bg-zinc-50/40 p-3">
+                      <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+                        Detalle ARCA completo
+                      </summary>
+                      <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-zinc-900 p-2 text-[11px] leading-relaxed text-zinc-100">
+                        {JSON.stringify(revalidationFeedback.rawResponse, null, 2)}
+                      </pre>
+                    </details>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-zinc-100 pt-3">
+                  {revalidationPurchase ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setRevalidationFeedback(null);
+                        void handleStartPurchaseEdit(revalidationPurchase.id);
+                      }}
+                    >
+                      Editar compra
+                    </button>
+                  ) : null}
+                  {revalidationPurchase ? (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() =>
+                        openInvoiceEditor(revalidationPurchase, {
+                          revalidateAfterSave: true,
+                          closeRevalidation: true,
+                        })
+                      }
+                    >
+                      Editar y revalidar
+                    </button>
+                  ) : null}
+                  <button type="button" className="btn" onClick={closeRevalidationFeedback}>
+                    Cerrar
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+      )}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {editingInvoicePurchase ? (
+            <motion.div
+              className="fixed inset-0 z-[126] flex items-center justify-center bg-zinc-950/35 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              <motion.div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="purchase-edit-invoice-title"
+                className="mx-4 my-6 w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+                initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h2
+                      id="purchase-edit-invoice-title"
+                      className="text-lg font-semibold text-zinc-900"
+                    >
+                      Editar datos del comprobante
+                    </h2>
+                    <p className="mt-1 truncate text-xs text-zinc-500">
+                      {editingInvoicePurchase.supplierName} ·{" "}
+                      {editingInvoicePurchase.invoiceNumber ?? "Sin comprobante"}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <label className="field-stack">
+                    <span className="input-label">Tipo de comprobante</span>
+                    <select
+                      className="input cursor-pointer"
+                      value={editingVoucherKind}
+                      onChange={(event) =>
+                        setEditingVoucherKind(event.target.value as "A" | "B" | "C")
+                      }
+                      disabled={isSavingInvoiceEdit}
+                    >
+                      <option value="A">Factura A</option>
+                      <option value="B">Factura B</option>
+                      <option value="C">Factura C</option>
+                    </select>
+                  </label>
+                  <label className="field-stack">
+                    <span className="input-label">Fecha comprobante</span>
+                    <input
+                      type="date"
+                      className="input cursor-pointer"
+                      value={editingInvoiceDate}
+                      onChange={(event) => setEditingInvoiceDate(event.target.value)}
+                      disabled={isSavingInvoiceEdit}
+                    />
+                  </label>
+                  <label className="field-stack sm:col-span-2">
+                    <span className="input-label">Numero comprobante</span>
+                    <input
+                      className="input"
+                      value={editingInvoiceNumber}
+                      onChange={(event) => setEditingInvoiceNumber(event.target.value)}
+                      placeholder="0001-00001234"
+                      disabled={isSavingInvoiceEdit}
+                    />
+                    <p className="text-[11px] text-zinc-500">
+                      Formato obligatorio: 0001-00001234 (con guion).
+                    </p>
+                  </label>
+                  <label className="field-stack sm:col-span-2">
+                    <span className="input-label">CAE/CAEA</span>
+                    <input
+                      className="input"
+                      value={editingAuthorizationCode}
+                      onChange={(event) =>
+                        setEditingAuthorizationCode(event.target.value)
+                      }
+                      placeholder="Codigo de autorizacion"
+                      disabled={isSavingInvoiceEdit}
+                    />
+                  </label>
+                </div>
+
+                <p className="mt-3 text-xs text-zinc-500">
+                  Lo que guardes aca se usa para la proxima revalidacion ARCA.
+                </p>
+
+                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full sm:w-auto"
+                    onClick={closeInvoiceEditor}
+                    disabled={isSavingInvoiceEdit}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-emerald w-full sm:w-auto"
+                    onClick={handleSaveInvoiceEdit}
+                    disabled={isSavingInvoiceEdit}
+                  >
+                    {isSavingInvoiceEdit
+                      ? "Guardando..."
+                      : revalidateAfterInvoiceEdit
+                        ? "Guardar y revalidar"
+                        : "Guardar cambios"}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+      )}
 
       {status && !pendingPurchase ? (
         <p className="text-xs text-zinc-500">{status}</p>
