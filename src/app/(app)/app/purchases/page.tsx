@@ -4,6 +4,7 @@ import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
+import jsQR from "jsqr";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import {
@@ -1112,14 +1113,51 @@ export default function PurchasesPage() {
           }
         ).BarcodeDetector;
 
-        if (!detectorCtor) {
-          setQrScannerError(
-            "Tu navegador no soporta escaneo nativo de QR. Usa 'Pegar texto QR'.",
-          );
-          return;
+        let detectQrFrame: () => Promise<string | null>;
+        if (detectorCtor) {
+          const detector = new detectorCtor({ formats: ["qr_code"] });
+          detectQrFrame = async () => {
+            const scannerVideo = qrVideoRef.current;
+            if (!scannerVideo) return null;
+            const codes = await detector.detect(scannerVideo);
+            const rawValue = codes.find(
+              (candidate) =>
+                typeof candidate.rawValue === "string" &&
+                candidate.rawValue.trim().length > 0,
+            )?.rawValue;
+            return typeof rawValue === "string" ? rawValue.trim() : null;
+          };
+        } else {
+          const frameCanvas = document.createElement("canvas");
+          const frameContext = frameCanvas.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!frameContext) {
+            setQrScannerError(
+              "No se pudo inicializar el lector QR en este dispositivo.",
+            );
+            return;
+          }
+          detectQrFrame = async () => {
+            const scannerVideo = qrVideoRef.current;
+            if (!scannerVideo) return null;
+            const width = scannerVideo.videoWidth;
+            const height = scannerVideo.videoHeight;
+            if (!width || !height) return null;
+            if (frameCanvas.width !== width || frameCanvas.height !== height) {
+              frameCanvas.width = width;
+              frameCanvas.height = height;
+            }
+            frameContext.drawImage(scannerVideo, 0, 0, width, height);
+            const imageData = frameContext.getImageData(0, 0, width, height);
+            const decoded = jsQR(imageData.data, width, height, {
+              inversionAttempts: "attemptBoth",
+            });
+            const rawValue = decoded?.data?.trim();
+            return rawValue ? rawValue : null;
+          };
         }
 
-        const detector = new detectorCtor({ formats: ["qr_code"] });
         setIsQrScannerActive(true);
         qrScannerIntervalRef.current = window.setInterval(async () => {
           if (!isQrScannerOpen || qrScannerBusyRef.current || !qrVideoRef.current) {
@@ -1130,12 +1168,7 @@ export default function PurchasesPage() {
           }
           qrScannerBusyRef.current = true;
           try {
-            const codes = await detector.detect(qrVideoRef.current);
-            const rawValue = codes.find(
-              (candidate) =>
-                typeof candidate.rawValue === "string" &&
-                candidate.rawValue.trim().length > 0,
-            )?.rawValue;
+            const rawValue = await detectQrFrame();
             if (!rawValue) return;
             setIsQrScannerOpen(false);
             stopQrScanner();
