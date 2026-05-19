@@ -3326,31 +3326,33 @@ export default function PurchasesPage() {
         </p>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
-          <div className="rounded-2xl border border-zinc-200 bg-white/80 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-zinc-500">Compras</span>
-              <p className="text-base font-semibold text-zinc-900">
+      <div className="flex flex-row flex-wrap gap-2">
+          <div className="min-w-0 flex-1 basis-[calc(33.333%-0.5rem)] rounded-2xl border border-zinc-200 bg-white/80 p-3">
+            <div className="flex flex-col items-start gap-1">
+              <span className="text-[10px] font-medium leading-tight text-zinc-500">
+                Compras
+              </span>
+              <p className="text-sm font-semibold leading-tight text-zinc-900">
                 {totalPurchases}
               </p>
             </div>
           </div>
-          <div className="rounded-2xl border border-zinc-200 bg-white/80 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-zinc-500">
+          <div className="min-w-0 flex-1 basis-[calc(33.333%-0.5rem)] rounded-2xl border border-zinc-200 bg-white/80 p-3">
+            <div className="flex flex-col items-start gap-1">
+              <span className="text-[10px] font-medium leading-tight text-zinc-500">
                 Impactan cta. cte.
               </span>
-              <p className="text-base font-semibold text-zinc-900">
+              <p className="text-sm font-semibold leading-tight text-zinc-900">
                 {impactCount}
               </p>
             </div>
           </div>
-          <div className="rounded-2xl border border-zinc-200 bg-white/80 p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-zinc-500">
+          <div className="min-w-0 flex-1 basis-[calc(33.333%-0.5rem)] rounded-2xl border border-zinc-200 bg-white/80 p-3">
+            <div className="flex flex-col items-start gap-1">
+              <span className="text-[10px] font-medium leading-tight text-zinc-500">
                 Total registrado
               </span>
-              <p className="text-base font-semibold text-zinc-900">
+              <p className="text-sm font-semibold leading-tight text-zinc-900">
                 {formatCurrencyARS(totalAmountRegistered)}
               </p>
             </div>
@@ -3709,11 +3711,14 @@ export default function PurchasesPage() {
                   ) : null}
                 </AnimatePresence>
 
-                <div className="grid gap-3 border-y border-zinc-200/70 py-3 sm:grid-cols-2 lg:grid-cols-6">
+                <div className="flex flex-row flex-wrap gap-3 border-y border-zinc-200/70 py-3">
                   {fiscalSummaryItems.map((item) => {
                     const isDifference = item.label === "Diferencia";
                     return (
-                      <div key={item.label} className="min-w-0">
+                      <div
+                        key={item.label}
+                        className="min-w-0 flex-1 basis-[calc(33.333%-0.5rem)]"
+                      >
                         <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                           {item.label}
                         </span>
@@ -4084,32 +4089,32 @@ export default function PurchasesPage() {
                   </div>
 
                   <div className="flex flex-col gap-3 border-t border-zinc-200/70 pt-3 md:flex-row md:items-center md:justify-between">
-                    <div className="grid gap-2 text-xs text-zinc-600 sm:grid-cols-4">
-                      <span>
+                    <div className="flex flex-row flex-wrap gap-x-3 gap-y-2 text-xs text-zinc-600">
+                      <span className="whitespace-nowrap">
                         Bruto:{" "}
                         <strong className="text-zinc-900">
                           {formatCurrencyARS(productTotals.grossSubtotal)}
                         </strong>
                       </span>
-                      <span>
+                      <span className="whitespace-nowrap">
                         Desc.:{" "}
                         <strong className="text-zinc-900">
                           -{formatCurrencyARS(productTotals.discountTotal)}
                         </strong>
                       </span>
-                      <span>
+                      <span className="whitespace-nowrap">
                         Neto:{" "}
                         <strong className="text-zinc-900">
                           {formatCurrencyARS(productTotals.subtotal)}
                         </strong>
                       </span>
-                      <span>
+                      <span className="whitespace-nowrap">
                         IVA:{" "}
                         <strong className="text-zinc-900">
                           {formatCurrencyARS(productTotals.tax)}
                         </strong>
                       </span>
-                      <span>
+                      <span className="whitespace-nowrap">
                         Total:{" "}
                         <strong className="text-zinc-900">
                           {formatCurrencyARS(productTotals.total)}
@@ -4471,22 +4476,24 @@ export default function PurchasesPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn btn-sky w-full text-xs sm:w-auto"
-                      onClick={openQrScanner}
-                      disabled={isImportingQr || isArcaValidating}
-                    >
-                      {isImportingQr ? "Importando..." : "Escanear QR"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn w-full text-xs sm:w-auto"
-                      onClick={handleImportQrFromPrompt}
-                      disabled={isImportingQr || isArcaValidating}
-                    >
-                      Pegar texto QR
-                    </button>
+                    <div className="grid w-full grid-cols-2 gap-2 sm:w-auto">
+                      <button
+                        type="button"
+                        className="btn btn-sky w-full text-xs sm:w-auto"
+                        onClick={openQrScanner}
+                        disabled={isImportingQr || isArcaValidating}
+                      >
+                        {isImportingQr ? "Importando..." : "Escanear QR"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn w-full text-xs sm:w-auto"
+                        onClick={handleImportQrFromPrompt}
+                        disabled={isImportingQr || isArcaValidating}
+                      >
+                        Pegar texto QR
+                      </button>
+                    </div>
                     <button
                       type="button"
                       className="btn text-xs"
@@ -4635,7 +4642,7 @@ export default function PurchasesPage() {
                   <span className="input-label">Desde</span>
                   <input
                     type="date"
-                    className="input w-full cursor-pointer text-xs"
+                    className="input w-full min-w-0 cursor-pointer text-xs"
                     value={reportFrom}
                     onChange={(event) => setReportFrom(event.target.value)}
                   />
@@ -4644,25 +4651,27 @@ export default function PurchasesPage() {
                   <span className="input-label">Hasta</span>
                   <input
                     type="date"
-                    className="input w-full cursor-pointer text-xs"
+                    className="input w-full min-w-0 cursor-pointer text-xs"
                     value={reportTo}
                     onChange={(event) => setReportTo(event.target.value)}
                   />
                 </label>
-                <button
-                  type="button"
-                  className="btn w-full text-xs sm:w-auto"
-                  onClick={() => handleDownloadPurchasesReport("csv")}
-                >
-                  Descargar CSV
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sky w-full text-xs sm:w-auto"
-                  onClick={() => handleDownloadPurchasesReport("pdf")}
-                >
-                  Descargar PDF
-                </button>
+                <div className="grid grid-cols-2 gap-2 sm:contents">
+                  <button
+                    type="button"
+                    className="btn w-full text-xs sm:w-auto"
+                    onClick={() => handleDownloadPurchasesReport("csv")}
+                  >
+                    Descargar CSV
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sky w-full text-xs sm:w-auto"
+                    onClick={() => handleDownloadPurchasesReport("pdf")}
+                  >
+                    Descargar PDF
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -5150,7 +5159,7 @@ export default function PurchasesPage() {
                     <span className="input-label">Fecha</span>
                     <input
                       type="date"
-                      className="input cursor-pointer"
+                      className="input w-full min-w-0 cursor-pointer"
                       value={editingPaidAt}
                       onChange={(event) => setEditingPaidAt(event.target.value)}
                     />
@@ -5589,7 +5598,7 @@ export default function PurchasesPage() {
                     <span className="input-label">Fecha comprobante</span>
                     <input
                       type="date"
-                      className="input cursor-pointer"
+                      className="input w-full min-w-0 cursor-pointer"
                       value={editingInvoiceDate}
                       onChange={(event) => setEditingInvoiceDate(event.target.value)}
                       disabled={isSavingInvoiceEdit}
