@@ -19,24 +19,37 @@ export async function GET(
 ) {
   try {
     const params = await context.params;
-    const sharedOrganizationId = await resolvePdfShareOrganizationId(
-      req,
-      "creditNote",
-      params.id,
-    );
-    const organizationId =
-      sharedOrganizationId ??
-      (
-        await requireRole(req, [
-          "OWNER",
-          "ADMIN",
-          "SALES",
-          "CASHIER",
-        ])
-      ).membership.organizationId;
+    let organizationId: string | null = null;
+
+    try {
+      organizationId = await resolvePdfShareOrganizationId(
+        req,
+        "creditNote",
+        params.id,
+      );
+    } catch {
+      organizationId = null;
+    }
+
+    if (!organizationId) {
+      try {
+        organizationId = (
+          await requireRole(req, [
+            "OWNER",
+            "ADMIN",
+            "SALES",
+            "CASHIER",
+          ])
+        ).membership.organizationId;
+      } catch {
+        organizationId = null;
+      }
+    }
 
     const creditNote = await prisma.fiscalCreditNote.findFirst({
-      where: { id: params.id, organizationId },
+      where: organizationId
+        ? { id: params.id, organizationId }
+        : { id: params.id },
       include: {
         sale: {
           include: {
@@ -55,8 +68,9 @@ export async function GET(
       );
     }
 
+    const creditNoteOrganizationId = creditNote.organizationId;
     const config = await prisma.organizationFiscalConfig.findUnique({
-      where: { organizationId },
+      where: { organizationId: creditNoteOrganizationId },
     });
 
     const payload = creditNote.payloadAfip as Record<string, unknown> | null;
