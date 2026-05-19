@@ -26,42 +26,47 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
       ensureServiceAuthorized: async (organizationId, service) => {
         ensuredArgs = { organizationId, service };
       },
-      getClient: async () => ({
-        CUIT: 30711222334,
-        WebService: () => ({
-          getTokenAuthorization: async () => ({
-            token: "token-mock",
-            sign: "sign-mock",
+      getClient: (async () =>
+        ({
+          CUIT: 30711222334,
+          WebService: () => ({
+            getTokenAuthorization: async () => ({
+              token: "token-mock",
+              sign: "sign-mock",
+            }),
+            executeRequest: async (method: string, payload: Record<string, unknown>) => {
+              executed = { method, payload };
+              return {
+                Resultado: "A",
+                CmpResp: {
+                  CbteModo: "CAE",
+                  CuitEmisor: 30712345678,
+                  PtoVta: 5,
+                  CbteTipo: 1,
+                  CbteNro: 123,
+                  CbteFch: 20260401,
+                  ImpTotal: 150000.5,
+                  CodAutorizacion: "12345678901234",
+                },
+                Observaciones: {
+                  Obs: [{ Msg: "Comprobante autorizado" }],
+                },
+              };
+            },
           }),
-          executeRequest: async (method: string, payload: Record<string, unknown>) => {
-            executed = { method, payload };
-            return {
-              Resultado: "A",
-              CmpResp: {
-                CbteModo: "CAE",
-                CuitEmisor: 30712345678,
-                PtoVta: 5,
-                CbteTipo: 1,
-                CbteNro: 123,
-                CbteFch: 20260401,
-                ImpTotal: 150000.5,
-                CodAutorizacion: "12345678901234",
-              },
-              Observaciones: {
-                Obs: [{ Msg: "Comprobante autorizado" }],
-              },
-            };
-          },
-        }),
-      }),
+        }) as unknown as Awaited<ReturnType<typeof import("../src/lib/afip/client").getAfipClient>>) as any,
     }
   );
 
   assert.deepEqual(ensuredArgs, { organizationId: "org-1", service: "wscdc" });
-  assert.equal(executed?.method, "ComprobanteConstatar");
+  const executedPayload = executed as
+    | { method: string; payload: Record<string, unknown> }
+    | null;
+  assert.ok(executedPayload);
+  assert.equal(executedPayload.method, "ComprobanteConstatar");
 
-  const auth = executed?.payload.Auth as Record<string, unknown>;
-  const cmpReq = executed?.payload.CmpReq as Record<string, unknown>;
+  const auth = executedPayload.payload.Auth as Record<string, unknown>;
+  const cmpReq = executedPayload.payload.CmpReq as Record<string, unknown>;
   assert.deepEqual(auth, {
     Token: "token-mock",
     Sign: "sign-mock",
@@ -90,6 +95,12 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
     authorizationCode: "12345678901234",
     receiverDocType: null,
     receiverDocNumber: null,
+    netTaxedAmount: null,
+    nonTaxedAmount: null,
+    exemptAmount: null,
+    vatAmount: null,
+    otherTaxesAmount: null,
+    tributes: [],
   });
 });
 
@@ -114,7 +125,7 @@ test("validatePurchaseVoucherWithArca fails fast for invalid issuer CUIT", async
         },
         {
           ensureServiceAuthorized: async () => undefined,
-          getClient: async () => {
+          getClient: (async () => {
             getClientCalls += 1;
             return {
               CUIT: 30711222334,
@@ -122,8 +133,8 @@ test("validatePurchaseVoucherWithArca fails fast for invalid issuer CUIT", async
                 getTokenAuthorization: async () => ({ token: "t", sign: "s" }),
                 executeRequest: async () => ({}),
               }),
-            };
-          },
+            } as unknown as Awaited<ReturnType<typeof import("../src/lib/afip/client").getAfipClient>>;
+          }) as any,
         }
       ),
     (error: unknown) =>

@@ -74,7 +74,7 @@ export default function PurchasePaymentModeModal({
       >
         <div className="space-y-1">
           <h2 id="purchase-payment-mode-title" className="text-lg font-semibold text-zinc-900">
-            Ajustar cobro de compra
+            Ajustar pago de compra
           </h2>
           <p className="text-xs text-zinc-500">
             {editingPaymentPurchase.supplierName} · {editingPaymentPurchase.invoiceNumber ?? "Sin comprobante"} ·{" "}

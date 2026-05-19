@@ -63,6 +63,7 @@ export type PurchaseRow = {
   impactsAccount?: boolean;
   adjustedStock?: boolean;
   cashOutRegistered?: boolean;
+  immediatePaymentMethodName?: string | null;
   arcaValidationStatus?: string | null;
   arcaValidationMessage?: string | null;
   arcaValidationCheckedAt?: string | null;

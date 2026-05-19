@@ -56,6 +56,90 @@ const purchaseSchema = z.object({
   cashOutAccountId: z.string().min(1).optional(),
 });
 
+type ImmediateCashOutCandidate = {
+  methodName: string;
+  occurredAt: Date;
+  amount: number;
+};
+
+const purchaseImmediateCashOutPrefix = (reference: string) =>
+  `Compra ${reference} · `;
+
+const parseImmediateCashOutNote = (note: string | null | undefined) => {
+  if (!note) return null;
+  const match = /^Compra\s+(.+?)\s+·\s+(.+)$/.exec(note.trim());
+  if (!match) return null;
+  const reference = match[1]?.trim();
+  const methodName = match[2]?.trim();
+  if (!reference || !methodName) return null;
+  return { reference, methodName };
+};
+
+const toNumber = (value: unknown) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const resolveImmediatePaymentMethodName = (input: {
+  purchaseId: string;
+  invoiceNumber: string | null;
+  invoiceDate: Date | null;
+  createdAt: Date;
+  total: unknown;
+  candidatesByPrefix: Map<string, ImmediateCashOutCandidate[]>;
+}) => {
+  const references = Array.from(
+    new Set(
+      [input.invoiceNumber?.trim(), input.purchaseId].filter(
+        (reference): reference is string => Boolean(reference),
+      ),
+    ),
+  );
+
+  const purchaseTotal = toNumber(input.total);
+  const referenceDate = input.invoiceDate ?? input.createdAt;
+  const referenceTime = referenceDate.getTime();
+  let bestMatch:
+    | {
+        methodName: string;
+        score: number;
+        occurredAt: number;
+      }
+    | null = null;
+
+  for (const reference of references) {
+    const prefix = purchaseImmediateCashOutPrefix(reference);
+    const candidates = input.candidatesByPrefix.get(prefix) ?? [];
+    const isPurchaseIdReference = reference === input.purchaseId;
+
+    for (const candidate of candidates) {
+      let score = isPurchaseIdReference ? 100 : 0;
+      if (Math.abs(candidate.amount - purchaseTotal) <= 0.01) {
+        score += 20;
+      }
+
+      const distanceInDays =
+        Math.abs(candidate.occurredAt.getTime() - referenceTime) / 86400000;
+      score += Math.max(0, 10 - Math.min(distanceInDays, 10));
+
+      const occurredAtMs = candidate.occurredAt.getTime();
+      if (
+        !bestMatch ||
+        score > bestMatch.score ||
+        (score === bestMatch.score && occurredAtMs > bestMatch.occurredAt)
+      ) {
+        bestMatch = {
+          methodName: candidate.methodName,
+          score,
+          occurredAt: occurredAtMs,
+        };
+      }
+    }
+  }
+
+  return bestMatch?.methodName ?? null;
+};
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
@@ -75,50 +159,118 @@ export async function GET(req: NextRequest) {
       take: 50,
     });
 
+    const immediateCashOutPrefixes = Array.from(
+      new Set(
+        purchases.flatMap((purchase) => {
+          const references = [purchase.id];
+          const trimmedInvoiceNumber = purchase.invoiceNumber?.trim();
+          if (trimmedInvoiceNumber) {
+            references.unshift(trimmedInvoiceNumber);
+          }
+          return references.map((reference) =>
+            purchaseImmediateCashOutPrefix(reference),
+          );
+        }),
+      ),
+    );
+
+    const immediateCashOutMovements = immediateCashOutPrefixes.length
+      ? await prisma.accountMovement.findMany({
+          where: {
+            organizationId,
+            direction: "OUT",
+            OR: immediateCashOutPrefixes.map((prefix) => ({
+              note: { startsWith: prefix },
+            })),
+          },
+          select: {
+            note: true,
+            occurredAt: true,
+            amount: true,
+          },
+          orderBy: { occurredAt: "desc" },
+          take: 250,
+        })
+      : [];
+
+    const immediateCashOutPrefixSet = new Set(immediateCashOutPrefixes);
+    const immediateCashOutCandidatesByPrefix = new Map<
+      string,
+      ImmediateCashOutCandidate[]
+    >();
+
+    for (const movement of immediateCashOutMovements) {
+      const parsed = parseImmediateCashOutNote(movement.note);
+      if (!parsed) continue;
+      const prefix = purchaseImmediateCashOutPrefix(parsed.reference);
+      if (!immediateCashOutPrefixSet.has(prefix)) continue;
+
+      const current = immediateCashOutCandidatesByPrefix.get(prefix) ?? [];
+      current.push({
+        methodName: parsed.methodName,
+        occurredAt: movement.occurredAt,
+        amount: toNumber(movement.amount),
+      });
+      immediateCashOutCandidatesByPrefix.set(prefix, current);
+    }
+
     return NextResponse.json(
-      purchases.map((purchase) => ({
-        id: purchase.id,
-        supplierId: purchase.supplierId,
-        supplierName: purchase.supplier.displayName,
-        invoiceNumber: purchase.invoiceNumber,
-        invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
-        createdAt: purchase.createdAt.toISOString(),
-        subtotal: purchase.subtotal?.toString() ?? null,
-        taxes: purchase.taxes?.toString() ?? null,
-        total: purchase.total?.toString() ?? null,
-        fiscalVoucherKind: purchase.fiscalVoucherKind,
-        fiscalVoucherType: purchase.fiscalVoucherType,
-        fiscalPointOfSale: purchase.fiscalPointOfSale,
-        fiscalVoucherNumber: purchase.fiscalVoucherNumber,
-        authorizationMode: purchase.authorizationMode,
-        authorizationCode: purchase.authorizationCode,
-        currencyCode: purchase.currencyCode,
-        netTaxed: purchase.netTaxed.toString(),
-        netNonTaxed: purchase.netNonTaxed.toString(),
-        exemptAmount: purchase.exemptAmount.toString(),
-        vatTotal: purchase.vatTotal.toString(),
-        otherTaxesTotal: purchase.otherTaxesTotal.toString(),
-        fiscalLines: purchase.fiscalLines.map((line) => ({
-          id: line.id,
-          type: line.type,
-          jurisdiction: line.jurisdiction,
-          baseAmount: line.baseAmount?.toString() ?? null,
-          rate: line.rate?.toString() ?? null,
-          amount: line.amount.toString(),
-          note: line.note,
-        })),
-        paidTotal: purchase.paidTotal?.toString() ?? "0",
-        balance: purchase.balance?.toString() ?? "0",
-        paymentStatus: purchase.paymentStatus,
-        itemsCount: purchase.items.length,
-        status: purchase.status,
-        hasInvoice: Boolean(purchase.invoiceNumber),
-        impactsAccount: purchase.currentAccountEntries.length > 0,
-        arcaValidationStatus: purchase.arcaValidationStatus,
-        arcaValidationMessage: purchase.arcaValidationMessage ?? null,
-        arcaValidationCheckedAt:
-          purchase.arcaValidationCheckedAt?.toISOString() ?? null,
-      })),
+      purchases.map((purchase) => {
+        const immediatePaymentMethodName = resolveImmediatePaymentMethodName({
+          purchaseId: purchase.id,
+          invoiceNumber: purchase.invoiceNumber ?? null,
+          invoiceDate: purchase.invoiceDate,
+          createdAt: purchase.createdAt,
+          total: purchase.total,
+          candidatesByPrefix: immediateCashOutCandidatesByPrefix,
+        });
+
+        return {
+          id: purchase.id,
+          supplierId: purchase.supplierId,
+          supplierName: purchase.supplier.displayName,
+          invoiceNumber: purchase.invoiceNumber,
+          invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
+          createdAt: purchase.createdAt.toISOString(),
+          subtotal: purchase.subtotal?.toString() ?? null,
+          taxes: purchase.taxes?.toString() ?? null,
+          total: purchase.total?.toString() ?? null,
+          fiscalVoucherKind: purchase.fiscalVoucherKind,
+          fiscalVoucherType: purchase.fiscalVoucherType,
+          fiscalPointOfSale: purchase.fiscalPointOfSale,
+          fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+          authorizationMode: purchase.authorizationMode,
+          authorizationCode: purchase.authorizationCode,
+          currencyCode: purchase.currencyCode,
+          netTaxed: purchase.netTaxed.toString(),
+          netNonTaxed: purchase.netNonTaxed.toString(),
+          exemptAmount: purchase.exemptAmount.toString(),
+          vatTotal: purchase.vatTotal.toString(),
+          otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+          fiscalLines: purchase.fiscalLines.map((line) => ({
+            id: line.id,
+            type: line.type,
+            jurisdiction: line.jurisdiction,
+            baseAmount: line.baseAmount?.toString() ?? null,
+            rate: line.rate?.toString() ?? null,
+            amount: line.amount.toString(),
+            note: line.note,
+          })),
+          paidTotal: purchase.paidTotal?.toString() ?? "0",
+          balance: purchase.balance?.toString() ?? "0",
+          paymentStatus: purchase.paymentStatus,
+          itemsCount: purchase.items.length,
+          status: purchase.status,
+          hasInvoice: Boolean(purchase.invoiceNumber),
+          impactsAccount: purchase.currentAccountEntries.length > 0,
+          cashOutRegistered: Boolean(immediatePaymentMethodName),
+          immediatePaymentMethodName,
+          arcaValidationStatus: purchase.arcaValidationStatus,
+          arcaValidationMessage: purchase.arcaValidationMessage ?? null,
+          arcaValidationCheckedAt:
+            purchase.arcaValidationCheckedAt?.toISOString() ?? null,
+        };
+      }),
     );
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -524,6 +676,10 @@ export async function POST(req: NextRequest) {
       impactsAccount: impactCurrentAccount,
       adjustedStock: adjustStock,
       cashOutRegistered: Boolean(registerCashOut && cashOutAccount),
+      immediatePaymentMethodName:
+        registerCashOut && cashOutPaymentMethod
+          ? cashOutPaymentMethod.name
+          : null,
       arcaValidationStatus:
         arcaValidation?.status ?? purchase.arcaValidationStatus,
       arcaValidationMessage:

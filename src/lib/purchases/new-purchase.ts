@@ -1,5 +1,13 @@
 export type PurchaseTotalsSource = "AUTO_FROM_PRODUCTS" | "MANUAL";
 
+export type PurchaseArcaTributeSnapshot = {
+  code?: string | null;
+  description?: string | null;
+  baseAmount?: number | null;
+  rate?: number | null;
+  amount: number;
+};
+
 export type PurchaseArcaVoucherSnapshot = {
   mode?: string | null;
   issuerTaxId?: string | null;
@@ -9,6 +17,12 @@ export type PurchaseArcaVoucherSnapshot = {
   voucherDate: string | null;
   totalAmount: number | null;
   authorizationCode: string | null;
+  netTaxedAmount?: number | null;
+  nonTaxedAmount?: number | null;
+  exemptAmount?: number | null;
+  vatAmount?: number | null;
+  otherTaxesAmount?: number | null;
+  tributes?: PurchaseArcaTributeSnapshot[];
 };
 
 export type PurchaseArcaFormValues = {

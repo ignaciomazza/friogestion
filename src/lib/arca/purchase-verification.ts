@@ -18,6 +18,19 @@ type PurchaseValidationStatus =
   | "REJECTED"
   | "ERROR";
 
+const ARCA_HTTP_ERROR_MESSAGES: Record<number, string> = {
+  400: "ARCA rechazo la consulta por datos invalidos del comprobante.",
+  401: "ARCA rechazo la autenticacion. Revisa token y certificados.",
+  403: "ARCA rechazo el acceso al servicio solicitado.",
+  404: "ARCA no encontro el servicio solicitado.",
+  408: "ARCA tardo demasiado en responder. Intenta nuevamente.",
+  429: "ARCA recibio demasiadas consultas. Espera unos segundos y reintenta.",
+  500: "ARCA devolvio un error interno.",
+  502: "ARCA no respondio correctamente. Intenta nuevamente.",
+  503: "ARCA no esta disponible temporalmente.",
+  504: "ARCA no respondio a tiempo.",
+};
+
 function toNullableJsonInput(
   value: unknown
 ): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
@@ -25,6 +38,32 @@ function toNullableJsonInput(
     return Prisma.DbNull;
   }
   return value as Prisma.InputJsonValue;
+}
+
+function normalizeValidationFailureMessage(error: unknown) {
+  if (!(error instanceof Error)) return "No se pudo validar el comprobante en ARCA.";
+  const message = error.message || "ARCA_VALIDATION_ERROR";
+
+  const httpMatch = message.match(/^ARCA_HTTP_(\d{3})(?::\s*(.+))?$/i);
+  if (httpMatch) {
+    const statusCode = Number(httpMatch[1]);
+    const detail = (httpMatch[2] ?? "").trim();
+    const base =
+      ARCA_HTTP_ERROR_MESSAGES[statusCode] ?? `ARCA devolvio HTTP ${statusCode}.`;
+    return detail ? `${base} Detalle: ${detail}.` : base;
+  }
+
+  if (message === "ARCA_REQUEST_FAILED") {
+    return "No se pudo comunicar con ARCA. Intenta nuevamente en unos segundos.";
+  }
+  if (message.startsWith("ARCA_RESPONSE_INVALID")) {
+    return "ARCA respondio en un formato inesperado. Reintenta la validacion.";
+  }
+  if (message === "ARCA_VALIDATION_ERROR" || message === "ARCA_ERROR") {
+    return "No se pudo validar el comprobante en ARCA.";
+  }
+
+  return message;
 }
 
 export async function validatePurchaseVoucher(input: {
@@ -53,7 +92,7 @@ export async function validatePurchaseVoucher(input: {
     comprobante = validation.comprobante;
   } catch (error) {
     status = "ERROR";
-    message = error instanceof Error ? error.message : "ARCA_VALIDATION_ERROR";
+    message = normalizeValidationFailureMessage(error);
     responsePayload = null;
     comprobante = null;
   }

@@ -36,6 +36,14 @@ export type PurchaseValidationResult = {
   comprobante: PurchaseValidationVoucherSnapshot | null;
 };
 
+export type PurchaseValidationTributeSnapshot = {
+  code: string | null;
+  description: string | null;
+  baseAmount: number | null;
+  rate: number | null;
+  amount: number;
+};
+
 export type PurchaseValidationVoucherSnapshot = {
   mode: string | null;
   issuerTaxId: string | null;
@@ -47,6 +55,12 @@ export type PurchaseValidationVoucherSnapshot = {
   authorizationCode: string | null;
   receiverDocType: string | null;
   receiverDocNumber: string | null;
+  netTaxedAmount: number | null;
+  nonTaxedAmount: number | null;
+  exemptAmount: number | null;
+  vatAmount: number | null;
+  otherTaxesAmount: number | null;
+  tributes: PurchaseValidationTributeSnapshot[];
 };
 
 function normalizeKey(value: string) {
@@ -80,6 +94,14 @@ function asNumber(value: unknown) {
   return null;
 }
 
+function asMoney(value: unknown) {
+  const parsed = asNumber(value);
+  if (parsed === null) return null;
+  const normalized = Math.round((parsed + Number.EPSILON) * 100) / 100;
+  if (!Number.isFinite(normalized) || normalized < 0) return null;
+  return normalized;
+}
+
 function normalizeArcaDate(value: unknown) {
   const text = asString(value);
   if (!text) return null;
@@ -111,6 +133,106 @@ function extractValueByKeys(value: unknown, keys: string[], depth = 0): unknown 
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+function asRecord(value: unknown) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function collectTributeNodes(value: unknown, depth = 0): unknown[] {
+  if (depth > 8 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectTributeNodes(item, depth + 1));
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+
+  const nodes: unknown[] = [];
+  for (const [key, raw] of Object.entries(record)) {
+    const normalized = normalizeKey(key);
+    if (normalized === "tributo" || normalized === "tributos") {
+      nodes.push(raw);
+    }
+    nodes.push(...collectTributeNodes(raw, depth + 1));
+  }
+  return nodes;
+}
+
+function flattenTributeCandidates(value: unknown, depth = 0): unknown[] {
+  if (depth > 8 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => flattenTributeCandidates(item, depth + 1));
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+
+  const nestedTributo = record.Tributo ?? record.tributo;
+  if (nestedTributo !== undefined) {
+    return flattenTributeCandidates(nestedTributo, depth + 1);
+  }
+
+  const amount = asMoney(
+    extractValueByKeys(record, ["Importe", "importe", "Amount", "amount"]),
+  );
+  if (amount !== null) {
+    return [record];
+  }
+
+  return Object.values(record).flatMap((item) =>
+    flattenTributeCandidates(item, depth + 1),
+  );
+}
+
+function normalizeTributeSnapshot(value: unknown): PurchaseValidationTributeSnapshot | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const amount = asMoney(
+    extractValueByKeys(record, ["Importe", "importe", "Amount", "amount"]),
+  );
+  if (amount === null) return null;
+
+  return {
+    code:
+      asString(extractValueByKeys(record, ["Id", "id", "Codigo", "codigo"])) ??
+      null,
+    description:
+      asString(
+        extractValueByKeys(record, ["Desc", "desc", "Descripcion", "descripcion"]),
+      ) ?? null,
+    baseAmount: asMoney(
+      extractValueByKeys(record, ["BaseImp", "baseImp", "Base", "base"]),
+    ),
+    rate: asMoney(
+      extractValueByKeys(record, ["Alic", "alic", "Alicuota", "alicuota"]),
+    ),
+    amount,
+  };
+}
+
+function normalizeTributes(value: unknown) {
+  const tributes = collectTributeNodes(value)
+    .flatMap((node) => flattenTributeCandidates(node))
+    .map((node) => normalizeTributeSnapshot(node))
+    .filter((item): item is PurchaseValidationTributeSnapshot => Boolean(item));
+
+  const unique = new Map<string, PurchaseValidationTributeSnapshot>();
+  for (const tribute of tributes) {
+    const key = [
+      tribute.code ?? "",
+      tribute.description ?? "",
+      tribute.baseAmount ?? "",
+      tribute.rate ?? "",
+      tribute.amount,
+    ].join("::");
+    if (!unique.has(key)) {
+      unique.set(key, tribute);
+    }
+  }
+  return Array.from(unique.values());
 }
 
 function collectMessages(value: unknown, depth = 0): string[] {
@@ -173,6 +295,19 @@ function normalizeVoucherSnapshot(
   )
     ?.replace(/\D/g, "")
     .trim();
+  const tributes = normalizeTributes(cmpResp);
+  const totalAmount =
+    asMoney(extractValueByKeys(cmpResp, ["ImpTotal", "impTotal"])) ??
+    asMoney(extractValueByKeys(payload, ["ImpTotal", "impTotal"]));
+  const otherTaxesAmount =
+    asMoney(extractValueByKeys(cmpResp, ["ImpTrib", "impTrib"])) ??
+    asMoney(extractValueByKeys(payload, ["ImpTrib", "impTrib"])) ??
+    (tributes.length
+      ? Math.round(
+          (tributes.reduce((sum, item) => sum + item.amount, 0) + Number.EPSILON) *
+            100,
+        ) / 100
+      : null);
 
   return {
     mode: asString(extractValueByKeys(cmpResp, ["CbteModo", "cbteModo"])),
@@ -183,7 +318,7 @@ function normalizeVoucherSnapshot(
     voucherDate: normalizeArcaDate(
       extractValueByKeys(cmpResp, ["CbteFch", "cbteFch"]),
     ),
-    totalAmount: asNumber(extractValueByKeys(cmpResp, ["ImpTotal", "impTotal"])),
+    totalAmount,
     authorizationCode:
       asString(
         extractValueByKeys(cmpResp, ["CodAutorizacion", "codAutorizacion"]),
@@ -193,6 +328,20 @@ function normalizeVoucherSnapshot(
         extractValueByKeys(cmpResp, ["DocTipoReceptor", "docTipoReceptor"]),
       ) ?? null,
     receiverDocNumber: receiverDocNumber || null,
+    netTaxedAmount:
+      asMoney(extractValueByKeys(cmpResp, ["ImpNeto", "impNeto"])) ??
+      asMoney(extractValueByKeys(payload, ["ImpNeto", "impNeto"])),
+    nonTaxedAmount:
+      asMoney(extractValueByKeys(cmpResp, ["ImpTotConc", "impTotConc"])) ??
+      asMoney(extractValueByKeys(payload, ["ImpTotConc", "impTotConc"])),
+    exemptAmount:
+      asMoney(extractValueByKeys(cmpResp, ["ImpOpEx", "impOpEx"])) ??
+      asMoney(extractValueByKeys(payload, ["ImpOpEx", "impOpEx"])),
+    vatAmount:
+      asMoney(extractValueByKeys(cmpResp, ["ImpIVA", "impIVA"])) ??
+      asMoney(extractValueByKeys(payload, ["ImpIVA", "impIVA"])),
+    otherTaxesAmount,
+    tributes,
   };
 }
 

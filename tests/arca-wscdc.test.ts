@@ -33,7 +33,54 @@ test("normalizeWscdcResponse maps authorized responses", () => {
     authorizationCode: "12345678901234",
     receiverDocType: null,
     receiverDocNumber: null,
+    netTaxedAmount: null,
+    nonTaxedAmount: null,
+    exemptAmount: null,
+    vatAmount: null,
+    otherTaxesAmount: null,
+    tributes: [],
   });
+});
+
+test("normalizeWscdcResponse captures fiscal breakdown and tributes when available", () => {
+  const response = normalizeWscdcResponse({
+    ComprobanteConstatarResult: {
+      Resultado: "A",
+      CmpResp: {
+        CbteModo: "CAE",
+        CuitEmisor: "30712345678",
+        PtoVta: 2,
+        CbteTipo: 1,
+        CbteNro: 555,
+        CbteFch: "20260511",
+        ImpTotal: "1240.00",
+        ImpNeto: "1000.00",
+        ImpIVA: "210.00",
+        ImpTrib: "30.00",
+        CodAutorizacion: "12345678901234",
+        Tributos: {
+          Tributo: [
+            { Id: "1", Desc: "Percepcion IIBB", BaseImp: "1000.00", Alic: "3", Importe: "30.00" },
+          ],
+        },
+      },
+      Observaciones: { Obs: [{ Msg: "Comprobante autorizado" }] },
+    },
+  });
+
+  assert.equal(response.status, "AUTHORIZED");
+  assert.equal(response.comprobante?.netTaxedAmount, 1000);
+  assert.equal(response.comprobante?.vatAmount, 210);
+  assert.equal(response.comprobante?.otherTaxesAmount, 30);
+  assert.deepEqual(response.comprobante?.tributes, [
+    {
+      code: "1",
+      description: "Percepcion IIBB",
+      baseAmount: 1000,
+      rate: 3,
+      amount: 30,
+    },
+  ]);
 });
 
 test("normalizeWscdcResponse maps rejected responses", () => {

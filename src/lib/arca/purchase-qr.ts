@@ -18,6 +18,11 @@ const arcaQrPayloadSchema = z.object({
   nroDocRec: z.union([z.string(), z.number()]).optional(),
   tipoCodAut: z.union([z.string(), z.number()]).optional(),
   codAut: z.union([z.string(), z.number()]).optional(),
+  impNeto: z.coerce.number().min(0).optional(),
+  impTotConc: z.coerce.number().min(0).optional(),
+  impOpEx: z.coerce.number().min(0).optional(),
+  impIVA: z.coerce.number().min(0).optional(),
+  impTrib: z.coerce.number().min(0).optional(),
 });
 
 export type ParsedArcaPurchaseQr = {
@@ -34,6 +39,11 @@ export type ParsedArcaPurchaseQr = {
   authorizationCode: string | null;
   receiverDocType: string | null;
   receiverDocNumber: string | null;
+  netTaxedAmount: number | null;
+  nonTaxedAmount: number | null;
+  exemptAmount: number | null;
+  vatAmount: number | null;
+  otherTaxesAmount: number | null;
   raw: Record<string, unknown>;
 };
 
@@ -122,6 +132,11 @@ export function parseArcaPurchaseQr(value: string): ParsedArcaPurchaseQr {
     receiverDocType:
       payload.tipoDocRec === undefined ? null : String(payload.tipoDocRec),
     receiverDocNumber: digitsOnly(payload.nroDocRec) || null,
+    netTaxedAmount: payload.impNeto ?? null,
+    nonTaxedAmount: payload.impTotConc ?? null,
+    exemptAmount: payload.impOpEx ?? null,
+    vatAmount: payload.impIVA ?? null,
+    otherTaxesAmount: payload.impTrib ?? null,
     raw: raw as Record<string, unknown>,
   };
 }

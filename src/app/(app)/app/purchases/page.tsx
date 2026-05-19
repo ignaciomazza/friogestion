@@ -180,6 +180,11 @@ type PurchaseQrImportResponse = {
   voucherDate: string;
   totalAmount: number;
   authorizationCode: string | null;
+  netTaxedAmount?: number | null;
+  nonTaxedAmount?: number | null;
+  exemptAmount?: number | null;
+  vatAmount?: number | null;
+  otherTaxesAmount?: number | null;
   warning?: string | null;
   arcaValidation: Record<string, string | number>;
 };
@@ -277,6 +282,68 @@ const parseOptionalNumber = (value: string) => {
   return parsed;
 };
 
+const normalizeMoneyNumber = (value: unknown) => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (value < 0) return null;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+};
+
+const mapArcaTributeTypeFromText = (
+  description: string | null | undefined,
+): PurchaseFiscalLineType => {
+  const normalized = normalizeArcaText(description ?? "");
+  if (!normalized) return "OTHER";
+  if (normalized.includes("iibb") || normalized.includes("ingresos brutos")) {
+    return "IIBB_PERCEPTION";
+  }
+  if (normalized.includes("iva")) {
+    return "VAT_PERCEPTION";
+  }
+  if (normalized.includes("ganancia")) {
+    return "INCOME_TAX_PERCEPTION";
+  }
+  if (normalized.includes("municip")) {
+    return "MUNICIPAL_PERCEPTION";
+  }
+  if (normalized.includes("interno")) {
+    return "INTERNAL_TAX";
+  }
+  return "OTHER";
+};
+
+const mapArcaTributesToFiscalLines = (
+  tributes: PurchaseArcaVoucherSnapshot["tributes"] | null | undefined,
+) => {
+  if (!tributes?.length) return [] as PurchaseFiscalLineForm[];
+  return tributes
+    .map((tribute): PurchaseFiscalLineForm | null => {
+      const amount = normalizeMoneyNumber(tribute.amount);
+      if (amount === null || amount <= 0) return null;
+
+      const description = tribute.description?.trim() || "";
+      return {
+        type: mapArcaTributeTypeFromText(description || null),
+        jurisdiction: "",
+        baseAmount:
+          typeof tribute.baseAmount === "number" &&
+          Number.isFinite(tribute.baseAmount) &&
+          tribute.baseAmount >= 0
+            ? tribute.baseAmount.toFixed(2)
+            : "",
+        rate:
+          typeof tribute.rate === "number" &&
+          Number.isFinite(tribute.rate) &&
+          tribute.rate >= 0
+            ? tribute.rate.toFixed(4)
+            : "",
+        amount: amount.toFixed(2),
+        manualAmountOverride: true,
+        note: description,
+      };
+    })
+    .filter((line): line is PurchaseFiscalLineForm => Boolean(line));
+};
+
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
 
 let jsQrDecoderPromise: Promise<typeof import("jsqr")> | null = null;
@@ -347,8 +414,33 @@ const toCalendarDateTimestamp = (value: string | null | undefined) => {
   return new Date(year, month - 1, day, 12, 0, 0, 0).getTime();
 };
 
-const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode =>
-  purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK";
+const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode => {
+  if (purchase.impactsAccount) return "CURRENT_ACCOUNT";
+  if (purchase.immediatePaymentMethodName?.trim()) return "IMMEDIATE_CASH_OUT";
+  return "OFF_BOOK";
+};
+
+const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
+  if (purchase.impactsAccount) {
+    return {
+      label: "Cta. Cte",
+      tone: "current-account" as const,
+    };
+  }
+
+  const immediatePaymentMethod = purchase.immediatePaymentMethodName?.trim();
+  if (immediatePaymentMethod) {
+    return {
+      label: immediatePaymentMethod,
+      tone: "immediate" as const,
+    };
+  }
+
+  return {
+    label: "No",
+    tone: "none" as const,
+  };
+};
 
 const formatPurchaseDateLabel = (purchase: PurchaseRow) =>
   purchase.invoiceDate
@@ -424,6 +516,12 @@ const ARCA_DETAIL_LABELS: Array<{ includes: string[]; label: string }> = [
   { includes: ["cbtenro", "numerocomprobante"], label: "Número de comprobante" },
   { includes: ["cbtefch"], label: "Fecha del comprobante" },
   { includes: ["imptotal"], label: "Importe total" },
+  { includes: ["impneto"], label: "Neto gravado" },
+  { includes: ["imptotconc"], label: "No gravado" },
+  { includes: ["impopex"], label: "Exento" },
+  { includes: ["impiva"], label: "IVA" },
+  { includes: ["imptrib"], label: "Otros tributos" },
+  { includes: ["tributo", "tributos"], label: "Tributos ARCA" },
   { includes: ["cuitemisor", "issuertaxid"], label: "CUIT emisor" },
   {
     includes: ["doctiporeceptor", "tipodocreceptor"],
@@ -1806,11 +1904,165 @@ export default function PurchasesPage() {
     return payload;
   };
 
-  const handleValidateArcaOnly = async () => {
+  const applyArcaFiscalBreakdown = (
+    source: {
+      totalAmount?: number | null;
+      netTaxedAmount?: number | null;
+      nonTaxedAmount?: number | null;
+      exemptAmount?: number | null;
+      vatAmount?: number | null;
+      otherTaxesAmount?: number | null;
+      tributes?: PurchaseArcaVoucherSnapshot["tributes"];
+    },
+    options: { fallbackToTotalNet: boolean },
+  ) => {
+    const totalAmount = normalizeMoneyNumber(source.totalAmount);
+    if (totalAmount === null || totalAmount <= 0) {
+      return { usedBreakdown: false, usedFallback: false, missingBreakdown: true };
+    }
+
+    const netTaxedAmount = normalizeMoneyNumber(source.netTaxedAmount);
+    const nonTaxedAmount = normalizeMoneyNumber(source.nonTaxedAmount);
+    const exemptAmount = normalizeMoneyNumber(source.exemptAmount);
+    const vatAmount = normalizeMoneyNumber(source.vatAmount);
+    const tributeLines = mapArcaTributesToFiscalLines(source.tributes);
+    const tributeLinesTotal = roundMoney(
+      tributeLines.reduce((sum, line) => {
+        const amount = Number(line.amount);
+        return Number.isFinite(amount) ? sum + amount : sum;
+      }, 0),
+    );
+    const otherTaxesFromAmount = normalizeMoneyNumber(source.otherTaxesAmount);
+    const otherTaxesAmount =
+      tributeLinesTotal > 0 ? tributeLinesTotal : otherTaxesFromAmount;
+
+    const hasBreakdown = [
+      netTaxedAmount,
+      nonTaxedAmount,
+      exemptAmount,
+      vatAmount,
+      otherTaxesAmount,
+    ].some((value) => value !== null && value > 0);
+
+    if (!hasBreakdown) {
+      if (!options.fallbackToTotalNet) {
+        return { usedBreakdown: false, usedFallback: false, missingBreakdown: true };
+      }
+      setTotalsSource("MANUAL");
+      setSimpleFiscalCondition("GRAVADO");
+      setShowFiscalDetail(false);
+      setNetTaxedAmount("");
+      setNetNonTaxedAmount("");
+      setExemptAmount("");
+      setFiscalLines([]);
+      setSimpleNetAmount(toMoneyValue(totalAmount));
+      setPurchaseVatAmount("0");
+      setGlobalDiscountAmount("");
+      return { usedBreakdown: false, usedFallback: true, missingBreakdown: true };
+    }
+
+    const nextNonTaxed = nonTaxedAmount ?? 0;
+    const nextExempt = exemptAmount ?? 0;
+    const nextVat = vatAmount ?? 0;
+    const nextOtherTaxes = otherTaxesAmount ?? 0;
+    const baseWithoutNet = nextNonTaxed + nextExempt + nextVat + nextOtherTaxes;
+    let nextNetTaxed = netTaxedAmount ?? 0;
+    const currentTotal = roundMoney(nextNetTaxed + baseWithoutNet);
+    if (Math.abs(currentTotal - totalAmount) > 0.01) {
+      nextNetTaxed = Math.max(0, roundMoney(totalAmount - baseWithoutNet));
+    }
+
+    const nextSimpleCondition: SimpleFiscalCondition =
+      nextNetTaxed > 0 && nextNonTaxed <= 0 && nextExempt <= 0
+        ? "GRAVADO"
+        : nextNonTaxed > 0 && nextNetTaxed <= 0 && nextExempt <= 0
+          ? "NO_GRAVADO"
+          : nextExempt > 0 && nextNetTaxed <= 0 && nextNonTaxed <= 0
+            ? "EXENTO"
+            : "GRAVADO";
+
+    setTotalsSource("MANUAL");
+    setGlobalDiscountAmount("");
+    setSimpleFiscalCondition(nextSimpleCondition);
+    setSimpleNetAmount(
+      toMoneyValue(roundMoney(nextNetTaxed + nextNonTaxed + nextExempt)),
+    );
+    setPurchaseVatAmount(toMoneyValue(nextVat));
+    setShowFiscalDetail(true);
+    setNetTaxedAmount(toMoneyValue(nextNetTaxed));
+    setNetNonTaxedAmount(toMoneyValue(nextNonTaxed));
+    setExemptAmount(toMoneyValue(nextExempt));
+    setFiscalLines(
+      tributeLines.length
+        ? tributeLines
+        : nextOtherTaxes > 0
+          ? [
+              {
+                ...emptyFiscalLine(),
+                type: "OTHER",
+                amount: toMoneyValue(nextOtherTaxes),
+                manualAmountOverride: true,
+                note: "Tributos informados por ARCA",
+              },
+            ]
+          : [],
+    );
+
+    return { usedBreakdown: true, usedFallback: false, missingBreakdown: false };
+  };
+
+  const applyArcaValidationFeedback = (
+    statusValue: string | null | undefined,
+    messageValue: unknown,
+    context: "manual" | "submit" | "qr",
+  ) => {
+    const statusCode = String(statusValue ?? "ERROR");
+    const statusLabel = arcaStatusLabel(statusCode);
+    const rawMessage =
+      typeof messageValue === "string" ? messageValue.trim() : "";
+    const hint = rawMessage ? buildArcaHints([rawMessage])[0] : null;
+    const detailText = rawMessage ? ` ${rawMessage}` : "";
+    const hintText = hint ? ` ${hint}` : "";
+
+    if (statusCode === "AUTHORIZED") {
+      const message =
+        context === "qr"
+          ? `QR importado y ARCA validado (${statusLabel}).${detailText}`.trim()
+          : context === "submit"
+            ? `ARCA validado (${statusLabel}). Listo para revisar compra.${detailText}`.trim()
+            : `ARCA validado (${statusLabel}).${detailText}`.trim();
+      setStatus(message);
+      toast.success(message);
+      return;
+    }
+
+    if (statusCode === "OBSERVED") {
+      const message =
+        context === "qr"
+          ? `QR importado con observaciones ARCA.${detailText}${hintText}`.trim()
+          : context === "submit"
+            ? `ARCA devolvio observaciones. Revisa antes de confirmar.${detailText}${hintText}`.trim()
+          : `ARCA devolvio observaciones.${detailText}${hintText}`.trim();
+      setStatus(message);
+      toast.warn(message);
+      return;
+    }
+
+    const message =
+      context === "qr"
+        ? `QR importado, pero ARCA devolvio ${statusLabel.toLowerCase()}.${detailText}${hintText}`.trim()
+        : statusCode === "REJECTED"
+          ? `ARCA rechazo el comprobante.${detailText}${hintText}`.trim()
+          : `No se pudo validar en ARCA (${statusLabel}).${detailText}${hintText}`.trim();
+    setStatus(message);
+    toast.error(message);
+  };
+
+  const validateArcaFromForm = async (context: "manual" | "submit" = "manual") => {
     if (!supplierId) {
       setStatus("Selecciona un proveedor");
       toast.error("Selecciona un proveedor antes de validar ARCA.");
-      return;
+      return null;
     }
     if (!hasInvoiceNumberDashFormat) {
       const message =
@@ -1820,13 +2072,13 @@ export default function PurchasesPage() {
       setOpenPurchaseSection("invoice");
       highlightSection("invoice");
       highlightFields(["invoice.invoiceNumber"]);
-      return;
+      return null;
     }
     const payload = buildArcaPayload();
     if (!payload) {
       setStatus("Completa los datos del comprobante para validar con ARCA.");
       toast.error("Completa los datos del comprobante para validar con ARCA.");
-      return;
+      return null;
     }
 
     setStatus(null);
@@ -1845,23 +2097,47 @@ export default function PurchasesPage() {
         const message = data?.error ?? "No se pudo validar con ARCA";
         setStatus(message);
         toast.error(message);
-        return;
+        return null;
       }
 
+      const normalizedComprobante = (data.comprobante ??
+        null) as PurchaseArcaVoucherSnapshot | null;
       setArcaValidationResult({
         status: data.status,
         message: data.message,
         checkedAt: data.checkedAt,
-        comprobante: (data.comprobante ?? null) as PurchaseArcaVoucherSnapshot | null,
+        comprobante: normalizedComprobante,
       });
-      setStatus(`ARCA: ${arcaStatusLabel(data.status)}`);
-      toast.success(`ARCA: ${arcaStatusLabel(data.status)}`);
+      const breakdownResult = normalizedComprobante
+        ? applyArcaFiscalBreakdown(normalizedComprobante, {
+            fallbackToTotalNet: false,
+          })
+        : { usedBreakdown: false, usedFallback: false, missingBreakdown: true };
+
+      applyArcaValidationFeedback(data.status, data.message, context);
+      if (
+        breakdownResult.missingBreakdown &&
+        (data.status === "AUTHORIZED" || data.status === "OBSERVED")
+      ) {
+        toast.info(
+          "ARCA valido el comprobante, pero no informa desglose de IVA ni percepciones. Completa esos importes manualmente.",
+        );
+      }
+      return {
+        status: String(data.status ?? "ERROR"),
+        comprobante: normalizedComprobante,
+      };
     } catch {
       setStatus("No se pudo validar con ARCA");
       toast.error("No se pudo validar con ARCA.");
+      return null;
     } finally {
       setIsArcaValidating(false);
     }
+  };
+
+  const handleValidateArcaOnly = async () => {
+    await validateArcaFromForm("manual");
   };
 
   const findSupplierByTaxId = async (taxId: string) => {
@@ -1884,19 +2160,6 @@ export default function PurchasesPage() {
         (candidate) => normalizeTaxId(candidate.taxId ?? "") === normalizedTaxId,
       ) ?? null
     );
-  };
-
-  const syncTotalsFromQr = (totalAmount: number) => {
-    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return;
-    setTotalsSource("MANUAL");
-    setSimpleFiscalCondition("GRAVADO");
-    setShowFiscalDetail(false);
-    setNetTaxedAmount("");
-    setNetNonTaxedAmount("");
-    setExemptAmount("");
-    setSimpleNetAmount(toMoneyValue(totalAmount));
-    setPurchaseVatAmount("0");
-    setGlobalDiscountAmount("");
   };
 
   const importPurchaseFromQrText = async (qrText: string) => {
@@ -1937,7 +2200,9 @@ export default function PurchasesPage() {
       );
       setArcaAuthorizationCode(parsedQr.authorizationCode ?? "");
       setArcaValidationResult(null);
-      syncTotalsFromQr(parsedQr.totalAmount);
+      const qrFiscalSync = applyArcaFiscalBreakdown(parsedQr, {
+        fallbackToTotalNet: true,
+      });
       setOpenPurchaseSection("invoice");
       highlightSection("invoice");
 
@@ -1981,9 +2246,24 @@ export default function PurchasesPage() {
         checkedAt: validateData.checkedAt,
         comprobante: (validateData.comprobante ?? null) as PurchaseArcaVoucherSnapshot | null,
       });
-      const normalizedStatus = arcaStatusLabel(validateData.status);
-      setStatus(`QR importado y ARCA validado (${normalizedStatus})`);
-      toast.success(`QR importado · ARCA: ${normalizedStatus}`);
+      const validatedComprobante = (validateData.comprobante ??
+        null) as PurchaseArcaVoucherSnapshot | null;
+      const validatedSync = validatedComprobante
+        ? applyArcaFiscalBreakdown(validatedComprobante, {
+            fallbackToTotalNet: false,
+          })
+        : { usedBreakdown: false, usedFallback: false, missingBreakdown: true };
+
+      applyArcaValidationFeedback(validateData.status, validateData.message, "qr");
+      if (
+        qrFiscalSync.missingBreakdown &&
+        validatedSync.missingBreakdown &&
+        (validateData.status === "AUTHORIZED" || validateData.status === "OBSERVED")
+      ) {
+        toast.info(
+          "El QR y la validacion ARCA solo informan el total del comprobante. Carga IVA y percepciones manualmente.",
+        );
+      }
 
       if (parsedQr.warning) {
         toast.error(parsedQr.warning);
@@ -2321,8 +2601,12 @@ export default function PurchasesPage() {
     setOpenPurchaseSection("taxes");
     addFiscalLine();
   };
-  const validateArcaConsistency = (total: number) => {
-    if (!arcaEnabled || !arcaValidationResult?.comprobante) return true;
+  const validateArcaConsistency = (
+    total: number,
+    comprobanteOverride?: PurchaseArcaVoucherSnapshot | null,
+  ) => {
+    const comprobante = comprobanteOverride ?? arcaValidationResult?.comprobante;
+    if (!arcaEnabled || !comprobante) return true;
     const mismatches = compareArcaVoucherAgainstForm({
       form: {
         voucherKind: arcaVoucherKind,
@@ -2332,7 +2616,7 @@ export default function PurchasesPage() {
         totalAmount: total,
         authorizationCode: arcaAuthorizationCode,
       },
-      arca: arcaValidationResult.comprobante,
+      arca: comprobante,
     });
     if (!mismatches.length) return true;
 
@@ -2375,7 +2659,9 @@ export default function PurchasesPage() {
     : "Sin percepciones";
   const paymentSectionSummary = paymentModeLabel;
 
-  const preparePurchaseForConfirmation = (): PreparedPurchase | null => {
+  const preparePurchaseForConfirmation = (options?: {
+    skipArcaConsistency?: boolean;
+  }): PreparedPurchase | null => {
     setStatus(null);
     const shouldAdjustStock = STOCK_ENABLED && adjustStock && includeProductDetails;
 
@@ -2560,16 +2846,7 @@ export default function PurchasesPage() {
       highlightSection("invoice");
       return null;
     }
-    if (arcaEnabled && !arcaValidationResult) {
-      const message =
-        "Valida el comprobante en ARCA antes de continuar con la confirmacion.";
-      setStatus(message);
-      toast.error(message);
-      setOpenPurchaseSection("invoice");
-      highlightSection("invoice");
-      return null;
-    }
-    if (!validateArcaConsistency(total)) {
+    if (!options?.skipArcaConsistency && !validateArcaConsistency(total)) {
       return null;
     }
 
@@ -2803,10 +3080,23 @@ export default function PurchasesPage() {
     setStatus("Edicion cancelada.");
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const prepared = preparePurchaseForConfirmation();
+    const prepared = preparePurchaseForConfirmation({ skipArcaConsistency: true });
     if (!prepared) return;
+
+    if (prepared.payload.validateWithArca) {
+      const validation = await validateArcaFromForm("submit");
+      if (!validation) return;
+      const validationStatus = validation.status;
+      if (validationStatus !== "AUTHORIZED" && validationStatus !== "OBSERVED") {
+        return;
+      }
+      if (!validateArcaConsistency(prepared.total, validation.comprobante ?? null)) {
+        return;
+      }
+    }
+
     setPendingPurchase(prepared);
   };
 
@@ -4550,7 +4840,7 @@ export default function PurchasesPage() {
                     ) : null}
                     {arcaValidationResult?.comprobante ? (
                       <span className="text-[11px] text-zinc-500">
-                        ARCA devuelve comprobante para correlacion de tipo/punto/numero/fecha/total/CAE.
+                        ARCA se usa para correlacion de tipo/punto/numero/fecha/total/CAE; si no trae desglose fiscal, IVA y percepciones se cargan manualmente.
                       </span>
                     ) : null}
                   </div>
@@ -4653,14 +4943,20 @@ export default function PurchasesPage() {
             <button
               type="submit"
               className="btn btn-emerald order-7 w-full"
-              disabled={isSubmitting}
+              disabled={isSubmitting || isArcaValidating}
             >
               <CheckIcon className="size-4" />
-              {isSubmitting
+              {isArcaValidating
+                ? "Validando ARCA..."
+                : isSubmitting
                 ? "Guardando..."
-                : editingPurchaseId
-                  ? "Revisar cambios"
-                  : "Revisar compra"}
+                : hasInvoice
+                  ? editingPurchaseId
+                    ? "Validar ARCA y revisar cambios"
+                    : "Validar ARCA y revisar compra"
+                  : editingPurchaseId
+                    ? "Revisar cambios"
+                    : "Revisar compra"}
             </button>
           </form>
         </div>
@@ -4738,11 +5034,14 @@ export default function PurchasesPage() {
             </div>
             <div className="space-y-2 md:hidden">
               {filteredPurchases.length ? (
-                filteredPurchases.map((purchase) => (
-                  <div
-                    key={purchase.id}
-                    className="rounded-2xl border border-zinc-200/70 bg-white/70 p-3"
-                  >
+                filteredPurchases.map((purchase) => {
+                  const paymentStatus = getPurchasePaymentStatus(purchase);
+
+                  return (
+                    <div
+                      key={purchase.id}
+                      className="rounded-2xl border border-zinc-200/70 bg-white/70 p-3"
+                    >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-zinc-900">
@@ -4786,13 +5085,15 @@ export default function PurchasesPage() {
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span
-                          className={`pill border px-2 py-1 text-[10px] font-semibold uppercase ${
-                            purchase.impactsAccount
-                              ? "border-emerald-200 bg-white text-emerald-800"
-                              : "border-zinc-200 bg-white text-zinc-600"
+                          className={`pill border px-2 py-1 text-[10px] font-semibold ${
+                            paymentStatus.tone === "immediate"
+                              ? "border-sky-200 bg-white text-sky-800"
+                              : paymentStatus.tone === "current-account"
+                                ? "border-emerald-200 bg-white text-emerald-800"
+                                : "border-zinc-200 bg-white text-zinc-600"
                           }`}
                         >
-                          {purchase.impactsAccount ? "Cta. cte." : "Sin impacto"}
+                          {paymentStatus.label}
                         </span>
                         <span className="text-[11px] text-zinc-500">
                           ARCA{" "}
@@ -4825,11 +5126,11 @@ export default function PurchasesPage() {
                             purchase.status === "CANCELLED" ||
                             deletingPurchaseId === purchase.id
                           }
-                          title="Ajustar cobro"
-                          aria-label="Ajustar cobro"
+                          title="Ajustar pago"
+                          aria-label="Ajustar pago"
                         >
                           <CurrencyDollarIcon className="size-4" />
-                          <span>Cobro</span>
+                          <span>Pago</span>
                         </button>
                         {purchase.hasInvoice ? (
                           <button
@@ -4876,8 +5177,9 @@ export default function PurchasesPage() {
                         </button>
                       </div>
                     </div>
-                  </div>
-                ))
+                    </div>
+                  );
+                })
               ) : (
                 <p className="text-sm text-zinc-500">Sin compras por ahora.</p>
               )}
@@ -4894,18 +5196,21 @@ export default function PurchasesPage() {
                     <th className="py-2 pr-3 text-right">IVA compra</th>
                     <th className="py-2 pr-3 text-right">Perc./otros</th>
                     <th className="py-2 pr-3 text-right">Total</th>
-                    <th className="py-2 pr-3">Impacta cta. cte.</th>
+                    <th className="py-2 pr-3">Pago</th>
                     <th className="py-2 pr-3">ARCA</th>
                     <th className="py-2 pr-3 text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredPurchases.length ? (
-                    filteredPurchases.map((purchase) => (
-                      <tr
-                        key={purchase.id}
-                        className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
-                      >
+                    filteredPurchases.map((purchase) => {
+                      const paymentStatus = getPurchasePaymentStatus(purchase);
+
+                      return (
+                        <tr
+                          key={purchase.id}
+                          className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
+                        >
                         <td className="py-3 pr-3 text-zinc-700">
                           {purchase.invoiceNumber ?? "Sin comprobante"}
                         </td>
@@ -4929,13 +5234,15 @@ export default function PurchasesPage() {
                         </td>
                         <td className="py-3 pr-3">
                           <span
-                            className={`pill border px-2 py-1 text-[10px] font-semibold uppercase ${
-                              purchase.impactsAccount
-                                ? "border-emerald-200 bg-white text-emerald-800"
-                                : "border-zinc-200 bg-white text-zinc-600"
+                            className={`pill border px-2 py-1 text-[10px] font-semibold ${
+                              paymentStatus.tone === "immediate"
+                                ? "border-sky-200 bg-white text-sky-800"
+                                : paymentStatus.tone === "current-account"
+                                  ? "border-emerald-200 bg-white text-emerald-800"
+                                  : "border-zinc-200 bg-white text-zinc-600"
                             }`}
                           >
-                            {purchase.impactsAccount ? "Si" : "No"}
+                            {paymentStatus.label}
                           </span>
                         </td>
                         <td className="py-3 pr-3 text-zinc-700">
@@ -4968,11 +5275,11 @@ export default function PurchasesPage() {
                                 purchase.status === "CANCELLED" ||
                                 deletingPurchaseId === purchase.id
                               }
-                              title="Ajustar cobro"
-                              aria-label="Ajustar cobro"
+                              title="Ajustar pago"
+                              aria-label="Ajustar pago"
                             >
                               <CurrencyDollarIcon className="size-4" />
-                              <span>Cobro</span>
+                              <span>Pago</span>
                             </button>
                             {purchase.hasInvoice ? (
                               <button
@@ -5019,8 +5326,9 @@ export default function PurchasesPage() {
                             </button>
                           </div>
                         </td>
-                      </tr>
-                    ))
+                        </tr>
+                      );
+                    })
                   ) : (
                     <tr>
                       <td className="py-4 text-sm text-zinc-500" colSpan={10}>

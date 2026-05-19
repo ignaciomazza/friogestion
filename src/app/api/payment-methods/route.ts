@@ -16,9 +16,54 @@ const methodUpdateSchema = methodSchema.extend({
   id: z.string().min(1),
 });
 
+const defaultPaymentMethods = [
+  { name: "Efectivo", type: "CASH" as const, requiresAccount: false },
+  { name: "Transferencia", type: "TRANSFER" as const, requiresAccount: true },
+];
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
+
+    for (const method of defaultPaymentMethods) {
+      const existing = await prisma.paymentMethod.findFirst({
+        where: {
+          organizationId,
+          name: method.name,
+        },
+        select: {
+          id: true,
+          isActive: true,
+        },
+      });
+
+      if (!existing) {
+        await prisma.paymentMethod.create({
+          data: {
+            organizationId,
+            name: method.name,
+            type: method.type,
+            requiresAccount: method.requiresAccount,
+            requiresApproval: false,
+            requiresDoubleCheck: true,
+            isActive: true,
+          },
+        });
+        continue;
+      }
+
+      if (existing.isActive === false) {
+        await prisma.paymentMethod.update({
+          where: { id: existing.id },
+          data: {
+            isActive: true,
+            requiresApproval: false,
+            requiresDoubleCheck: true,
+          },
+        });
+      }
+    }
+
     await prisma.paymentMethod.updateMany({
       where: {
         organizationId,
