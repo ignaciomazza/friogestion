@@ -187,4 +187,31 @@
     background-size: 12px;
     background-repeat: no-repeat;
   }
+
+  @supports (-webkit-touch-callout: none) {
+    @media (max-width: 640px) {
+      .input,
+      select.input,
+      textarea.input {
+        font-size: 16px !important;
+      }
+
+      input[type="date"].input,
+      input[type="time"].input,
+      input[type="datetime-local"].input,
+      input[type="month"].input,
+      input[type="week"].input {
+        display: block;
+        width: 100% !important;
+        max-width: 100%;
+        min-width: 0;
+        inline-size: 100%;
+        max-inline-size: 100%;
+        -webkit-min-logical-width: 0;
+        box-sizing: border-box;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+      }
+    }
+  }
 }
