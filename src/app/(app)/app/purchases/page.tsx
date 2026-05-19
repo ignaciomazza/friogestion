@@ -3,8 +3,8 @@
 import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
-import jsQR from "jsqr";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import {
@@ -39,6 +39,26 @@ import {
   formatUnit,
   normalizeQuery,
 } from "./utils";
+
+const PurchaseConfirmModal = dynamic(
+  () => import("./components/PurchaseConfirmModal"),
+  { ssr: false },
+);
+
+const PurchasePaymentModeModal = dynamic(
+  () => import("./components/PurchasePaymentModeModal"),
+  { ssr: false },
+);
+
+const PurchaseQrScannerModal = dynamic(
+  () => import("./components/PurchaseQrScannerModal"),
+  { ssr: false },
+);
+
+const PurchaseEditInvoiceModal = dynamic(
+  () => import("./components/PurchaseEditInvoiceModal"),
+  { ssr: false },
+);
 
 type PaymentMethodOption = {
   id: string;
@@ -258,6 +278,25 @@ const parseOptionalNumber = (value: string) => {
 };
 
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
+
+let jsQrDecoderPromise: Promise<typeof import("jsqr")> | null = null;
+
+const decodeQrValueFromPixels = async (
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+) => {
+  if (!jsQrDecoderPromise) {
+    jsQrDecoderPromise = import("jsqr");
+  }
+
+  const { default: jsQr } = await jsQrDecoderPromise;
+  const decoded = jsQr(data, width, height, {
+    inversionAttempts: "attemptBoth",
+  });
+  const rawValue = decoded?.data?.trim();
+  return rawValue ? rawValue : null;
+};
 
 const toDateInputValue = (date: Date) => {
   const year = date.getFullYear();
@@ -1177,11 +1216,7 @@ export default function PurchasesPage() {
             }
             frameContext.drawImage(scannerVideo, 0, 0, width, height);
             const imageData = frameContext.getImageData(0, 0, width, height);
-            const decoded = jsQR(imageData.data, width, height, {
-              inversionAttempts: "attemptBoth",
-            });
-            const rawValue = decoded?.data?.trim();
-            return rawValue ? rawValue : null;
+            return decodeQrValueFromPixels(imageData.data, width, height);
           };
         }
 
@@ -1999,10 +2034,11 @@ export default function PurchasesPage() {
         canvas.height = height;
         context.drawImage(image, 0, 0, width, height);
         const imageData = context.getImageData(0, 0, width, height);
-        const decoded = jsQR(imageData.data, width, height, {
-          inversionAttempts: "attemptBoth",
-        });
-        const rawValue = decoded?.data?.trim();
+        const rawValue = await decodeQrValueFromPixels(
+          imageData.data,
+          width,
+          height,
+        );
         if (rawValue) return rawValue;
       }
 
@@ -5000,354 +5036,65 @@ export default function PurchasesPage() {
         </>
       )}
 
-      {renderModalPortal(
-        <AnimatePresence>
-          {pendingPurchase ? (
-            <motion.div
-              className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="confirm-purchase-title"
-                className="mx-4 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2
-                      id="confirm-purchase-title"
-                      className="text-lg font-semibold text-zinc-900"
-                    >
-                      {editingPurchaseId ? "Confirmar cambios" : "Confirmar compra"}
-                    </h2>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      {editingPurchaseId
-                        ? "Revisa los datos principales antes de actualizar."
-                        : "Revisa los datos principales antes de registrar."}
-                    </p>
-                  </div>
-                  <span className="rounded-full border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    {formatCurrencyARS(pendingPurchase.total)}
-                  </span>
-                </div>
+      {pendingPurchase
+        ? renderModalPortal(
+            <PurchaseConfirmModal
+              pendingPurchase={pendingPurchase}
+              editingPurchaseId={editingPurchaseId}
+              confirmationRows={confirmationRows}
+              status={status}
+              isSubmitting={isSubmitting}
+              onCancel={() => setPendingPurchase(null)}
+              onConfirm={handleConfirmPurchase}
+            />,
+          )
+        : null}
 
-                <div className="mt-4 divide-y divide-zinc-200/70 rounded-xl border border-zinc-200/70">
-                  {confirmationRows.map((row) => (
-                    <div
-                      key={row.label}
-                      className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[150px_minmax(0,1fr)]"
-                    >
-                      <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                        {row.label}
-                      </span>
-                      <span className="min-w-0 break-words text-zinc-900">
-                        {row.value}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+      {editingPaymentPurchase
+        ? renderModalPortal(
+            <PurchasePaymentModeModal
+              editingPaymentPurchase={editingPaymentPurchase}
+              paymentModeOptions={PURCHASE_PAYMENT_MODE_OPTIONS}
+              editingPaymentMode={editingPaymentMode}
+              editingPaidAt={editingPaidAt}
+              editingCashOutPaymentMethodId={editingCashOutPaymentMethodId}
+              editingCashOutAccountId={editingCashOutAccountId}
+              paymentMethods={paymentMethods}
+              accounts={accounts}
+              isUpdatingPaymentMode={isUpdatingPaymentMode}
+              onSetEditingPaymentMode={setEditingPaymentMode}
+              onResetCashOutTargets={() => {
+                setEditingCashOutPaymentMethodId("");
+                setEditingCashOutAccountId("");
+              }}
+              onSetEditingPaidAt={setEditingPaidAt}
+              onSetEditingCashOutPaymentMethodId={setEditingCashOutPaymentMethodId}
+              onSetEditingCashOutAccountId={setEditingCashOutAccountId}
+              onClose={closePaymentModeEditor}
+              onSave={handleUpdatePurchasePaymentMode}
+            />,
+          )
+        : null}
 
-                {status ? (
-                  <p className="mt-3 text-xs text-rose-600">{status}</p>
-                ) : null}
-
-                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    className="btn w-full sm:w-auto"
-                    onClick={() => setPendingPurchase(null)}
-                    disabled={isSubmitting}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-emerald w-full sm:w-auto"
-                    onClick={handleConfirmPurchase}
-                    disabled={isSubmitting}
-                  >
-                    <CheckIcon className="size-4" />
-                    {isSubmitting
-                      ? "Confirmando..."
-                      : editingPurchaseId
-                        ? "Confirmar cambios"
-                        : "Confirmar compra"}
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>,
-      )}
-
-      {renderModalPortal(
-        <AnimatePresence>
-          {editingPaymentPurchase ? (
-            <motion.div
-              className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="purchase-payment-mode-title"
-                className="mx-4 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <div className="space-y-1">
-                  <h2
-                    id="purchase-payment-mode-title"
-                    className="text-lg font-semibold text-zinc-900"
-                  >
-                    Ajustar cobro de compra
-                  </h2>
-                  <p className="text-xs text-zinc-500">
-                    {editingPaymentPurchase.supplierName} ·{" "}
-                    {editingPaymentPurchase.invoiceNumber ?? "Sin comprobante"} ·{" "}
-                    {formatCurrencyARS(editingPaymentPurchase.total)}
-                  </p>
-                </div>
-
-                <div className="mt-4 space-y-4">
-                  <div className="grid gap-2 sm:grid-cols-3">
-                    {PURCHASE_PAYMENT_MODE_OPTIONS.map((option) => {
-                      const isActive = editingPaymentMode === option.value;
-                      return (
-                        <button
-                          key={`edit-${option.value}`}
-                          type="button"
-                          aria-pressed={isActive}
-                          onClick={() => {
-                            setEditingPaymentMode(option.value);
-                            if (option.value !== "IMMEDIATE_CASH_OUT") {
-                              setEditingCashOutPaymentMethodId("");
-                              setEditingCashOutAccountId("");
-                            }
-                          }}
-                          className={`rounded-xl border px-3 py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
-                            isActive
-                              ? "border-sky-300 bg-sky-50/70 text-sky-950"
-                              : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
-                          }`}
-                        >
-                          <p className="text-sm font-semibold">{option.label}</p>
-                          <p
-                            className={`mt-1 text-[11px] ${
-                              isActive ? "text-sky-700" : "text-zinc-500"
-                            }`}
-                          >
-                            {option.description}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <label className="field-stack">
-                    <span className="input-label">Fecha</span>
-                    <input
-                      type="date"
-                      className="input w-full min-w-0 cursor-pointer"
-                      value={editingPaidAt}
-                      onChange={(event) => setEditingPaidAt(event.target.value)}
-                    />
-                  </label>
-
-                  {editingPaymentMode === "IMMEDIATE_CASH_OUT" ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <label className="field-stack">
-                        <span className="input-label">Metodo de pago</span>
-                        <select
-                          className="input cursor-pointer"
-                          value={editingCashOutPaymentMethodId}
-                          onChange={(event) =>
-                            setEditingCashOutPaymentMethodId(event.target.value)
-                          }
-                          disabled={!paymentMethods.length}
-                        >
-                          <option value="">
-                            {paymentMethods.length
-                              ? "Selecciona metodo"
-                              : "Sin metodos activos"}
-                          </option>
-                          {paymentMethods.map((method) => (
-                            <option key={`edit-method-${method.id}`} value={method.id}>
-                              {method.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label className="field-stack">
-                        <span className="input-label">Cuenta de egreso</span>
-                        <select
-                          className="input cursor-pointer"
-                          value={editingCashOutAccountId}
-                          onChange={(event) =>
-                            setEditingCashOutAccountId(event.target.value)
-                          }
-                        >
-                          <option value="">Selecciona cuenta</option>
-                          {accounts.map((account) => (
-                            <option key={`edit-account-${account.id}`} value={account.id}>
-                              {account.name} ({account.currencyCode})
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    className="btn w-full sm:w-auto"
-                    onClick={closePaymentModeEditor}
-                    disabled={isUpdatingPaymentMode}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-emerald w-full sm:w-auto"
-                    onClick={handleUpdatePurchasePaymentMode}
-                    disabled={isUpdatingPaymentMode}
-                  >
-                    {isUpdatingPaymentMode ? "Guardando..." : "Guardar ajuste"}
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>,
-      )}
-
-      {renderModalPortal(
-        <AnimatePresence>
-          {isQrScannerOpen ? (
-            <motion.div
-              className="fixed inset-0 z-[125] flex items-center justify-center bg-zinc-950/35 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="purchase-qr-scanner-title"
-                className="mx-3 my-6 w-full max-w-xl rounded-2xl border border-zinc-200 bg-white p-4 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2
-                      id="purchase-qr-scanner-title"
-                      className="text-base font-semibold text-zinc-900"
-                    >
-                      Escanear QR ARCA
-                    </h2>
-                    <p className="mt-1 text-xs text-zinc-500">
-                      Apunta la camara al QR del comprobante.
-                    </p>
-                  </div>
-                  <button type="button" className="btn text-xs" onClick={closeQrScanner}>
-                    Cerrar
-                  </button>
-                </div>
-
-                {qrVideoDevices.length > 1 ? (
-                  <label className="field-stack mt-3">
-                    <span className="input-label">Camara</span>
-                    <select
-                      className="input cursor-pointer"
-                      value={qrSelectedDeviceId}
-                      onChange={(event) => setQrSelectedDeviceId(event.target.value)}
-                    >
-                      {qrVideoDevices.map((device) => (
-                        <option key={`qr-device-${device.id}`} value={device.id}>
-                          {device.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                <div className="mt-3 overflow-hidden rounded-xl border border-zinc-200 bg-zinc-900/95">
-                  <video
-                    ref={qrVideoRef}
-                    className="h-[320px] w-full object-cover sm:h-[360px]"
-                    muted
-                    playsInline
-                  />
-                </div>
-
-                {qrScannerError ? (
-                  <p className="mt-3 text-xs text-rose-600">{qrScannerError}</p>
-                ) : (
-                  <p className="mt-3 text-xs text-zinc-500">
-                    {isQrScannerActive
-                      ? "Scanner activo. Se completa la compra al detectar un QR."
-                      : "Preparando camara..."}
-                  </p>
-                )}
-
-                {isImportingQrFromImage ? (
-                  <p className="mt-2 text-xs text-zinc-500">
-                    Procesando imagen para detectar QR...
-                  </p>
-                ) : null}
-
-                <input
-                  ref={qrImageInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  className="hidden"
-                  onChange={handleImportQrFromImage}
-                />
-
-                <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    className="btn w-full text-xs sm:w-auto"
-                    onClick={() => qrImageInputRef.current?.click()}
-                    disabled={isImportingQr || isImportingQrFromImage}
-                  >
-                    Foto QR
-                  </button>
-                  <button
-                    type="button"
-                    className="btn w-full text-xs sm:w-auto"
-                    onClick={async () => {
-                      closeQrScanner();
-                      await handleImportQrFromPrompt();
-                    }}
-                    disabled={isImportingQr || isImportingQrFromImage}
-                  >
-                    Pegar texto QR
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>,
-      )}
+      {isQrScannerOpen
+        ? renderModalPortal(
+            <PurchaseQrScannerModal
+              isOpen={isQrScannerOpen}
+              isImportingQr={isImportingQr}
+              isImportingQrFromImage={isImportingQrFromImage}
+              isQrScannerActive={isQrScannerActive}
+              qrScannerError={qrScannerError}
+              qrVideoDevices={qrVideoDevices}
+              qrSelectedDeviceId={qrSelectedDeviceId}
+              qrVideoRef={qrVideoRef}
+              qrImageInputRef={qrImageInputRef}
+              onClose={closeQrScanner}
+              onSetSelectedDeviceId={setQrSelectedDeviceId}
+              onImportImage={handleImportQrFromImage}
+              onImportQrFromPrompt={handleImportQrFromPrompt}
+            />,
+          )
+        : null}
 
       {renderModalPortal(
         <AnimatePresence>
@@ -5544,124 +5291,25 @@ export default function PurchasesPage() {
         </AnimatePresence>,
       )}
 
-      {renderModalPortal(
-        <AnimatePresence>
-          {editingInvoicePurchase ? (
-            <motion.div
-              className="fixed inset-0 z-[126] flex items-center justify-center bg-zinc-950/35 backdrop-blur-sm"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <motion.div
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="purchase-edit-invoice-title"
-                className="mx-4 my-6 w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-5 shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <h2
-                      id="purchase-edit-invoice-title"
-                      className="text-lg font-semibold text-zinc-900"
-                    >
-                      Editar datos del comprobante
-                    </h2>
-                    <p className="mt-1 truncate text-xs text-zinc-500">
-                      {editingInvoicePurchase.supplierName} ·{" "}
-                      {editingInvoicePurchase.invoiceNumber ?? "Sin comprobante"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <label className="field-stack">
-                    <span className="input-label">Tipo de comprobante</span>
-                    <select
-                      className="input cursor-pointer"
-                      value={editingVoucherKind}
-                      onChange={(event) =>
-                        setEditingVoucherKind(event.target.value as "A" | "B" | "C")
-                      }
-                      disabled={isSavingInvoiceEdit}
-                    >
-                      <option value="A">Factura A</option>
-                      <option value="B">Factura B</option>
-                      <option value="C">Factura C</option>
-                    </select>
-                  </label>
-                  <label className="field-stack">
-                    <span className="input-label">Fecha comprobante</span>
-                    <input
-                      type="date"
-                      className="input w-full min-w-0 cursor-pointer"
-                      value={editingInvoiceDate}
-                      onChange={(event) => setEditingInvoiceDate(event.target.value)}
-                      disabled={isSavingInvoiceEdit}
-                    />
-                  </label>
-                  <label className="field-stack sm:col-span-2">
-                    <span className="input-label">Numero comprobante</span>
-                    <input
-                      className="input"
-                      value={editingInvoiceNumber}
-                      onChange={(event) => setEditingInvoiceNumber(event.target.value)}
-                      placeholder="0001-00001234"
-                      disabled={isSavingInvoiceEdit}
-                    />
-                    <p className="text-[11px] text-zinc-500">
-                      Formato obligatorio: 0001-00001234 (con guion).
-                    </p>
-                  </label>
-                  <label className="field-stack sm:col-span-2">
-                    <span className="input-label">CAE/CAEA</span>
-                    <input
-                      className="input"
-                      value={editingAuthorizationCode}
-                      onChange={(event) =>
-                        setEditingAuthorizationCode(event.target.value)
-                      }
-                      placeholder="Codigo de autorizacion"
-                      disabled={isSavingInvoiceEdit}
-                    />
-                  </label>
-                </div>
-
-                <p className="mt-3 text-xs text-zinc-500">
-                  Lo que guardes aca se usa para la proxima revalidacion ARCA.
-                </p>
-
-                <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    className="btn w-full sm:w-auto"
-                    onClick={closeInvoiceEditor}
-                    disabled={isSavingInvoiceEdit}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-emerald w-full sm:w-auto"
-                    onClick={handleSaveInvoiceEdit}
-                    disabled={isSavingInvoiceEdit}
-                  >
-                    {isSavingInvoiceEdit
-                      ? "Guardando..."
-                      : revalidateAfterInvoiceEdit
-                        ? "Guardar y revalidar"
-                        : "Guardar cambios"}
-                  </button>
-                </div>
-              </motion.div>
-            </motion.div>
-          ) : null}
-        </AnimatePresence>,
-      )}
+      {editingInvoicePurchase
+        ? renderModalPortal(
+            <PurchaseEditInvoiceModal
+              editingInvoicePurchase={editingInvoicePurchase}
+              editingVoucherKind={editingVoucherKind}
+              editingInvoiceDate={editingInvoiceDate}
+              editingInvoiceNumber={editingInvoiceNumber}
+              editingAuthorizationCode={editingAuthorizationCode}
+              isSavingInvoiceEdit={isSavingInvoiceEdit}
+              revalidateAfterInvoiceEdit={revalidateAfterInvoiceEdit}
+              onSetEditingVoucherKind={setEditingVoucherKind}
+              onSetEditingInvoiceDate={setEditingInvoiceDate}
+              onSetEditingInvoiceNumber={setEditingInvoiceNumber}
+              onSetEditingAuthorizationCode={setEditingAuthorizationCode}
+              onClose={closeInvoiceEditor}
+              onSave={handleSaveInvoiceEdit}
+            />,
+          )
+        : null}
 
       {status && !pendingPurchase ? (
         <p className="text-xs text-zinc-500">{status}</p>

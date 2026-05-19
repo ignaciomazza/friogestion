@@ -170,6 +170,9 @@ export default function TopbarClient({
   const [isSidebarHovered, setIsSidebarHovered] = useState(false);
   const [isSidebarCompact, setIsSidebarCompact] = useState(isCollapsed);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [prefetchOnIntent, setPrefetchOnIntent] = useState<Record<string, true>>(
+    {},
+  );
   const [internalRate, setInternalRate] = useState(latestRate);
   const isHydrated = useSyncExternalStore(
     subscribeHydration,
@@ -323,11 +326,20 @@ export default function TopbarClient({
               }
               onNavigate?.();
             };
+            const handleNavIntent = () => {
+              setPrefetchOnIntent((current) => {
+                if (current[item.href]) return current;
+                return { ...current, [item.href]: true };
+              });
+            };
             return (
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={prefetchOnIntent[item.href] ? null : false}
                 onClick={handleNavClick}
+                onMouseEnter={handleNavIntent}
+                onFocus={handleNavIntent}
                 title={compactLayout ? item.label : undefined}
                 className={cn(
                   "group relative flex h-9 items-center rounded-2xl border border-transparent py-2 text-zinc-700 transition-all",
