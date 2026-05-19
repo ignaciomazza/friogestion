@@ -482,6 +482,7 @@ export async function DELETE(req: NextRequest) {
         quoteId: true,
         billingStatus: true,
         fiscalInvoice: { select: { id: true } },
+        fiscalInvoiceIssueJob: { select: { id: true, status: true } },
         receipts: { select: { id: true }, take: 1 },
         deliveryNotes: { select: { id: true }, take: 1 },
         installmentPlan: { select: { id: true } },
@@ -539,6 +540,9 @@ export async function DELETE(req: NextRequest) {
       await tx.currentAccountEntry.deleteMany({
         where: { organizationId, saleId: id, sourceType: "SALE" },
       });
+      await tx.fiscalInvoiceIssueJob.deleteMany({
+        where: { organizationId, saleId: id },
+      });
       if (existing.quoteId) {
         await tx.quote.updateMany({
           where: {
@@ -570,7 +574,16 @@ export async function DELETE(req: NextRequest) {
       error.code === "P2003"
     ) {
       return NextResponse.json(
-        { error: "La venta tiene movimientos asociados" },
+        { error: "La venta tiene registros asociados y no se puede cancelar" },
+        { status: 409 }
+      );
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2014"
+    ) {
+      return NextResponse.json(
+        { error: "La venta tiene registros fiscales asociados" },
         { status: 409 }
       );
     }
