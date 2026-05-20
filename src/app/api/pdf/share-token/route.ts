@@ -10,7 +10,15 @@ import {
 } from "@/lib/pdf/share-token";
 
 const bodySchema = z.object({
-  documentType: z.enum(["quote", "sale", "fiscalInvoice", "creditNote"]),
+  documentType: z.enum([
+    "quote",
+    "sale",
+    "receipt",
+    "supplierPayment",
+    "deliveryNote",
+    "fiscalInvoice",
+    "creditNote",
+  ]),
   documentId: z.string().min(1),
 });
 
@@ -28,6 +36,27 @@ const findDocument = async (
 
   if (documentType === "sale") {
     return prisma.sale.findFirst({
+      where: { id: documentId, organizationId },
+      select: { id: true },
+    });
+  }
+
+  if (documentType === "receipt") {
+    return prisma.receipt.findFirst({
+      where: { id: documentId, organizationId },
+      select: { id: true },
+    });
+  }
+
+  if (documentType === "supplierPayment") {
+    return prisma.supplierPayment.findFirst({
+      where: { id: documentId, organizationId },
+      select: { id: true },
+    });
+  }
+
+  if (documentType === "deliveryNote") {
+    return prisma.deliveryNote.findFirst({
       where: { id: documentId, organizationId },
       select: { id: true },
     });
@@ -62,6 +91,26 @@ const buildSharedPdfUrl = (
   if (documentType === "sale") {
     const url = new URL("/api/pdf/sale", req.nextUrl.origin);
     url.searchParams.set("id", documentId);
+    url.searchParams.set("shareToken", shareToken);
+    return url.toString();
+  }
+
+  if (documentType === "receipt") {
+    const url = new URL("/api/pdf/receipt", req.nextUrl.origin);
+    url.searchParams.set("id", documentId);
+    url.searchParams.set("shareToken", shareToken);
+    return url.toString();
+  }
+
+  if (documentType === "supplierPayment") {
+    const url = new URL("/api/pdf/supplier-payment", req.nextUrl.origin);
+    url.searchParams.set("id", documentId);
+    url.searchParams.set("shareToken", shareToken);
+    return url.toString();
+  }
+
+  if (documentType === "deliveryNote") {
+    const url = new URL(`/api/remitos/${documentId}/pdf`, req.nextUrl.origin);
     url.searchParams.set("shareToken", shareToken);
     return url.toString();
   }

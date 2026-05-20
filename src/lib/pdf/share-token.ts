@@ -6,6 +6,9 @@ export const PDF_SHARE_TOKEN_EXPIRES_IN = "14d";
 export type PdfShareDocumentType =
   | "quote"
   | "sale"
+  | "receipt"
+  | "supplierPayment"
+  | "deliveryNote"
   | "fiscalInvoice"
   | "creditNote";
 
@@ -19,6 +22,9 @@ const PDF_SHARE_SCOPE = "pdf-share";
 const PDF_SHARE_DOCUMENT_TYPES = new Set<string>([
   "quote",
   "sale",
+  "receipt",
+  "supplierPayment",
+  "deliveryNote",
   "fiscalInvoice",
   "creditNote",
 ]);

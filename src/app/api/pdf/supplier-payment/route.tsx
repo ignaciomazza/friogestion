@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth, requireOrg } from "@/lib/auth/tenant";
 import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
 
 export const runtime = "nodejs";
 
@@ -15,15 +16,33 @@ const STATUS_LABELS: Record<string, string> = {
 
 export async function GET(req: NextRequest) {
   try {
-    const organizationId = await requireOrg(req);
-    await requireAuth(req);
     const id = req.nextUrl.searchParams.get("id");
     if (!id) {
       return NextResponse.json({ error: "Falta id" }, { status: 400 });
     }
+    let organizationId: string | null = null;
+
+    try {
+      organizationId = await resolvePdfShareOrganizationId(
+        req,
+        "supplierPayment",
+        id,
+      );
+    } catch {
+      organizationId = null;
+    }
+
+    if (!organizationId) {
+      try {
+        organizationId = await requireOrg(req);
+        await requireAuth(req);
+      } catch {
+        organizationId = null;
+      }
+    }
 
     const payment = await prisma.supplierPayment.findFirst({
-      where: { id, organizationId },
+      where: organizationId ? { id, organizationId } : { id },
       include: {
         organization: true,
         supplier: true,
@@ -39,8 +58,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const paymentOrganizationId = payment.organizationId;
     const config = await prisma.organizationFiscalConfig.findUnique({
-      where: { organizationId },
+      where: { organizationId: paymentOrganizationId },
     });
 
     const logoSrc = await resolveLogoSource({

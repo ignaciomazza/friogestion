@@ -11,10 +11,8 @@ export function proxy(req: NextRequest) {
   }
 
   const isPdfEndpointRequest =
-    pathname === "/api/pdf/quote" ||
-    pathname === "/api/pdf/sale" ||
-    /^\/api\/fiscal-invoices\/[^/]+\/pdf$/.test(pathname) ||
-    /^\/api\/credit-notes\/[^/]+\/pdf$/.test(pathname);
+    (pathname.startsWith("/api/pdf/") && pathname !== "/api/pdf/share-token") ||
+    /^\/api\/.+\/pdf$/.test(pathname);
 
   if (isPdfEndpointRequest) {
     return NextResponse.next();

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { requireAuth, requireOrg } from "@/lib/auth/tenant";
 import { DeliveryNotePdfDocument } from "@/lib/pdf/delivery-note";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
 
 export const runtime = "nodejs";
 
@@ -17,15 +18,37 @@ export async function GET(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const organizationId = await requireOrg(req);
-    await requireAuth(req);
     const params = await context.params;
+    let organizationId: string | null = null;
+
+    try {
+      organizationId = await resolvePdfShareOrganizationId(
+        req,
+        "deliveryNote",
+        params.id,
+      );
+    } catch {
+      organizationId = null;
+    }
+
+    if (!organizationId) {
+      try {
+        organizationId = await requireOrg(req);
+        await requireAuth(req);
+      } catch {
+        organizationId = null;
+      }
+    }
 
     const note = await prisma.deliveryNote.findFirst({
-      where: {
-        id: params.id,
-        organizationId,
-      },
+      where: organizationId
+        ? {
+            id: params.id,
+            organizationId,
+          }
+        : {
+            id: params.id,
+          },
       include: {
         organization: true,
         customer: true,
@@ -52,8 +75,9 @@ export async function GET(
       return NextResponse.json({ error: "Remito no encontrado" }, { status: 404 });
     }
 
+    const noteOrganizationId = note.organizationId;
     const config = await prisma.organizationFiscalConfig.findUnique({
-      where: { organizationId },
+      where: { organizationId: noteOrganizationId },
       select: {
         logoUrl: true,
         logoFilename: true,

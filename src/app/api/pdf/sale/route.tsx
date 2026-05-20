@@ -16,18 +16,25 @@ export async function GET(req: NextRequest) {
     if (!id) {
       return NextResponse.json({ error: "Falta id" }, { status: 400 });
     }
-    const sharedOrganizationId = await resolvePdfShareOrganizationId(
-      req,
-      "sale",
-      id,
-    );
-    const organizationId = sharedOrganizationId ?? (await requireOrg(req));
-    if (!sharedOrganizationId) {
-      await requireAuth(req);
+
+    let organizationId: string | null = null;
+    try {
+      organizationId = await resolvePdfShareOrganizationId(req, "sale", id);
+    } catch {
+      organizationId = null;
+    }
+
+    if (!organizationId) {
+      try {
+        organizationId = await requireOrg(req);
+        await requireAuth(req);
+      } catch {
+        organizationId = null;
+      }
     }
 
     const sale = await prisma.sale.findFirst({
-      where: { id, organizationId },
+      where: organizationId ? { id, organizationId } : { id },
       include: {
         organization: true,
         customer: true,
@@ -44,8 +51,9 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    const saleOrganizationId = sale.organizationId;
     const config = await prisma.organizationFiscalConfig.findUnique({
-      where: { organizationId },
+      where: { organizationId: saleOrganizationId },
     });
 
     const logoSrc = await resolveLogoSource({
