@@ -338,7 +338,7 @@ export async function POST(req: NextRequest) {
     const requestedCashOutLines = registerCashOut
       ? body.cashOutLines?.length
         ? body.cashOutLines
-        : body.cashOutPaymentMethodId && body.cashOutAccountId
+        : body.cashOutPaymentMethodId
           ? [
               {
                 paymentMethodId: body.cashOutPaymentMethodId,
@@ -352,7 +352,7 @@ export async function POST(req: NextRequest) {
     const normalizedCashOutLines: Array<{
       paymentMethodId: string;
       paymentMethodName: string;
-      accountId: string;
+      accountId: string | null;
       currencyCode: string;
       amount: number;
     }> = [];
@@ -377,6 +377,7 @@ export async function POST(req: NextRequest) {
         select: {
           id: true,
           name: true,
+          requiresAccount: true,
         },
       });
       if (methods.length !== paymentMethodIds.length) {
@@ -422,22 +423,25 @@ export async function POST(req: NextRequest) {
           );
         }
 
-        if (!line.accountId) {
+        const accountId = line.accountId?.trim() || undefined;
+        if (method.requiresAccount && !accountId) {
           return NextResponse.json(
             { error: "Selecciona cuenta para cada linea de pago" },
             { status: 400 },
           );
         }
 
-        const account = accountById.get(line.accountId);
-        if (!account) {
-          return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
-        }
-        if (account.currencyCode !== "ARS") {
-          return NextResponse.json(
-            { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
-            { status: 400 },
-          );
+        const account = accountId ? accountById.get(accountId) : null;
+        if (accountId) {
+          if (!account) {
+            return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
+          }
+          if (account.currencyCode !== "ARS") {
+            return NextResponse.json(
+              { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
+              { status: 400 },
+            );
+          }
         }
 
         const amount = Number(line.amount ?? 0);
@@ -452,8 +456,8 @@ export async function POST(req: NextRequest) {
         normalizedCashOutLines.push({
           paymentMethodId: method.id,
           paymentMethodName: method.name,
-          accountId: account.id,
-          currencyCode: account.currencyCode,
+          accountId: accountId ?? null,
+          currencyCode: account?.currencyCode ?? "ARS",
           amount,
         });
       }
@@ -639,6 +643,7 @@ export async function POST(req: NextRequest) {
 
       if (registerCashOut && normalizedCashOutLines.length) {
         for (const line of normalizedCashOutLines) {
+          if (!line.accountId) continue;
           await tx.accountMovement.create({
             data: {
               organizationId,

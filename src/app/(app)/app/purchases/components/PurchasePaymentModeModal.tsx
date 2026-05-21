@@ -7,6 +7,7 @@ type PurchasePaymentMode = "CURRENT_ACCOUNT" | "IMMEDIATE_CASH_OUT" | "OFF_BOOK"
 type PaymentMethodOption = {
   id: string;
   name: string;
+  requiresAccount: boolean;
 };
 
 type AccountOption = {
@@ -77,6 +78,11 @@ export default function PurchasePaymentModeModal({
     0,
   );
   const cashOutDiff = purchaseTotal - cashOutTotal;
+  const methodRequiresAccount = (paymentMethodId: string) =>
+    Boolean(
+      paymentMethods.find((method) => method.id === paymentMethodId)
+        ?.requiresAccount,
+    );
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center bg-zinc-950/25">
@@ -141,6 +147,9 @@ export default function PurchasePaymentModeModal({
               <div className="rounded-2xl border border-dashed border-zinc-200/70 bg-white/40 p-4 sm:p-5">
                 <div className="space-y-3">
                   {editingCashOutLines.map((line, index) => {
+                    const requiresAccount = methodRequiresAccount(
+                      line.paymentMethodId,
+                    );
                     return (
                       <div
                         key={`edit-cash-out-line-${index}`}
@@ -173,22 +182,34 @@ export default function PurchasePaymentModeModal({
 
                         <label className="field-stack min-w-0">
                           <span className="input-label">Cuenta de egreso</span>
-                          <select
-                            className="input w-full min-w-0 cursor-pointer"
-                            value={line.accountId}
-                            onChange={(event) =>
-                              onUpdateCashOutLine(index, {
-                                accountId: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="">Selecciona cuenta</option>
-                            {accounts.map((account) => (
-                              <option key={`edit-account-${account.id}`} value={account.id}>
-                                {account.name} ({account.currencyCode})
-                              </option>
-                            ))}
-                          </select>
+                          {requiresAccount ? (
+                            <select
+                              className="input w-full min-w-0 cursor-pointer"
+                              value={line.accountId}
+                              onChange={(event) =>
+                                onUpdateCashOutLine(index, {
+                                  accountId: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">Selecciona cuenta</option>
+                              {accounts.map((account) => (
+                                <option
+                                  key={`edit-account-${account.id}`}
+                                  value={account.id}
+                                >
+                                  {account.name} ({account.currencyCode})
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              className="input w-full min-w-0"
+                              value="No requiere cuenta"
+                              readOnly
+                              disabled
+                            />
+                          )}
                         </label>
 
                         <label className="field-stack min-w-0">

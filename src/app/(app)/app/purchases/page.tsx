@@ -784,13 +784,25 @@ const roundMoney = (value: number) =>
 
 const toMoneyValue = (value: number) => roundMoney(value).toFixed(2);
 
+const paymentMethodRequiresAccount = (
+  paymentMethodId: string,
+  paymentMethods: PaymentMethodOption[],
+) => {
+  const method = paymentMethods.find(
+    (candidate) => candidate.id === paymentMethodId,
+  );
+  return Boolean(method?.requiresAccount);
+};
+
 const resolveDefaultCashOutAccountId = (
   paymentMethodId: string,
   paymentMethods: PaymentMethodOption[],
   accounts: AccountOption[],
 ) => {
-  const method = paymentMethods.find((candidate) => candidate.id === paymentMethodId);
-  if (!method) return accounts.find((account) => account.currencyCode === "ARS")?.id ?? accounts[0]?.id ?? "";
+  const method = paymentMethods.find(
+    (candidate) => candidate.id === paymentMethodId,
+  );
+  if (!method?.requiresAccount) return "";
   return (
     accounts.find((account) => account.currencyCode === "ARS")?.id ??
     accounts[0]?.id ??
@@ -2874,7 +2886,12 @@ export default function PurchasesPage() {
       ? cashOutLines
           .map((line) => ({
             paymentMethodId: line.paymentMethodId,
-            accountId: line.accountId,
+            accountId: paymentMethodRequiresAccount(
+              line.paymentMethodId,
+              paymentMethods,
+            )
+              ? line.accountId
+              : "",
             amount: Number(line.amount || 0),
           }))
           .filter((line) => line.amount > 0)
@@ -2886,13 +2903,21 @@ export default function PurchasesPage() {
       return null;
     }
 
-    if (
+    const hasInvalidCashOutLine =
       registerCashOut &&
-      normalizedCashOutLines.some(
-        (line) => !line.paymentMethodId || !line.accountId || line.amount <= 0,
-      )
-    ) {
-      setStatus("Completa metodo, cuenta y monto en cada linea");
+      normalizedCashOutLines.some((line) => {
+        if (!line.paymentMethodId || line.amount <= 0) return true;
+        const method = paymentMethods.find(
+          (candidate) => candidate.id === line.paymentMethodId,
+        );
+        if (!method) return true;
+        return method.requiresAccount && !line.accountId;
+      });
+
+    if (hasInvalidCashOutLine) {
+      setStatus(
+        "Completa metodo y monto en cada linea. Selecciona cuenta solo cuando corresponda.",
+      );
       setOpenPurchaseSection("payment");
       return null;
     }
@@ -3589,7 +3614,12 @@ export default function PurchasesPage() {
         const normalizedLines = editingCashOutLines
           .map((line) => ({
             paymentMethodId: line.paymentMethodId,
-            accountId: line.accountId,
+            accountId: paymentMethodRequiresAccount(
+              line.paymentMethodId,
+              paymentMethods,
+            )
+              ? line.accountId
+              : "",
             amount: Number(line.amount || 0),
           }))
           .filter((line) => line.amount > 0);
@@ -3601,11 +3631,17 @@ export default function PurchasesPage() {
           return;
         }
 
-        const invalidLine = normalizedLines.some(
-          (line) => !line.paymentMethodId || !line.accountId,
-        );
+        const invalidLine = normalizedLines.some((line) => {
+          if (!line.paymentMethodId || line.amount <= 0) return true;
+          const method = paymentMethods.find(
+            (candidate) => candidate.id === line.paymentMethodId,
+          );
+          if (!method) return true;
+          return method.requiresAccount && !line.accountId;
+        });
         if (invalidLine) {
-          const message = "Completa metodo, cuenta y monto en cada linea.";
+          const message =
+            "Completa metodo y monto en cada linea. Selecciona cuenta solo cuando corresponda.";
           setStatus(message);
           toast.error(message);
           return;
@@ -5080,76 +5116,91 @@ export default function PurchasesPage() {
               {registerCashOut ? (
                 <div className="space-y-3">
                   <div className="space-y-2">
-                    {cashOutLines.map((line, index) => (
-                      <div
-                        key={`cash-out-line-${index}`}
-                        className="grid gap-3 rounded-xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-[minmax(160px,1.4fr)_minmax(170px,1.4fr)_minmax(120px,1fr)_auto] sm:items-end"
-                      >
-                        <label className="field-stack">
-                          <span className="input-label">Metodo de pago</span>
-                          <select
-                            className="input cursor-pointer"
-                            value={line.paymentMethodId}
-                            onChange={(event) =>
-                              updateCashOutLine(index, {
-                                paymentMethodId: event.target.value,
-                              })
-                            }
-                            disabled={!paymentMethods.length}
-                          >
-                            <option value="">
-                              {paymentMethods.length
-                                ? "Selecciona metodo"
-                                : "Sin metodos activos"}
-                            </option>
-                            {paymentMethods.map((method) => (
-                              <option key={method.id} value={method.id}>
-                                {method.name}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="field-stack">
-                          <span className="input-label">Cuenta de egreso</span>
-                          <select
-                            className="input cursor-pointer"
-                            value={line.accountId}
-                            onChange={(event) =>
-                              updateCashOutLine(index, {
-                                accountId: event.target.value,
-                              })
-                            }
-                          >
-                            <option value="">Selecciona cuenta</option>
-                            {accounts.map((account) => (
-                              <option key={account.id} value={account.id}>
-                                {account.name} ({account.currencyCode})
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="field-stack">
-                          <span className="input-label">Monto</span>
-                          <MoneyInput
-                            className="input w-full text-right tabular-nums"
-                            value={line.amount}
-                            onValueChange={(nextValue) =>
-                              updateCashOutLine(index, { amount: nextValue })
-                            }
-                            placeholder="0,00"
-                            maxDecimals={2}
-                          />
-                        </label>
-                        <button
-                          type="button"
-                          className="btn btn-rose text-xs sm:self-end"
-                          onClick={() => removeCashOutLine(index)}
-                          disabled={cashOutLines.length <= 1}
+                    {cashOutLines.map((line, index) => {
+                      const requiresAccount = paymentMethodRequiresAccount(
+                        line.paymentMethodId,
+                        paymentMethods,
+                      );
+                      return (
+                        <div
+                          key={`cash-out-line-${index}`}
+                          className="grid gap-3 rounded-xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-[minmax(160px,1.4fr)_minmax(170px,1.4fr)_minmax(120px,1fr)_auto] sm:items-end"
                         >
-                          <TrashIcon className="size-4" />
-                        </button>
-                      </div>
-                    ))}
+                          <label className="field-stack">
+                            <span className="input-label">Metodo de pago</span>
+                            <select
+                              className="input cursor-pointer"
+                              value={line.paymentMethodId}
+                              onChange={(event) =>
+                                updateCashOutLine(index, {
+                                  paymentMethodId: event.target.value,
+                                })
+                              }
+                              disabled={!paymentMethods.length}
+                            >
+                              <option value="">
+                                {paymentMethods.length
+                                  ? "Selecciona metodo"
+                                  : "Sin metodos activos"}
+                              </option>
+                              {paymentMethods.map((method) => (
+                                <option key={method.id} value={method.id}>
+                                  {method.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field-stack">
+                            <span className="input-label">Cuenta de egreso</span>
+                            {requiresAccount ? (
+                              <select
+                                className="input cursor-pointer"
+                                value={line.accountId}
+                                onChange={(event) =>
+                                  updateCashOutLine(index, {
+                                    accountId: event.target.value,
+                                  })
+                                }
+                              >
+                                <option value="">Selecciona cuenta</option>
+                                {accounts.map((account) => (
+                                  <option key={account.id} value={account.id}>
+                                    {account.name} ({account.currencyCode})
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                className="input"
+                                value="No requiere cuenta"
+                                readOnly
+                                disabled
+                              />
+                            )}
+                          </label>
+                          <label className="field-stack">
+                            <span className="input-label">Monto</span>
+                            <MoneyInput
+                              className="input w-full text-right tabular-nums"
+                              value={line.amount}
+                              onValueChange={(nextValue) =>
+                                updateCashOutLine(index, { amount: nextValue })
+                              }
+                              placeholder="0,00"
+                              maxDecimals={2}
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-rose text-xs sm:self-end"
+                            onClick={() => removeCashOutLine(index)}
+                            disabled={cashOutLines.length <= 1}
+                          >
+                            <TrashIcon className="size-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
