@@ -13,7 +13,11 @@ import {
   type PurchaseValidationPayload,
 } from "@/lib/arca/purchase-validation";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
-import { mapVoucherTypeToPurchaseKind } from "@/lib/purchases/fiscal";
+import {
+  assertPurchaseVoucherVatRules,
+  getPurchaseFiscalRecordType,
+  mapVoucherTypeToPurchaseKind,
+} from "@/lib/purchases/fiscal";
 
 export const runtime = "nodejs";
 
@@ -85,6 +89,7 @@ export async function PATCH(
         invoiceNumber: true,
         invoiceDate: true,
         total: true,
+        vatTotal: true,
         fiscalVoucherKind: true,
         fiscalVoucherType: true,
         authorizationMode: true,
@@ -111,6 +116,7 @@ export async function PATCH(
     const hasInvoice =
       body.hasInvoice ??
       Boolean(trimToNull(body.invoiceNumber) ?? trimToNull(purchase.invoiceNumber));
+    const fiscalComputable = hasInvoice;
 
     const invoiceNumber = hasInvoice
       ? trimToNull(body.invoiceNumber) ?? trimToNull(purchase.invoiceNumber)
@@ -163,6 +169,26 @@ export async function PATCH(
           ? purchase.fiscalVoucherKind
           : null)
       : null;
+
+    if (hasInvoice) {
+      try {
+        assertPurchaseVoucherVatRules({
+          voucherKind,
+          vatTotal: Number(purchase.vatTotal ?? 0),
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C"
+        ) {
+          return NextResponse.json(
+            { error: "Factura C: no genera credito fiscal de IVA" },
+            { status: 400 },
+          );
+        }
+        throw error;
+      }
+    }
     const authorizationCode = hasInvoice
       ? trimToNull(body.authorizationCode) ?? trimToNull(purchase.authorizationCode)
       : null;
@@ -242,7 +268,7 @@ export async function PATCH(
           ? arcaValidationPayload
             ? "Datos del comprobante actualizados. Revalida para confirmar en ARCA."
             : "Comprobante actualizado. Completa CAE y revalida en ARCA."
-          : "Compra sin comprobante fiscal.",
+          : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
       },
       select: {
         id: true,
@@ -261,7 +287,7 @@ export async function PATCH(
         ? arcaValidationPayload
           ? "Comprobante actualizado. Revalida para confirmar en ARCA."
           : "Comprobante actualizado. Falta completar datos para revalidar en ARCA."
-        : "Compra actualizada sin comprobante.",
+        : "Compra actualizada. Sin comprobante fiscal (registro interno no computable fiscalmente).",
       purchase: {
         id: updated.id,
         invoiceNumber: updated.invoiceNumber,
@@ -271,6 +297,8 @@ export async function PATCH(
         fiscalPointOfSale: updated.fiscalPointOfSale,
         fiscalVoucherNumber: updated.fiscalVoucherNumber,
         authorizationCode: updated.authorizationCode,
+        fiscalComputable,
+        fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
       },
     });
   } catch (error) {

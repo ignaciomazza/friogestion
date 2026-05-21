@@ -150,6 +150,7 @@ type ConfirmReceiptLine = {
   fxRateUsed: string;
 };
 type ConfirmReceiptMode = "SIMPLE" | "INSTALLMENTS";
+type ConfirmSaleBillingStatus = "TO_BILL" | "NOT_BILLED";
 type ConfirmInstallmentsForm = {
   installmentsCount: string;
   interestRate: string;
@@ -402,6 +403,8 @@ export default function QuotesClient({
     useState(true);
   const [confirmReceiptMode, setConfirmReceiptMode] =
     useState<ConfirmReceiptMode>("SIMPLE");
+  const [confirmBillingStatus, setConfirmBillingStatus] =
+    useState<ConfirmSaleBillingStatus>("TO_BILL");
   const [confirmReceiptLines, setConfirmReceiptLines] = useState<ConfirmReceiptLine[]>(
     () =>
       buildConfirmReceiptLines({
@@ -548,6 +551,7 @@ export default function QuotesClient({
     setConfirmSaleStatus(null);
     setRegisterReceiptOnConfirm(true);
     setConfirmReceiptMode("SIMPLE");
+    setConfirmBillingStatus("TO_BILL");
     setConfirmInstallmentsForm(buildConfirmInstallmentsForm());
     setConfirmReceiptLines(
       buildConfirmReceiptLines({
@@ -648,6 +652,7 @@ export default function QuotesClient({
     setConfirmSaleStatus(null);
     setRegisterReceiptOnConfirm(true);
     setConfirmReceiptMode("SIMPLE");
+    setConfirmBillingStatus("TO_BILL");
     setConfirmInstallmentsForm(buildConfirmInstallmentsForm());
 
     const { detail, error } = await fetchQuoteDetail(quoteId);
@@ -829,6 +834,7 @@ export default function QuotesClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: quoteToConfirmSale.id,
+          billingStatus: confirmBillingStatus,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -3334,6 +3340,7 @@ export default function QuotesClient({
           confirmPreviewExtra={confirmPreviewExtra}
           confirmPreviewTotal={confirmPreviewTotal}
           confirmExtraLabel={confirmExtraLabel}
+          confirmBillingStatus={confirmBillingStatus}
           registerReceiptOnConfirm={registerReceiptOnConfirm}
           isConfirmingSale={isConfirmingSale}
           confirmReceiptMode={confirmReceiptMode}
@@ -3358,6 +3365,7 @@ export default function QuotesClient({
           confirmSaleStatus={confirmSaleStatus}
           onClose={() => closeConfirmSaleModal()}
           onConfirm={handleConfirmSaleFromModal}
+          onSetConfirmBillingStatus={setConfirmBillingStatus}
           onSetRegisterReceiptOnConfirm={setRegisterReceiptOnConfirm}
           onSetConfirmReceiptMode={setConfirmReceiptMode}
           onSetConfirmInstallmentsForm={setConfirmInstallmentsForm}

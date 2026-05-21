@@ -16,7 +16,10 @@ import {
 import { validatePurchaseVoucher } from "@/lib/arca/purchase-verification";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  assertPurchaseVoucherVatRules,
   buildPurchaseFiscalTotals,
+  getPurchaseFiscalRecordType,
+  isPurchaseFiscalComputable,
   mapVoucherTypeToPurchaseKind,
   purchaseFiscalInputSchema,
 } from "@/lib/purchases/fiscal";
@@ -62,6 +65,8 @@ const purchaseSchema = z.object({
   cashOutPaymentMethodId: z.string().min(1).optional(),
   cashOutAccountId: z.string().min(1).optional(),
 });
+
+const INVOICE_NUMBER_PATTERN = /^(\d{1,5})-(\d{1,12})$/;
 
 type ImmediateCashOutCandidate = {
   methodName: string;
@@ -201,6 +206,13 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       purchases.map((purchase) => {
+        const fiscalComputable = isPurchaseFiscalComputable({
+          invoiceNumber: purchase.invoiceNumber,
+          fiscalVoucherKind: purchase.fiscalVoucherKind,
+          fiscalVoucherType: purchase.fiscalVoucherType,
+          fiscalPointOfSale: purchase.fiscalPointOfSale,
+          fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+        });
         const immediatePaymentMethodName = resolveImmediatePaymentMethodName({
           purchaseId: purchase.id,
           invoiceNumber: purchase.invoiceNumber ?? null,
@@ -243,7 +255,9 @@ export async function GET(req: NextRequest) {
           paymentStatus: purchase.paymentStatus,
           itemsCount: purchase.items.length,
           status: purchase.status,
-          hasInvoice: Boolean(purchase.invoiceNumber),
+          hasInvoice: fiscalComputable,
+          fiscalComputable,
+          fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
           impactsAccount: purchase.currentAccountEntries.length > 0,
           cashOutRegistered: Boolean(immediatePaymentMethodName),
           immediatePaymentMethodName,
@@ -280,15 +294,37 @@ export async function POST(req: NextRequest) {
     const hasInvoice =
       body.hasInvoice ??
       Boolean(body.invoiceNumber?.trim() || body.arcaValidation);
+    const fiscalComputable = hasInvoice;
     const invoiceNumber = hasInvoice ? body.invoiceNumber?.trim() || undefined : undefined;
     const invoiceDateResult = parseOptionalDate(body.invoiceDate);
     if (invoiceDateResult.error) {
       return NextResponse.json(
-        { error: "Fecha de factura invalida" },
+        { error: "Fecha del comprobante invalida" },
         { status: 400 },
       );
     }
     const invoiceDate = invoiceDateResult.date ?? undefined;
+    if (hasInvoice && !invoiceNumber) {
+      return NextResponse.json(
+        { error: "Ingresa numero de comprobante" },
+        { status: 400 },
+      );
+    }
+    if (hasInvoice && !INVOICE_NUMBER_PATTERN.test(invoiceNumber ?? "")) {
+      return NextResponse.json(
+        {
+          error:
+            "El numero de comprobante debe tener formato 0001-00001234 (con guion).",
+        },
+        { status: 400 },
+      );
+    }
+    if (hasInvoice && !invoiceDate) {
+      return NextResponse.json(
+        { error: "Ingresa fecha del comprobante" },
+        { status: 400 },
+      );
+    }
 
     const purchaseItems = (body.items ?? []).filter(
       (item) => Number(item.qty) > 0,
@@ -309,8 +345,9 @@ export async function POST(req: NextRequest) {
     const fiscalTotals = buildPurchaseFiscalTotals({
       totalAmount,
       purchaseVatAmount,
-      fiscalDetail: body.fiscalDetail ?? null,
+      fiscalDetail: fiscalComputable ? (body.fiscalDetail ?? null) : null,
       currencyCode: body.currencyCode,
+      fiscalComputable,
     });
 
     const impactCurrentAccount = body.impactCurrentAccount ?? false;
@@ -324,13 +361,6 @@ export async function POST(req: NextRequest) {
     if (adjustStock && purchaseItems.length === 0 && stockAdjustments.length === 0) {
       return NextResponse.json(
         { error: "Agrega productos para ingresar stock" },
-        { status: 400 },
-      );
-    }
-
-    if (body.validateWithArca && !hasInvoice) {
-      return NextResponse.json(
-        { error: "No se puede validar ARCA sin comprobante" },
         { status: 400 },
       );
     }
@@ -493,13 +523,7 @@ export async function POST(req: NextRequest) {
     }
 
     let arcaValidationPayload: PurchaseValidationPayload | null = null;
-    if (body.arcaValidation) {
-      if (!hasInvoice) {
-        return NextResponse.json(
-          { error: "Activa 'Tiene factura' para validar ARCA" },
-          { status: 400 },
-        );
-      }
+    if (body.arcaValidation && hasInvoice) {
 
       const fiscalConfig = await prisma.organizationFiscalConfig.findUnique({
         where: { organizationId },
@@ -515,6 +539,11 @@ export async function POST(req: NextRequest) {
         receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
         receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
       });
+
+      assertPurchaseVoucherVatRules({
+        voucherKind: mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType),
+        vatTotal: fiscalTotals.vatTotal,
+      });
     }
 
     const purchase = await prisma.$transaction(async (tx) => {
@@ -529,20 +558,35 @@ export async function POST(req: NextRequest) {
           subtotal: fiscalTotals.subtotal.toFixed(2),
           taxes: fiscalTotals.taxes.toFixed(2),
           total: fiscalTotals.total.toFixed(2),
-          fiscalVoucherKind: arcaValidationPayload
-            ? mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType)
-            : undefined,
-          fiscalVoucherType: arcaValidationPayload?.voucherType,
-          fiscalPointOfSale: arcaValidationPayload?.pointOfSale,
-          fiscalVoucherNumber: arcaValidationPayload?.voucherNumber,
-          authorizationMode: arcaValidationPayload?.mode,
-          authorizationCode: arcaValidationPayload?.authorizationCode,
+          fiscalVoucherKind: fiscalComputable
+            ? arcaValidationPayload
+              ? mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType)
+              : undefined
+            : null,
+          fiscalVoucherType: fiscalComputable
+            ? arcaValidationPayload?.voucherType
+            : null,
+          fiscalPointOfSale: fiscalComputable
+            ? arcaValidationPayload?.pointOfSale
+            : null,
+          fiscalVoucherNumber: fiscalComputable
+            ? arcaValidationPayload?.voucherNumber
+            : null,
+          authorizationMode: fiscalComputable
+            ? arcaValidationPayload?.mode
+            : null,
+          authorizationCode: fiscalComputable
+            ? arcaValidationPayload?.authorizationCode
+            : null,
           currencyCode: fiscalTotals.currencyCode,
           netTaxed: fiscalTotals.netTaxed.toFixed(2),
           netNonTaxed: fiscalTotals.netNonTaxed.toFixed(2),
           exemptAmount: fiscalTotals.exemptAmount.toFixed(2),
           vatTotal: fiscalTotals.vatTotal.toFixed(2),
           otherTaxesTotal: fiscalTotals.otherTaxesTotal.toFixed(2),
+          arcaValidationMessage: fiscalComputable
+            ? null
+            : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
           paidTotal: impactCurrentAccount ? "0.00" : totalAmount.toFixed(2),
           balance: impactCurrentAccount ? totalAmount.toFixed(2) : "0.00",
           items: purchaseItems.length
@@ -669,7 +713,7 @@ export async function POST(req: NextRequest) {
         purchaseInvoiceId: purchase.id,
         payload: arcaValidationPayload,
       });
-    } else if (body.validateWithArca && hasInvoice) {
+    } else if (hasInvoice && body.validateWithArca) {
       await prisma.purchaseInvoice.update({
         where: { id: purchase.id },
         data: {
@@ -716,7 +760,9 @@ export async function POST(req: NextRequest) {
       paymentStatus: purchase.paymentStatus,
       itemsCount: purchase.items.length,
       status: purchase.status,
-      hasInvoice,
+      hasInvoice: fiscalComputable,
+      fiscalComputable,
+      fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
       impactsAccount: impactCurrentAccount,
       adjustedStock: adjustStock,
       cashOutRegistered: Boolean(registerCashOut && normalizedCashOutLines.length),
@@ -754,6 +800,8 @@ export async function POST(req: NextRequest) {
           "El IVA compra no puede superar el total",
         PURCHASE_FISCAL_TOTAL_MISMATCH:
           "El detalle fiscal no coincide con el total de la compra",
+        PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C:
+          "Factura C: no genera credito fiscal de IVA",
       };
       return NextResponse.json(
         { error: fiscalErrors[error.message] ?? "Detalle fiscal invalido" },

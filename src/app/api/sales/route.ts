@@ -17,6 +17,7 @@ import {
   calculateSaleAdjustment,
   type ExtraChargeTypeValue,
 } from "@/lib/sale-adjustments";
+import { assertManualBillingStatusAllowed } from "@/lib/sales/fiscal";
 
 const saleItemSchema = z.object({
   productId: z.string().min(1),
@@ -243,6 +244,17 @@ export async function POST(req: NextRequest) {
     }
     const saleDate = saleDateResult.date ?? undefined;
     const billingStatus = body.billingStatus ?? "TO_BILL";
+    try {
+      assertManualBillingStatusAllowed(billingStatus);
+    } catch {
+      return NextResponse.json(
+        {
+          error:
+            "El estado facturado se asigna solo al emitir comprobante fiscal.",
+        },
+        { status: 409 },
+      );
+    }
 
     const sale = await prisma.$transaction(async (tx) => {
       let saleNumber = saleNumberInput;
@@ -407,6 +419,19 @@ export async function PATCH(req: NextRequest) {
     }
     const saleDate = saleDateResult.date ?? undefined;
     const saleNumberInput = body.saleNumber?.trim() || undefined;
+    if (body.billingStatus) {
+      try {
+        assertManualBillingStatusAllowed(body.billingStatus);
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              "No se puede marcar la venta como facturada manualmente. Emite el comprobante fiscal.",
+          },
+          { status: 409 },
+        );
+      }
+    }
 
     const sale = await prisma.$transaction(async (tx) => {
       if (saleNumberInput) {

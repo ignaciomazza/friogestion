@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildPurchasesReportCsv,
   csvEscape,
+  isPurchaseIncludedInFiscalReport,
   type PurchasesMonthlyReport,
 } from "../src/lib/purchases/report";
 
@@ -87,4 +88,40 @@ test("arma reporte CSV mensual con compras y retenciones", () => {
   assert.match(csv, /Retenciones/);
   assert.match(csv, /payment-1/);
   assert.match(csv, /15\.00/);
+});
+
+test("reporte fiscal excluye compras internas sin comprobante", () => {
+  assert.equal(
+    isPurchaseIncludedInFiscalReport({
+      invoiceNumber: null,
+      fiscalVoucherKind: null,
+      fiscalVoucherType: null,
+      fiscalPointOfSale: null,
+      fiscalVoucherNumber: null,
+    }),
+    false,
+  );
+});
+
+test("reporte fiscal incluye compras historicas con comprobante", () => {
+  assert.equal(
+    isPurchaseIncludedInFiscalReport({
+      invoiceNumber: "0003-00000111",
+      fiscalVoucherKind: null,
+      fiscalVoucherType: null,
+      fiscalPointOfSale: null,
+      fiscalVoucherNumber: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isPurchaseIncludedInFiscalReport({
+      invoiceNumber: null,
+      fiscalVoucherKind: "B",
+      fiscalVoucherType: 6,
+      fiscalPointOfSale: 3,
+      fiscalVoucherNumber: 111,
+    }),
+    true,
+  );
 });

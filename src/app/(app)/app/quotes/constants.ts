@@ -36,3 +36,19 @@ export const EMPTY_ITEM: QuoteItemForm = {
   unitPrice: "",
   taxRate: "21",
 };
+
+export const QUOTE_TAX_RATE_OPTIONS = [
+  { value: "21", label: "IVA 21%" },
+  { value: "10.5", label: "IVA 10,5%" },
+  { value: "0", label: "Sin IVA (0%)" },
+] as const;
+
+export const formatQuoteTaxRateLabel = (value: string | number | null | undefined) => {
+  const rate = Number(value ?? 0);
+  if (!Number.isFinite(rate)) return "0%";
+  if (Math.abs(rate) < 0.0001) return "Sin IVA";
+  if (Math.abs(rate - Math.round(rate)) < 0.001) {
+    return `${Math.round(rate)}%`;
+  }
+  return `${rate.toString().replace(".", ",")}%`;
+};

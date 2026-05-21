@@ -5,6 +5,7 @@ import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput, normalizeIntegerInput } from "@/lib/input-format";
 
 type ConfirmReceiptMode = "SIMPLE" | "INSTALLMENTS";
+type ConfirmSaleBillingStatus = "TO_BILL" | "NOT_BILLED";
 
 type ConfirmInstallmentsForm = {
   installmentsCount: string;
@@ -51,6 +52,7 @@ type ConfirmSaleModalProps = {
   confirmPreviewExtra: number;
   confirmPreviewTotal: number;
   confirmExtraLabel: string;
+  confirmBillingStatus: ConfirmSaleBillingStatus;
   registerReceiptOnConfirm: boolean;
   isConfirmingSale: boolean;
   confirmReceiptMode: ConfirmReceiptMode;
@@ -64,6 +66,7 @@ type ConfirmSaleModalProps = {
   confirmSaleStatus: string | null;
   onClose: () => void;
   onConfirm: () => void;
+  onSetConfirmBillingStatus: (next: ConfirmSaleBillingStatus) => void;
   onSetRegisterReceiptOnConfirm: (next: boolean) => void;
   onSetConfirmReceiptMode: (next: ConfirmReceiptMode) => void;
   onSetConfirmInstallmentsForm: Dispatch<SetStateAction<ConfirmInstallmentsForm>>;
@@ -119,6 +122,7 @@ export default function ConfirmSaleModal({
   confirmPreviewExtra,
   confirmPreviewTotal,
   confirmExtraLabel,
+  confirmBillingStatus,
   registerReceiptOnConfirm,
   isConfirmingSale,
   confirmReceiptMode,
@@ -132,6 +136,7 @@ export default function ConfirmSaleModal({
   confirmSaleStatus,
   onClose,
   onConfirm,
+  onSetConfirmBillingStatus,
   onSetRegisterReceiptOnConfirm,
   onSetConfirmReceiptMode,
   onSetConfirmInstallmentsForm,
@@ -194,6 +199,53 @@ export default function ConfirmSaleModal({
               <span>
                 Total: <span className="font-semibold text-zinc-900">{formatCurrencyARS(confirmPreviewTotal)}</span>
               </span>
+            </p>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-dashed border-sky-200 bg-sky-50/30 p-3">
+          <div className="field-stack">
+            <span className="input-label">Comprobante fiscal</span>
+            <div className="segmented-toggle w-full sm:w-[420px]">
+              <span
+                className={`segmented-toggle-indicator ${
+                  confirmBillingStatus === "NOT_BILLED"
+                    ? "translate-x-full"
+                    : "translate-x-0"
+                }`}
+                aria-hidden
+              />
+              <button
+                type="button"
+                className={`segmented-toggle-item ${
+                  confirmBillingStatus === "TO_BILL"
+                    ? "segmented-toggle-item-active"
+                    : ""
+                }`}
+                onClick={() => onSetConfirmBillingStatus("TO_BILL")}
+                aria-pressed={confirmBillingStatus === "TO_BILL"}
+                disabled={isConfirmingSale}
+              >
+                Pendiente de facturacion
+              </button>
+              <button
+                type="button"
+                className={`segmented-toggle-item ${
+                  confirmBillingStatus === "NOT_BILLED"
+                    ? "segmented-toggle-item-active"
+                    : ""
+                }`}
+                onClick={() => onSetConfirmBillingStatus("NOT_BILLED")}
+                aria-pressed={confirmBillingStatus === "NOT_BILLED"}
+                disabled={isConfirmingSale}
+              >
+                Registro interno
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-600">
+              {confirmBillingStatus === "TO_BILL"
+                ? "La venta quedara en facturacion hasta emitir comprobante fiscal."
+                : "La venta se guardara sin comprobante fiscal y fuera de facturacion."}
             </p>
           </div>
         </div>

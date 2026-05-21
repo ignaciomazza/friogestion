@@ -92,7 +92,7 @@ export function PurchasesRecentTable({
                     className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                   >
                     <td className="py-3 pr-4 whitespace-nowrap text-zinc-600">
-                      {purchase.invoiceNumber ?? "-"}
+                      {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
                     </td>
                     <td className="py-3 pr-4 text-zinc-900">
                       {purchase.supplierName}
@@ -140,27 +140,35 @@ export function PurchasesRecentTable({
                       <div className="flex flex-wrap items-center justify-end gap-2">
                         <span
                           className={`rounded-full px-3 py-1.5 text-[11px] font-semibold uppercase backdrop-blur-xl ${
-                            PURCHASE_ARCA_STATUS_STYLES[
-                              purchase.arcaValidationStatus ?? "PENDING"
-                            ] ??
-                            "bg-zinc-500/10 text-zinc-700 border border-zinc-500/20"
+                            purchase.hasInvoice
+                              ? (PURCHASE_ARCA_STATUS_STYLES[
+                                  purchase.arcaValidationStatus ?? "PENDING"
+                                ] ??
+                                "bg-zinc-500/10 text-zinc-700 border border-zinc-500/20")
+                              : "bg-zinc-100 text-zinc-700 border border-zinc-200"
                           }`}
                           title={purchase.arcaValidationMessage ?? undefined}
                         >
-                          {PURCHASE_ARCA_STATUS_LABELS[
-                            purchase.arcaValidationStatus ?? "PENDING"
-                          ] ?? purchase.arcaValidationStatus ?? "PENDING"}
+                          {purchase.hasInvoice
+                            ? (PURCHASE_ARCA_STATUS_LABELS[
+                                purchase.arcaValidationStatus ?? "PENDING"
+                              ] ??
+                              purchase.arcaValidationStatus ??
+                              "PENDING")
+                            : "Registro interno"}
                         </span>
-                        <button
-                          type="button"
-                          className="btn text-[11px]"
-                          onClick={() => onRevalidate(purchase.id)}
-                          disabled={revalidatingId === purchase.id}
-                        >
-                          {revalidatingId === purchase.id
-                            ? "Revalidando..."
-                            : "Revalidar"}
-                        </button>
+                        {purchase.hasInvoice ? (
+                          <button
+                            type="button"
+                            className="btn text-[11px]"
+                            onClick={() => onRevalidate(purchase.id)}
+                            disabled={revalidatingId === purchase.id}
+                          >
+                            {revalidatingId === purchase.id
+                              ? "Revalidando..."
+                              : "Revalidar"}
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

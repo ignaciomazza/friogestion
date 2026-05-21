@@ -60,6 +60,8 @@ export type PurchaseRow = {
   itemsCount: number;
   status: string;
   hasInvoice?: boolean;
+  fiscalComputable?: boolean;
+  fiscalRecordType?: "FISCAL_COMPUTABLE" | "INTERNAL_NON_COMPUTABLE";
   impactsAccount?: boolean;
   adjustedStock?: boolean;
   cashOutRegistered?: boolean;

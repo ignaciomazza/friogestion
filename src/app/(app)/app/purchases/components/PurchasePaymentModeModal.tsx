@@ -97,7 +97,7 @@ export default function PurchasePaymentModeModal({
             Ajustar pago de compra
           </h2>
           <p className="text-xs text-zinc-500">
-            {editingPaymentPurchase.supplierName} · {editingPaymentPurchase.invoiceNumber ?? "Sin comprobante"} ·{" "}
+            {editingPaymentPurchase.supplierName} · {editingPaymentPurchase.invoiceNumber ?? "Sin comprobante fiscal"} ·{" "}
             {formatCurrencyARS(editingPaymentPurchase.total)}
           </p>
         </div>

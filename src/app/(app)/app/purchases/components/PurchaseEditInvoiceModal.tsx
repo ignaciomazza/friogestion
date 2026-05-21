@@ -50,7 +50,7 @@ export default function PurchaseEditInvoiceModal({
               Editar datos del comprobante
             </h2>
             <p className="mt-1 truncate text-xs text-zinc-500">
-              {editingInvoicePurchase.supplierName} · {editingInvoicePurchase.invoiceNumber ?? "Sin comprobante"}
+              {editingInvoicePurchase.supplierName} · {editingInvoicePurchase.invoiceNumber ?? "Sin comprobante fiscal"}
             </p>
           </div>
         </div>

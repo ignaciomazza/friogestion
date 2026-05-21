@@ -65,6 +65,14 @@ export type NormalizedPurchaseFiscalTotals = {
   lines: NormalizedPurchaseFiscalLine[];
 };
 
+export const PURCHASE_FISCAL_RECORD_TYPES = [
+  "FISCAL_COMPUTABLE",
+  "INTERNAL_NON_COMPUTABLE",
+] as const;
+
+export type PurchaseFiscalRecordType =
+  (typeof PURCHASE_FISCAL_RECORD_TYPES)[number];
+
 export const round2 = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
 
@@ -98,11 +106,35 @@ export function buildPurchaseFiscalTotals(input: {
   purchaseVatAmount?: number | null;
   fiscalDetail?: PurchaseFiscalInput | null;
   currencyCode?: string | null;
+  fiscalComputable?: boolean;
 }): NormalizedPurchaseFiscalTotals {
   const total = round2(input.totalAmount);
   assertMoney(total, "PURCHASE_FISCAL_TOTAL_INVALID");
 
   const currencyCode = normalizeCurrencyCode(input.currencyCode);
+  const fiscalComputable = input.fiscalComputable ?? true;
+
+  if (!fiscalComputable) {
+    const vatTotal = round2(input.purchaseVatAmount ?? 0);
+    assertMoney(vatTotal, "PURCHASE_FISCAL_VAT_INVALID");
+    if (vatTotal - total > 0.01) {
+      throw new Error("PURCHASE_FISCAL_VAT_EXCEEDS_TOTAL");
+    }
+    const netTaxed = round2(total - vatTotal);
+    return {
+      currencyCode,
+      netTaxed,
+      netNonTaxed: 0,
+      exemptAmount: 0,
+      vatTotal,
+      otherTaxesTotal: 0,
+      subtotal: netTaxed,
+      taxes: vatTotal,
+      total,
+      lines: [],
+    };
+  }
+
   const parsedDetail = input.fiscalDetail
     ? purchaseFiscalInputSchema.parse(input.fiscalDetail)
     : null;
@@ -179,6 +211,52 @@ export function buildPurchaseFiscalTotals(input: {
     total,
     lines,
   };
+}
+
+const hasPositiveInteger = (value: number | null | undefined) =>
+  Number.isFinite(value) && Number(value) > 0;
+
+export function isPurchaseFiscalComputable(input: {
+  hasInvoice?: boolean | null;
+  invoiceNumber?: string | null;
+  fiscalVoucherKind?: string | null;
+  fiscalVoucherType?: number | null;
+  fiscalPointOfSale?: number | null;
+  fiscalVoucherNumber?: number | null;
+}) {
+  if (typeof input.hasInvoice === "boolean") {
+    return input.hasInvoice;
+  }
+  if (cleanText(input.invoiceNumber)) {
+    return true;
+  }
+  if (["A", "B", "C"].includes((input.fiscalVoucherKind ?? "").trim().toUpperCase())) {
+    return true;
+  }
+  if (hasPositiveInteger(input.fiscalVoucherType)) {
+    return true;
+  }
+  return (
+    hasPositiveInteger(input.fiscalPointOfSale) &&
+    hasPositiveInteger(input.fiscalVoucherNumber)
+  );
+}
+
+export function getPurchaseFiscalRecordType(
+  fiscalComputable: boolean,
+): PurchaseFiscalRecordType {
+  return fiscalComputable ? "FISCAL_COMPUTABLE" : "INTERNAL_NON_COMPUTABLE";
+}
+
+export function assertPurchaseVoucherVatRules(input: {
+  voucherKind: string | null | undefined;
+  vatTotal: number;
+}) {
+  const voucherKind = (input.voucherKind ?? "").trim().toUpperCase();
+  const vatTotal = round2(input.vatTotal);
+  if (voucherKind === "C" && vatTotal > 0.01) {
+    throw new Error("PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C");
+  }
 }
 
 export function mapVoucherTypeToPurchaseKind(type: number | null | undefined) {

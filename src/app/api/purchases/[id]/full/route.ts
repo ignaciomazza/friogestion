@@ -16,6 +16,7 @@ import {
 } from "@/lib/arca/purchase-validation";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  assertPurchaseVoucherVatRules,
   buildPurchaseFiscalTotals,
   mapVoucherTypeToPurchaseKind,
   purchaseFiscalInputSchema,
@@ -42,6 +43,8 @@ const updatePurchaseSchema = z.object({
   items: z.array(purchaseItemSchema).optional(),
   arcaValidation: purchaseValidationInputSchema.optional(),
 });
+
+const INVOICE_NUMBER_PATTERN = /^(\d{1,5})-(\d{1,12})$/;
 
 const toAmount = (value: unknown) => {
   const parsed = Number(value ?? 0);
@@ -152,6 +155,7 @@ export async function PATCH(
 
     const hasInvoice =
       body.hasInvoice ?? Boolean(body.invoiceNumber?.trim() || body.arcaValidation);
+    const fiscalComputable = hasInvoice;
     const invoiceNumber = hasInvoice ? body.invoiceNumber?.trim() || null : null;
     if (hasInvoice && !invoiceNumber) {
       return NextResponse.json(
@@ -159,7 +163,7 @@ export async function PATCH(
         { status: 400 },
       );
     }
-    if (hasInvoice && !/^(\d{1,5})-(\d{1,12})$/.test(invoiceNumber ?? "")) {
+    if (hasInvoice && !INVOICE_NUMBER_PATTERN.test(invoiceNumber ?? "")) {
       return NextResponse.json(
         {
           error:
@@ -172,11 +176,17 @@ export async function PATCH(
     const invoiceDateResult = parseOptionalDate(body.invoiceDate);
     if (invoiceDateResult.error) {
       return NextResponse.json(
-        { error: "Fecha de factura invalida" },
+        { error: "Fecha del comprobante invalida" },
         { status: 400 },
       );
     }
     const invoiceDate = hasInvoice ? (invoiceDateResult.date ?? null) : null;
+    if (hasInvoice && !invoiceDate) {
+      return NextResponse.json(
+        { error: "Ingresa fecha del comprobante" },
+        { status: 400 },
+      );
+    }
 
     const purchaseItems = (body.items ?? []).filter((item) => Number(item.qty) > 0);
     if (purchaseItems.length) {
@@ -212,8 +222,9 @@ export async function PATCH(
     const fiscalTotals = buildPurchaseFiscalTotals({
       totalAmount,
       purchaseVatAmount,
-      fiscalDetail: body.fiscalDetail ?? null,
+      fiscalDetail: fiscalComputable ? (body.fiscalDetail ?? null) : null,
       currencyCode: body.currencyCode,
+      fiscalComputable,
     });
 
     const allocatedTotal = purchase.allocations.reduce(
@@ -276,13 +287,7 @@ export async function PATCH(
     }
 
     let arcaValidationPayload: PurchaseValidationPayload | null = null;
-    if (body.arcaValidation) {
-      if (!hasInvoice) {
-        return NextResponse.json(
-          { error: "Activa 'Tiene factura' para validar ARCA" },
-          { status: 400 },
-        );
-      }
+    if (body.arcaValidation && hasInvoice) {
 
       const fiscalConfig = await prisma.organizationFiscalConfig.findUnique({
         where: { organizationId: membership.organizationId },
@@ -298,6 +303,11 @@ export async function PATCH(
         receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
         receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
       });
+
+      assertPurchaseVoucherVatRules({
+        voucherKind: mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType),
+        vatTotal: fiscalTotals.vatTotal,
+      });
     }
 
     const hasCurrentAccountImpact = purchase.currentAccountEntries.length > 0;
@@ -312,18 +322,24 @@ export async function PATCH(
           subtotal: fiscalTotals.subtotal.toFixed(2),
           taxes: fiscalTotals.taxes.toFixed(2),
           total: fiscalTotals.total.toFixed(2),
-          fiscalVoucherKind: hasInvoice
+          fiscalVoucherKind: fiscalComputable
             ? arcaValidationPayload
               ? mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType)
               : undefined
             : null,
-          fiscalVoucherType: hasInvoice ? arcaValidationPayload?.voucherType : null,
-          fiscalPointOfSale: hasInvoice ? arcaValidationPayload?.pointOfSale : null,
-          fiscalVoucherNumber: hasInvoice
+          fiscalVoucherType: fiscalComputable
+            ? arcaValidationPayload?.voucherType
+            : null,
+          fiscalPointOfSale: fiscalComputable
+            ? arcaValidationPayload?.pointOfSale
+            : null,
+          fiscalVoucherNumber: fiscalComputable
             ? arcaValidationPayload?.voucherNumber
             : null,
-          authorizationMode: hasInvoice ? arcaValidationPayload?.mode : null,
-          authorizationCode: hasInvoice
+          authorizationMode: fiscalComputable
+            ? arcaValidationPayload?.mode
+            : null,
+          authorizationCode: fiscalComputable
             ? arcaValidationPayload?.authorizationCode ?? null
             : null,
           currencyCode: fiscalTotals.currencyCode,
@@ -334,12 +350,12 @@ export async function PATCH(
           otherTaxesTotal: fiscalTotals.otherTaxesTotal.toFixed(2),
           arcaValidationStatus: "PENDING",
           arcaValidationCheckedAt: null,
-          arcaValidationMessage: hasInvoice
+          arcaValidationMessage: fiscalComputable
             ? arcaValidationPayload
               ? "Compra editada. Revalida para confirmar en ARCA."
               : "Compra editada. Completa validacion ARCA."
-            : "Compra sin comprobante fiscal.",
-          arcaValidationRequest: hasInvoice
+            : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
+          arcaValidationRequest: fiscalComputable
             ? toNullableJsonInput(arcaValidationPayload)
             : Prisma.DbNull,
           arcaValidationResponse: Prisma.DbNull,
@@ -469,6 +485,8 @@ export async function PATCH(
           "El IVA compra no puede superar el total",
         PURCHASE_FISCAL_TOTAL_MISMATCH:
           "El detalle fiscal no coincide con el total de la compra",
+        PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C:
+          "Factura C: no genera credito fiscal de IVA",
       };
       return NextResponse.json(
         { error: fiscalErrors[error.message] ?? "Detalle fiscal invalido" },

@@ -22,6 +22,7 @@ import {
   isDiscountAdjustment,
   isPercentAdjustment,
 } from "@/lib/sale-adjustments";
+import { QUOTE_TAX_RATE_OPTIONS } from "../constants";
 import type {
   CustomerOption,
   PriceListOption,
@@ -562,9 +563,11 @@ export function NewQuoteForm({
                             onItemChange(index, "taxRate", event.target.value)
                           }
                         >
-                          <option value="21">21%</option>
-                          <option value="10.5">10.5%</option>
-                          <option value="0">Exento</option>
+                          {QUOTE_TAX_RATE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
                         </select>
                       </td>
                       <td className="align-top whitespace-nowrap py-3 pr-3 text-right tabular-nums text-zinc-900">

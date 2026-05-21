@@ -11,7 +11,11 @@ import {
 import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { formatCurrencyARS } from "@/lib/format";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
-import { QUOTE_STATUS_LABELS, QUOTE_STATUS_STYLES } from "../constants";
+import {
+  formatQuoteTaxRateLabel,
+  QUOTE_STATUS_LABELS,
+  QUOTE_STATUS_STYLES,
+} from "../constants";
 import type { ProductOption, QuoteRow } from "../types";
 import { formatProductLabel, formatUnit } from "../utils";
 
@@ -382,7 +386,7 @@ export function QuoteRecentTable({
                                                 )}
                                               </td>
                                               <td className="py-2 pr-3 text-right text-zinc-600">
-                                                {item.taxRate}%
+                                                {formatQuoteTaxRateLabel(item.taxRate)}
                                               </td>
                                               <td className="py-2 pr-3 text-right text-zinc-900">
                                                 {formatCurrencyARS(lineTotal)}

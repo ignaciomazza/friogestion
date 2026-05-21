@@ -12,6 +12,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 
 const confirmSchema = z.object({
   id: z.string().min(1),
+  billingStatus: z.enum(["NOT_BILLED", "TO_BILL"]).optional(),
 });
 
 const parseSequenceNumber = (value?: string | null) => {
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest) {
           customerId: quote.customerId,
           quoteId: quote.id,
           status: "CONFIRMED",
-          billingStatus: "TO_BILL",
+          billingStatus: body.billingStatus ?? "TO_BILL",
           saleNumber: nextSaleNumber.toString(),
           saleDate: new Date(),
           subtotal: subtotal.toFixed(2),

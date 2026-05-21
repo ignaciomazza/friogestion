@@ -1137,6 +1137,7 @@ export default function PurchasesPage() {
     suggestJurisdictions(value, 8);
 
   const arcaEnabled = hasInvoice;
+  const isInternalRecord = !hasInvoice;
   const impactCurrentAccount = paymentMode === "CURRENT_ACCOUNT";
   const registerCashOut = paymentMode === "IMMEDIATE_CASH_OUT";
   const paymentModeLabel =
@@ -1249,6 +1250,12 @@ export default function PurchasesPage() {
       return [buildCashOutLine(paymentMethods, accounts)];
     });
   }, [paymentMethods, accounts]);
+
+  useEffect(() => {
+    if (hasInvoice) return;
+    setShowFiscalDetail(false);
+    setFiscalLines([]);
+  }, [hasInvoice]);
 
   useEffect(() => {
     setIsPortalReady(true);
@@ -1929,6 +1936,12 @@ export default function PurchasesPage() {
   };
 
   const addFiscalLine = () => {
+    if (isInternalRecord) {
+      setStatus(
+        "Registro interno: no computa tributos fiscales mientras este sin comprobante fiscal.",
+      );
+      return;
+    }
     setFiscalLines((previous) => [...previous, emptyFiscalLine()]);
   };
 
@@ -2503,14 +2516,27 @@ export default function PurchasesPage() {
   );
   const simpleNetValue = Math.max(parseOptionalNumber(simpleNetAmount) ?? 0, 0);
   const simpleVatInputValue = Math.max(parseOptionalNumber(purchaseVatAmount) ?? 0, 0);
-  const effectivePurchaseVatAmount =
-    simpleFiscalCondition === "GRAVADO" ? purchaseVatAmount : "0";
-  const simpleVatValue =
-    simpleFiscalCondition === "GRAVADO" ? simpleVatInputValue : 0;
-  const simpleNetTaxed = simpleFiscalCondition === "GRAVADO" ? simpleNetValue : 0;
+  const effectivePurchaseVatAmount = isInternalRecord
+    ? purchaseVatAmount
+    : simpleFiscalCondition === "GRAVADO"
+      ? purchaseVatAmount
+      : "0";
+  const simpleVatValue = isInternalRecord
+    ? simpleVatInputValue
+    : simpleFiscalCondition === "GRAVADO"
+      ? simpleVatInputValue
+      : 0;
+  const simpleNetTaxed = isInternalRecord
+    ? simpleNetValue
+    : simpleFiscalCondition === "GRAVADO"
+      ? simpleNetValue
+      : 0;
   const simpleNetNonTaxed =
-    simpleFiscalCondition === "NO_GRAVADO" ? simpleNetValue : 0;
-  const simpleExempt = simpleFiscalCondition === "EXENTO" ? simpleNetValue : 0;
+    !isInternalRecord && simpleFiscalCondition === "NO_GRAVADO"
+      ? simpleNetValue
+      : 0;
+  const simpleExempt =
+    !isInternalRecord && simpleFiscalCondition === "EXENTO" ? simpleNetValue : 0;
   const simpleTotal = roundMoney(
     Math.max(
       0,
@@ -2694,9 +2720,9 @@ export default function PurchasesPage() {
     : `Sin proveedor · ${formatDateInputLabel(invoiceDate)}`;
   const invoiceSectionSummary = hasInvoice
     ? invoiceNumber.trim()
-      ? `Factura ${arcaVoucherKind} · ${invoiceNumber.trim()}`
-      : `Factura ${arcaVoucherKind} pendiente`
-    : "Sin factura";
+      ? `Comprobante ${arcaVoucherKind} · ${invoiceNumber.trim()}`
+      : `Comprobante ${arcaVoucherKind} pendiente`
+    : "Sin comprobante fiscal · Registro interno";
   const productsSectionSummary = includeProductDetails
     ? `${normalizedPurchaseProducts.length} items · ${formatCurrencyARS(
         productTotals.total,
@@ -2711,7 +2737,9 @@ export default function PurchasesPage() {
     ? `${fiscalLines.length} tributo${
         fiscalLines.length === 1 ? "" : "s"
       } · ${formatCurrencyARS(fiscalOtherTotal)}`
-    : "Sin percepciones";
+    : isInternalRecord
+      ? "Registro interno · No computable fiscalmente"
+      : "Sin percepciones";
   const paymentSectionSummary = paymentModeLabel;
 
   const preparePurchaseForConfirmation = (options?: {
@@ -2793,9 +2821,10 @@ export default function PurchasesPage() {
     let fiscalDetailPayload: FiscalDetailPayload | undefined;
 
     const shouldSaveFiscalDetail =
-      showFiscalDetail ||
-      fiscalLines.length > 0 ||
-      simpleFiscalCondition !== "GRAVADO";
+      !isInternalRecord &&
+      (showFiscalDetail ||
+        fiscalLines.length > 0 ||
+        simpleFiscalCondition !== "GRAVADO");
     if (shouldSaveFiscalDetail) {
       const netTaxed = showFiscalDetail
         ? (parseOptionalNumber(netTaxedAmount) ?? 0)
@@ -3118,7 +3147,7 @@ export default function PurchasesPage() {
       setSelectedSupplier(supplier);
       setSupplierSearch(formatSupplierLabel(supplier));
       setSelectedSupplierTaxId(normalizeTaxId(supplier.taxId ?? ""));
-      setHasInvoice(Boolean(purchase.invoiceNumber));
+      setHasInvoice(Boolean(purchase.hasInvoice ?? purchase.invoiceNumber));
       setInvoiceNumber(purchase.invoiceNumber ?? "");
       setInvoiceDate(
         toCalendarDateInput(purchase.invoiceDate) || toDateInputValue(new Date()),
@@ -3814,7 +3843,7 @@ export default function PurchasesPage() {
     ? [
         { label: "Proveedor", value: pendingPurchase.supplierLabel },
         { label: "Fecha", value: pendingPurchase.dateLabel },
-        { label: "Factura", value: pendingPurchase.invoiceLabel },
+        { label: "Comprobante fiscal", value: pendingPurchase.invoiceLabel },
         { label: "Total", value: formatCurrencyARS(pendingPurchase.total) },
         {
           label: "IVA",
@@ -4096,29 +4125,42 @@ export default function PurchasesPage() {
                   </label>
                   <label className="field-stack min-w-0">
                     <span className="input-label">Condicion</span>
-                    <select
-                      className="input w-full min-w-0 cursor-pointer"
-                      value={simpleFiscalCondition}
-                      onChange={(event) => {
-                        const next = event.target.value as SimpleFiscalCondition;
-                        setSimpleFiscalCondition(next);
-                        if (next !== "GRAVADO") {
-                          setPurchaseVatAmount("0");
-                        }
-                        if (includeProductDetails && hasPurchaseProductTotals) {
-                          setTotalsSource("MANUAL");
-                        }
-                      }}
-                    >
-                      {SIMPLE_FISCAL_CONDITION_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                    {isInternalRecord ? (
+                      <input
+                        className="input w-full min-w-0 bg-zinc-50 text-zinc-600"
+                        value="Registro interno"
+                        title="Registro interno (no computable fiscalmente)"
+                        readOnly
+                      />
+                    ) : (
+                      <select
+                        className="input w-full min-w-0 cursor-pointer"
+                        value={simpleFiscalCondition}
+                        onChange={(event) => {
+                          const next = event.target.value as SimpleFiscalCondition;
+                          setSimpleFiscalCondition(next);
+                          if (next !== "GRAVADO") {
+                            setPurchaseVatAmount("0");
+                          }
+                          if (includeProductDetails && hasPurchaseProductTotals) {
+                            setTotalsSource("MANUAL");
+                          }
+                        }}
+                      >
+                        {SIMPLE_FISCAL_CONDITION_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </label>
                   <label className="field-stack min-w-0">
-                    <span className="input-label">IVA compra</span>
+                    <span className="input-label">
+                      {isInternalRecord
+                        ? "IVA interno (no computable)"
+                        : "IVA compra"}
+                    </span>
                     <div className="relative">
                       <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
                         $
@@ -4126,12 +4168,14 @@ export default function PurchasesPage() {
                       <MoneyInput
                         className={`input no-spinner w-full pl-10 text-right tabular-nums ${getHighlightClass("totals.vatAmount")}`}
                         value={
-                          simpleFiscalCondition === "GRAVADO"
+                          isInternalRecord
+                            ? purchaseVatAmount
+                            : simpleFiscalCondition === "GRAVADO"
                             ? purchaseVatAmount
                             : "0"
                         }
                         onValueChange={(value) => {
-                          if (simpleFiscalCondition !== "GRAVADO") {
+                          if (!isInternalRecord && simpleFiscalCondition !== "GRAVADO") {
                             return;
                           }
                           setPurchaseVatAmount(value);
@@ -4141,9 +4185,14 @@ export default function PurchasesPage() {
                         }}
                         placeholder="0,00"
                         maxDecimals={2}
-                        readOnly={simpleFiscalCondition !== "GRAVADO"}
+                        readOnly={!isInternalRecord && simpleFiscalCondition !== "GRAVADO"}
                       />
                     </div>
+                    {isInternalRecord ? (
+                      <p className="text-[11px] text-zinc-500">
+                        No genera credito fiscal de IVA sin comprobante fiscal.
+                      </p>
+                    ) : null}
                   </label>
                   <label className="field-stack min-w-0">
                     <span className="input-label">Descuento global</span>
@@ -4171,6 +4220,12 @@ export default function PurchasesPage() {
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="space-y-1">
+                    {isInternalRecord ? (
+                      <p className="text-xs text-zinc-600">
+                        Sin comprobante fiscal: se guarda como registro interno y no
+                        computa para IVA ni reportes fiscales.
+                      </p>
+                    ) : null}
                     {totalsSource === "MANUAL" && hasPurchaseProductTotals ? (
                       <p className="text-[11px] font-medium text-amber-700">
                         Modo manual activo: el calculo automatico desde productos
@@ -4197,6 +4252,7 @@ export default function PurchasesPage() {
                     type="button"
                     className={`btn text-xs ${showFiscalDetail ? "" : "btn-sky"}`}
                     onClick={toggleFiscalEditor}
+                    disabled={isInternalRecord}
                   >
                     {showFiscalDetail ? "Ocultar avanzado" : "Avanzado"}
                   </button>
@@ -4703,11 +4759,19 @@ export default function PurchasesPage() {
                     type="button"
                     className="btn btn-sky text-xs"
                     onClick={addFiscalLineAndOpen}
+                    disabled={isInternalRecord}
                   >
                     <PlusIcon className="size-4" />
                     Agregar tributo
                   </button>
                 </div>
+
+                {isInternalRecord ? (
+                  <p className="text-xs text-zinc-600">
+                    Registro interno: percepciones y tributos no se computan
+                    fiscalmente sin comprobante fiscal.
+                  </p>
+                ) : null}
 
                 {fiscalLines.length ? (
                   <div className="space-y-1 border-t border-zinc-200/70 pt-3">
@@ -4940,7 +5004,7 @@ export default function PurchasesPage() {
             </PurchaseSection>
 
             <PurchaseSection
-              title="Factura"
+              title="Comprobante fiscal"
               summary={invoiceSectionSummary}
               open={openPurchaseSection === "invoice"}
               error={highlightedSection === "invoice"}
@@ -4950,7 +5014,7 @@ export default function PurchasesPage() {
               <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
-                  Factura
+                  Comprobante fiscal
                 </p>
                 <MiniToggle
                   checked={hasInvoice}
@@ -4962,7 +5026,7 @@ export default function PurchasesPage() {
                       setArcaValidationResult(null);
                     }
                   }}
-                  label="Tiene factura"
+                  label="Tiene comprobante fiscal"
                 />
               </div>
 
@@ -4982,6 +5046,11 @@ export default function PurchasesPage() {
                         <option value="B">Factura B</option>
                         <option value="C">Factura C</option>
                       </select>
+                      {arcaVoucherKind === "C" ? (
+                        <p className="text-[11px] text-zinc-500">
+                          Factura C: no genera credito fiscal de IVA.
+                        </p>
+                      ) : null}
                     </label>
                     <label className="field-stack min-w-0 w-full">
                       <span className="input-label">Numero comprobante</span>
@@ -5061,7 +5130,12 @@ export default function PurchasesPage() {
                     ) : null}
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <p className="rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                  Sin comprobante fiscal: esta compra se guarda como registro interno
+                  y no computa fiscalmente.
+                </p>
+              )}
               </div>
             </PurchaseSection>
 
@@ -5372,7 +5446,7 @@ export default function PurchasesPage() {
                           {purchase.supplierName}
                         </p>
                         <p className="mt-0.5 text-[11px] text-zinc-500">
-                          {purchase.invoiceNumber ?? "Sin comprobante"} -{" "}
+                          {purchase.invoiceNumber ?? "Sin comprobante fiscal"} -{" "}
                           {formatPurchaseDateLabel(purchase)}
                         </p>
                       </div>
@@ -5420,10 +5494,9 @@ export default function PurchasesPage() {
                           {paymentStatus.label}
                         </span>
                         <span className="text-[11px] text-zinc-500">
-                          ARCA{" "}
                           {purchase.hasInvoice
-                            ? arcaStatusLabel(purchase.arcaValidationStatus)
-                            : "-"}
+                            ? `ARCA ${arcaStatusLabel(purchase.arcaValidationStatus)}`
+                            : "Registro interno · No computable fiscalmente"}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
@@ -5536,7 +5609,7 @@ export default function PurchasesPage() {
                           className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                         >
                         <td className="py-3 pr-3 text-zinc-700">
-                          {purchase.invoiceNumber ?? "Sin comprobante"}
+                          {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
                         </td>
                         <td className="py-3 pr-3 text-zinc-900">
                           {purchase.supplierName}
@@ -5572,7 +5645,7 @@ export default function PurchasesPage() {
                         <td className="py-3 pr-3 text-zinc-700">
                           {purchase.hasInvoice
                             ? arcaStatusLabel(purchase.arcaValidationStatus)
-                            : "-"}
+                            : "Registro interno"}
                         </td>
                         <td className="py-3 pr-3 text-right">
                           <div className="flex justify-end gap-2">
@@ -5758,7 +5831,7 @@ export default function PurchasesPage() {
                     </h2>
                     <p className="mt-1 truncate text-xs text-zinc-500">
                       {revalidationPurchase?.supplierName ?? "Compra"} ·{" "}
-                      {revalidationPurchase?.invoiceNumber ?? "Sin comprobante"}
+                      {revalidationPurchase?.invoiceNumber ?? "Sin comprobante fiscal"}
                     </p>
                   </div>
                   <span

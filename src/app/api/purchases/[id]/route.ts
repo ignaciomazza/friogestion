@@ -9,6 +9,10 @@ import { parseOptionalDate } from "@/lib/validation";
 import { recalcPurchaseTotals } from "@/lib/purchases";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
+import {
+  getPurchaseFiscalRecordType,
+  isPurchaseFiscalComputable,
+} from "@/lib/purchases/fiscal";
 
 export const runtime = "nodejs";
 
@@ -62,6 +66,8 @@ export async function GET(
         otherTaxesTotal: true,
         fiscalVoucherKind: true,
         fiscalVoucherType: true,
+        fiscalPointOfSale: true,
+        fiscalVoucherNumber: true,
         authorizationCode: true,
         supplier: {
           select: {
@@ -144,6 +150,13 @@ export async function GET(
       (sum, allocation) => sum + toAmount(allocation.amount),
       0,
     );
+    const fiscalComputable = isPurchaseFiscalComputable({
+      invoiceNumber: purchase.invoiceNumber,
+      fiscalVoucherKind: purchase.fiscalVoucherKind,
+      fiscalVoucherType: purchase.fiscalVoucherType,
+      fiscalPointOfSale: purchase.fiscalPointOfSale,
+      fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+    });
 
     return NextResponse.json({
       id: purchase.id,
@@ -200,6 +213,9 @@ export async function GET(
         note: line.note,
       })),
       impactsAccount: purchase.currentAccountEntries.length > 0,
+      hasInvoice: fiscalComputable,
+      fiscalComputable,
+      fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
       confirmedAllocatedTotal: confirmedAllocatedTotal.toFixed(2),
       hasStockMovements: purchase.items.some((item) => Boolean(item.stockMovement)),
     });

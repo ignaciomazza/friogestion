@@ -1,13 +1,15 @@
 "use client";
 
-import { Fragment, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowDownTrayIcon,
+  CurrencyDollarIcon,
+  EyeIcon,
   PencilSquareIcon,
   TrashIcon,
+  XMarkIcon,
 } from "@/components/icons";
-import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { formatCurrencyARS } from "@/lib/format";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import type { SaleRow } from "../types";
@@ -73,6 +75,14 @@ type SalesRecentTableProps = {
   onReceiptsUpdated: () => void;
 };
 
+const formatItemTaxRate = (value: string | null | undefined) => {
+  const rate = Number(value ?? 0);
+  if (!Number.isFinite(rate)) return "0%";
+  if (Math.abs(rate) < 0.0001) return "Sin IVA";
+  if (Math.abs(rate - Math.round(rate)) < 0.001) return `${Math.round(rate)}%`;
+  return `${rate.toString().replace(".", ",")}%`;
+};
+
 export function SalesRecentTable({
   sales,
   sortOrder,
@@ -84,7 +94,9 @@ export function SalesRecentTable({
   latestUsdRate,
   onReceiptsUpdated,
 }: SalesRecentTableProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedSaleId, setSelectedSaleId] = useState<string | null>(null);
+  const [isPortalReady, setIsPortalReady] = useState(false);
+  const [isReceiptPanelOpen, setIsReceiptPanelOpen] = useState(false);
   const [receiptsBySale, setReceiptsBySale] = useState<
     Record<string, ReceiptRow[]>
   >({});
@@ -94,6 +106,37 @@ export function SalesRecentTable({
   const [deletingSaleId, setDeletingSaleId] = useState<string | null>(null);
   const [editingReceiptId, setEditingReceiptId] = useState<string | null>(null);
   const [deletingReceiptId, setDeletingReceiptId] = useState<string | null>(null);
+
+  const selectedSale = useMemo(
+    () => sales.find((sale) => sale.id === selectedSaleId) ?? null,
+    [sales, selectedSaleId],
+  );
+
+  useEffect(() => {
+    setIsPortalReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSaleId) return;
+    const stillExists = sales.some((sale) => sale.id === selectedSaleId);
+    if (!stillExists) {
+      setSelectedSaleId(null);
+      setIsReceiptPanelOpen(false);
+      setEditingReceiptId(null);
+    }
+  }, [sales, selectedSaleId]);
+
+  useEffect(() => {
+    if (!selectedSaleId) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setSelectedSaleId(null);
+      setIsReceiptPanelOpen(false);
+      setEditingReceiptId(null);
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [selectedSaleId]);
 
   const loadReceipts = async (saleId: string) => {
     setLoadingReceiptId(saleId);
@@ -136,7 +179,9 @@ export function SalesRecentTable({
         return;
       }
       setTableStatus("Venta cancelada");
-      setExpandedId((prev) => (prev === sale.id ? null : prev));
+      setSelectedSaleId((prev) => (prev === sale.id ? null : prev));
+      setIsReceiptPanelOpen(false);
+      setEditingReceiptId(null);
       setReceiptsBySale((prev) => {
         const next = { ...prev };
         delete next[sale.id];
@@ -192,6 +237,28 @@ export function SalesRecentTable({
     }
   };
 
+  const handleOpenSaleModal = (saleId: string) => {
+    setSelectedSaleId(saleId);
+    setIsReceiptPanelOpen(false);
+    setEditingReceiptId(null);
+  };
+
+  const handleCloseSaleModal = () => {
+    setSelectedSaleId(null);
+    setIsReceiptPanelOpen(false);
+    setEditingReceiptId(null);
+  };
+
+  const handleToggleReceiptsPanel = (saleId: string) => {
+    setIsReceiptPanelOpen((prev) => {
+      const next = !prev;
+      if (next && !receiptsBySale[saleId]) {
+        void loadReceipts(saleId);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="card space-y-5 border border-sky-200 p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -215,9 +282,11 @@ export function SalesRecentTable({
           </select>
         </div>
       </div>
+
       {tableStatus ? (
         <p className="text-xs text-zinc-600">{tableStatus}</p>
       ) : null}
+
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
           <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
@@ -225,21 +294,17 @@ export function SalesRecentTable({
               <th className="py-2 pr-4">Venta</th>
               <th className="py-2 pr-4">Cliente</th>
               <th className="py-2 pr-4">Fecha</th>
-              <th className="py-2 pr-4">Producto</th>
-              <th className="py-2 pr-4 text-right">Cantidad</th>
-              <th className="py-2 pr-4 text-right">Precio unit.</th>
-              <th className="py-2 pr-4 text-right">IVA</th>
+              <th className="py-2 pr-4">Resumen</th>
               <th className="py-2 pr-4 text-right">Ajuste</th>
               <th className="py-2 pr-4 text-right">Total</th>
               <th className="py-2 pr-4 text-right">Cobrado</th>
               <th className="py-2 pr-4 text-right">Pendiente</th>
-              <th className="py-2 pr-4 text-right">PDF</th>
+              <th className="py-2 pr-4 text-right">Accion</th>
             </tr>
           </thead>
           <tbody>
             {sales.length ? (
               sales.map((sale) => {
-                const isExpanded = expandedId === sale.id;
                 const paidTotal = sale.paidTotal ?? "0";
                 const balance = sale.balance ?? sale.total ?? "0";
                 const adjustmentAmount =
@@ -250,331 +315,89 @@ export function SalesRecentTable({
                   sale.extraType,
                   adjustmentAmount,
                 );
+                const itemCount = sale.items?.length ?? 0;
+                const firstItemName =
+                  itemCount > 0 ? sale.items[0]?.productName ?? "Item" : "Sin items";
+                const isSelected = selectedSaleId === sale.id;
+
                 return (
-                  <Fragment key={sale.id}>
-                    <tr
-                      key={sale.id}
-                      className="cursor-pointer border-t border-sky-200 transition-colors hover:bg-white/60"
-                      onClick={() => {
-                        const nextId = isExpanded ? null : sale.id;
-                        setExpandedId(nextId);
-                        if (!isExpanded && !receiptsBySale[sale.id]) {
-                          void loadReceipts(sale.id);
-                        }
-                      }}
-                      aria-expanded={isExpanded}
-                    >
-                      <td className="py-2 pr-4 whitespace-nowrap text-zinc-600">
-                        {sale.saleNumber ?? "-"}
-                      </td>
-                      <td className="py-2 pr-4 text-zinc-900">
-                        {sale.customerName}
-                      </td>
-                      <td className="py-2 pr-4 whitespace-nowrap text-zinc-600">
-                        {sale.saleDate
-                          ? new Date(sale.saleDate).toLocaleDateString("es-AR")
-                          : new Date(sale.createdAt).toLocaleDateString("es-AR")}
-                      </td>
-                      <td className="py-2 pr-4 align-top">
-                        <div className="space-y-1 pt-0.5">
-                          {sale.items?.length ? (
-                            sale.items.map((item, itemIndex) => (
-                              <div
-                                key={`${item.id ?? item.productName}-${itemIndex}`}
-                                className="text-[11px]"
-                              >
-                                <span className="truncate font-medium text-zinc-900">
-                                  {item.productName}
-                                </span>
-                              </div>
-                            ))
-                          ) : (
-                            <span className="text-[11px] text-zinc-500">
-                              Sin items
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 align-top text-right">
-                        <div className="space-y-1 pt-0.5 text-[11px] text-zinc-600">
-                          {sale.items?.length
-                            ? sale.items.map((item, itemIndex) => (
-                                <div key={`${item.id ?? item.productName}-qty-${itemIndex}`}>
-                                  {item.qty}
-                                </div>
-                              ))
-                            : "-"}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 align-top text-right">
-                        <div className="space-y-1 pt-0.5 text-[11px] text-zinc-600">
-                          {sale.items?.length
-                            ? sale.items.map((item, itemIndex) => (
-                                <div key={`${item.id ?? item.productName}-unit-${itemIndex}`}>
-                                  {formatCurrencyARS(item.unitPrice)}
-                                </div>
-                              ))
-                            : "-"}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 align-top text-right">
-                        <div className="space-y-1 pt-0.5 text-[11px] text-zinc-600">
-                          {sale.items?.length
-                            ? sale.items.map((item, itemIndex) => (
-                                <div key={`${item.id ?? item.productName}-tax-${itemIndex}`}>
-                                  {item.taxRate ?? "0"}%
-                                </div>
-                              ))
-                            : "-"}
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-700">
-                        {Math.abs(adjustmentAmount) > 0.005 ? (
-                          <span title={adjustmentLabel}>
-                            {formatCurrencyARS(adjustmentAmount.toFixed(2))}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-900">
-                        {sale.total
-                          ? formatCurrencyARS(sale.total.toString())
-                          : "-"}
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-900">
-                        {formatCurrencyARS(paidTotal)}
-                      </td>
-                      <td className="py-2 pr-4 text-right text-zinc-900">
-                        {formatCurrencyARS(balance)}
-                      </td>
-                      <td className="py-2 pr-4">
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <a
-                            className="btn text-xs transition-transform hover:-translate-y-0.5"
-                            href={`/api/pdf/sale?id=${sale.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <ArrowDownTrayIcon className="size-4" />
-                            PDF
-                          </a>
-                          <WhatsappPdfButton
-                            documentType="sale"
-                            documentId={sale.id}
-                            documentLabel={
-                              sale.saleNumber
-                                ? `Venta ${sale.saleNumber}`
-                                : "Venta"
-                            }
-                            customerName={sale.customerName}
-                            customerPhone={sale.customerPhone}
-                            stopPropagation
-                          />
-                          {canManage ? (
-                            <button
-                              type="button"
-                              className="btn text-xs border-rose-200 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                void handleDeleteSale(sale);
-                              }}
-                              disabled={
-                                sale.billingStatus === "BILLED" ||
-                                deletingSaleId === sale.id
-                              }
-                              title={
-                                sale.billingStatus === "BILLED"
-                                  ? "La venta ya esta facturada"
-                                  : undefined
-                              }
-                            >
-                              {deletingSaleId === sale.id
-                                ? "Cancelando..."
-                                : "Cancelar"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
-                    </tr>
-                    <AnimatePresence initial={false}>
-                      {isExpanded ? (
-                        <motion.tr
-                          key={`sale-row-expanded-${sale.id}`}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="bg-white/40"
+                  <tr
+                    key={sale.id}
+                    className="border-t border-sky-200 transition-colors hover:bg-white/50"
+                  >
+                    <td className="py-2 pr-4 whitespace-nowrap text-zinc-600">
+                      <div className="space-y-1">
+                        <p>{sale.saleNumber ?? "-"}</p>
+                        {sale.billingStatus === "NOT_BILLED" ? (
+                          <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                            Registro interno
+                          </p>
+                        ) : sale.billingStatus === "TO_BILL" ? (
+                          <p className="text-[10px] uppercase tracking-wide text-sky-700">
+                            Pendiente de facturacion
+                          </p>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td className="py-2 pr-4 text-zinc-900">
+                      {sale.customerName}
+                    </td>
+                    <td className="py-2 pr-4 whitespace-nowrap text-zinc-600">
+                      {sale.saleDate
+                        ? new Date(sale.saleDate).toLocaleDateString("es-AR")
+                        : new Date(sale.createdAt).toLocaleDateString("es-AR")}
+                    </td>
+                    <td className="py-2 pr-4 text-zinc-700">
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-medium text-zinc-900">
+                          {firstItemName}
+                        </p>
+                        <p className="text-[11px] text-zinc-500">
+                          {itemCount} {itemCount === 1 ? "item" : "items"}
+                        </p>
+                      </div>
+                    </td>
+                    <td className="py-2 pr-4 text-right text-zinc-700">
+                      {Math.abs(adjustmentAmount) > 0.005 ? (
+                        <span title={adjustmentLabel}>
+                          {formatCurrencyARS(adjustmentAmount.toFixed(2))}
+                        </span>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-zinc-900">
+                      {sale.total
+                        ? formatCurrencyARS(sale.total.toString())
+                        : "-"}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-zinc-900">
+                      {formatCurrencyARS(paidTotal)}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-zinc-900">
+                      {formatCurrencyARS(balance)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          className={`btn h-9 gap-1 border-emerald-300 border-dashed px-3 text-emerald-700 hover:bg-emerald-50 ${
+                            isSelected ? "bg-emerald-50" : ""
+                          }`}
+                          onClick={() => handleOpenSaleModal(sale.id)}
+                          aria-label="Ver venta"
                         >
-                          <td colSpan={12} className="px-4 py-0">
-                            <motion.div
-                              initial={{ height: 0, opacity: 0, y: -8 }}
-                              animate={{ height: "auto", opacity: 1, y: 0 }}
-                              exit={{ height: 0, opacity: 0, y: -8 }}
-                              transition={{
-                                duration: 0.24,
-                                ease: [0.22, 1, 0.36, 1],
-                              }}
-                              className="overflow-hidden py-4"
-                            >
-                              <div className="space-y-4">
-                                <div className="space-y-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                                  Cobros
-                                </h4>
-                              </div>
-
-                              {receiptStatus[sale.id] ? (
-                                <p className="text-xs text-zinc-500">
-                                  {receiptStatus[sale.id]}
-                                </p>
-                              ) : null}
-
-                              {loadingReceiptId === sale.id ? (
-                                <p className="text-xs text-zinc-500">
-                                  Cargando cobros...
-                                </p>
-                              ) : receiptsBySale[sale.id]?.length ? (
-                                <div className="space-y-2">
-                                  {receiptsBySale[sale.id].map((receipt) => (
-                                    <div
-                                      key={receipt.id}
-                                      className="rounded-2xl border border-sky-200 bg-white p-3 text-xs text-zinc-600"
-                                    >
-                                      <div className="flex flex-wrap items-center justify-between gap-3">
-                                        <div>
-                                          <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-                                            Recibo Nro {receipt.receiptNumber ?? "-"}
-                                          </p>
-                                          <p className="mt-1 text-[11px] text-zinc-500">
-                                            {new Date(receipt.receivedAt).toLocaleDateString("es-AR")}
-                                          </p>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <span className="text-sm font-semibold text-zinc-900">
-                                            {formatCurrencyARS(receipt.total)}
-                                          </span>
-                                          <a
-                                            className="btn text-xs"
-                                            href={`/api/pdf/receipt?id=${receipt.id}`}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                          >
-                                            <ArrowDownTrayIcon className="size-4" />
-                                            Recibo
-                                          </a>
-                                          {canManage ? (
-                                            <>
-                                              <button
-                                                type="button"
-                                                className="btn text-xs"
-                                                onClick={() =>
-                                                  setEditingReceiptId((prev) =>
-                                                    prev === receipt.id ? null : receipt.id
-                                                  )
-                                                }
-                                              >
-                                                <PencilSquareIcon className="size-4" />
-                                                Editar
-                                              </button>
-                                              <button
-                                                type="button"
-                                                className="btn text-xs border-rose-200 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                                                onClick={() =>
-                                                  void handleDeleteReceipt(sale.id, receipt)
-                                                }
-                                                disabled={deletingReceiptId === receipt.id}
-                                              >
-                                                <TrashIcon className="size-4" />
-                                                {deletingReceiptId === receipt.id
-                                                  ? "Eliminando..."
-                                                  : "Eliminar"}
-                                              </button>
-                                            </>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                      {receipt.lines.length ? (
-                                        <ul className="mt-2 space-y-1 text-[11px] text-zinc-500">
-                                          {receipt.lines.map((line) => (
-                                            <li
-                                              key={line.id}
-                                              className="flex flex-wrap items-center gap-2"
-                                            >
-                                              <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-white text-sky-800 border border-sky-200">
-                                                {line.paymentMethodName}
-                                              </span>
-                                              {line.accountName
-                                                ? (
-                                                  <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-zinc-100/30 text-zinc-700 border border-zinc-200/70">
-                                                    {line.accountName}
-                                                  </span>
-                                                )
-                                                : null}
-                                            </li>
-                                          ))}
-                                        </ul>
-                                      ) : null}
-                                      {editingReceiptId === receipt.id ? (
-                                        <div className="mt-3 rounded-2xl border border-dashed border-sky-200 bg-sky-50/40 p-3">
-                                          <ReceiptForm
-                                            saleId={sale.id}
-                                            saleTotal={sale.total}
-                                            paymentMethods={paymentMethods}
-                                            accounts={accounts}
-                                            currencies={currencies}
-                                            latestUsdRate={latestUsdRate}
-                                            receipt={receipt}
-                                            allowFinancing={false}
-                                            submitLabel="Guardar cobro"
-                                            onCancel={() => setEditingReceiptId(null)}
-                                            onCreated={() => {
-                                              setEditingReceiptId(null);
-                                              void loadReceipts(sale.id);
-                                              onReceiptsUpdated();
-                                            }}
-                                          />
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="text-xs text-zinc-500">
-                                  Sin cobros registrados.
-                                </p>
-                              )}
-
-                              <div className="rounded-2xl border border-dashed border-sky-200 bg-white p-3">
-                                <ReceiptForm
-                                  saleId={sale.id}
-                                  saleTotal={sale.total}
-                                  paymentMethods={paymentMethods}
-                                  accounts={accounts}
-                                  currencies={currencies}
-                                  latestUsdRate={latestUsdRate}
-                                  onCreated={() => {
-                                    void loadReceipts(sale.id);
-                                    onReceiptsUpdated();
-                                  }}
-                                />
-                              </div>
-                                </div>
-                              </div>
-                            </motion.div>
-                          </td>
-                        </motion.tr>
-                      ) : null}
-                    </AnimatePresence>
-                  </Fragment>
+                          <EyeIcon className="size-4" />
+                          <span>Ver</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
                 );
               })
             ) : (
               <tr>
-                <td className="py-4 text-sm text-zinc-500" colSpan={12}>
+                <td className="py-4 text-sm text-zinc-500" colSpan={9}>
                   Sin ventas por ahora.
                 </td>
               </tr>
@@ -582,6 +405,274 @@ export function SalesRecentTable({
           </tbody>
         </table>
       </div>
+
+      {selectedSale && isPortalReady
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[120] flex items-end justify-center bg-zinc-950/35 p-3 backdrop-blur-sm sm:items-center sm:p-4"
+              onClick={(event) => {
+                if (event.target !== event.currentTarget) return;
+                handleCloseSaleModal();
+              }}
+            >
+              <div
+                className="card max-h-[92vh] w-full max-w-5xl space-y-4 overflow-y-auto p-4 sm:p-5"
+                onClick={(event) => event.stopPropagation()}
+              >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-base font-semibold text-zinc-900">
+                  Venta {selectedSale.saleNumber ?? "-"}
+                </h4>
+                <p className="text-xs text-zinc-600">
+                  {selectedSale.customerName} ·{" "}
+                  {selectedSale.saleDate
+                    ? new Date(selectedSale.saleDate).toLocaleDateString("es-AR")
+                    : new Date(selectedSale.createdAt).toLocaleDateString("es-AR")}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn h-9 w-9 justify-center p-0"
+                onClick={handleCloseSaleModal}
+                aria-label="Cerrar"
+              >
+                <XMarkIcon className="size-4" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl border border-sky-200 bg-white p-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <h5 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Detalles
+                </h5>
+                <span className="text-[11px] text-zinc-500">
+                  {selectedSale.items?.length ?? 0}{" "}
+                  {(selectedSale.items?.length ?? 0) === 1 ? "item" : "items"}
+                </span>
+              </div>
+              {(selectedSale.items?.length ?? 0) > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-left text-xs">
+                    <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+                      <tr>
+                        <th className="py-2 pr-3">Producto</th>
+                        <th className="py-2 pr-3 text-right">Cantidad</th>
+                        <th className="py-2 pr-3 text-right">Precio unit.</th>
+                        <th className="py-2 pr-3 text-right">IVA</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedSale.items?.map((item, itemIndex) => (
+                        <tr
+                          key={`${item.id ?? item.productName}-detail-${itemIndex}`}
+                          className="border-t border-zinc-200/70"
+                        >
+                          <td className="py-2 pr-3 text-zinc-900">
+                            {item.productName}
+                          </td>
+                          <td className="py-2 pr-3 text-right text-zinc-700">
+                            {item.qty}
+                          </td>
+                          <td className="py-2 pr-3 text-right text-zinc-700">
+                            {formatCurrencyARS(item.unitPrice)}
+                          </td>
+                          <td className="py-2 pr-3 text-right text-zinc-700">
+                            {formatItemTaxRate(item.taxRate)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">Sin items cargados.</p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-zinc-200 pt-3">
+              <button
+                type="button"
+                className={`btn gap-2 ${
+                  isReceiptPanelOpen ? "border-sky-300 bg-sky-50 text-sky-700" : ""
+                }`}
+                onClick={() => handleToggleReceiptsPanel(selectedSale.id)}
+              >
+                <CurrencyDollarIcon className="size-4" />
+                Cobro
+              </button>
+              <a
+                className="btn gap-2"
+                href={`/api/pdf/sale?id=${selectedSale.id}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ArrowDownTrayIcon className="size-4" />
+                Descargar
+              </a>
+              {canManage ? (
+                <button
+                  type="button"
+                  className="btn gap-2 border-rose-200 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => void handleDeleteSale(selectedSale)}
+                  disabled={
+                    selectedSale.billingStatus === "BILLED" ||
+                    deletingSaleId === selectedSale.id
+                  }
+                >
+                  <TrashIcon className="size-4" />
+                  {deletingSaleId === selectedSale.id ? "Eliminando..." : "Eliminar"}
+                </button>
+              ) : null}
+            </div>
+
+            {isReceiptPanelOpen ? (
+              <div className="space-y-4 rounded-2xl border border-sky-200 bg-white p-3">
+                <h5 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  Cobros
+                </h5>
+
+                {receiptStatus[selectedSale.id] ? (
+                  <p className="text-xs text-zinc-500">
+                    {receiptStatus[selectedSale.id]}
+                  </p>
+                ) : null}
+
+                {loadingReceiptId === selectedSale.id ? (
+                  <p className="text-xs text-zinc-500">Cargando cobros...</p>
+                ) : receiptsBySale[selectedSale.id]?.length ? (
+                  <div className="space-y-2">
+                    {receiptsBySale[selectedSale.id].map((receipt) => (
+                      <div
+                        key={receipt.id}
+                        className="rounded-2xl border border-sky-200 bg-white p-3 text-xs text-zinc-600"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+                              Recibo Nro {receipt.receiptNumber ?? "-"}
+                            </p>
+                            <p className="mt-1 text-[11px] text-zinc-500">
+                              {new Date(receipt.receivedAt).toLocaleDateString("es-AR")}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-semibold text-zinc-900">
+                              {formatCurrencyARS(receipt.total)}
+                            </span>
+                            <a
+                              className="btn h-9 w-9 justify-center p-0"
+                              href={`/api/pdf/receipt?id=${receipt.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              aria-label="Descargar recibo"
+                              title="Recibo PDF"
+                            >
+                              <ArrowDownTrayIcon className="size-4" />
+                            </a>
+                            {canManage ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="btn h-9 w-9 justify-center p-0"
+                                  onClick={() =>
+                                    setEditingReceiptId((prev) =>
+                                      prev === receipt.id ? null : receipt.id
+                                    )
+                                  }
+                                  aria-label="Editar cobro"
+                                  title="Editar cobro"
+                                >
+                                  <PencilSquareIcon className="size-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn h-9 w-9 justify-center border-rose-200 p-0 text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  onClick={() =>
+                                    void handleDeleteReceipt(selectedSale.id, receipt)
+                                  }
+                                  disabled={deletingReceiptId === receipt.id}
+                                  aria-label="Eliminar cobro"
+                                  title={
+                                    deletingReceiptId === receipt.id
+                                      ? "Eliminando..."
+                                      : "Eliminar cobro"
+                                  }
+                                >
+                                  <TrashIcon className="size-4" />
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                        {receipt.lines.length ? (
+                          <ul className="mt-2 space-y-1 text-[11px] text-zinc-500">
+                            {receipt.lines.map((line) => (
+                              <li
+                                key={line.id}
+                                className="flex flex-wrap items-center gap-2"
+                              >
+                                <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-white text-sky-800 border border-sky-200">
+                                  {line.paymentMethodName}
+                                </span>
+                                {line.accountName ? (
+                                  <span className="pill text-[9px] px-2 py-0.5 font-semibold bg-zinc-100/30 text-zinc-700 border border-zinc-200/70">
+                                    {line.accountName}
+                                  </span>
+                                ) : null}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {editingReceiptId === receipt.id ? (
+                          <div className="mt-3 rounded-2xl border border-dashed border-sky-200 bg-sky-50/40 p-3">
+                            <ReceiptForm
+                              saleId={selectedSale.id}
+                              saleTotal={selectedSale.total}
+                              paymentMethods={paymentMethods}
+                              accounts={accounts}
+                              currencies={currencies}
+                              latestUsdRate={latestUsdRate}
+                              receipt={receipt}
+                              allowFinancing={false}
+                              submitLabel="Guardar cobro"
+                              onCancel={() => setEditingReceiptId(null)}
+                              onCreated={() => {
+                                setEditingReceiptId(null);
+                                void loadReceipts(selectedSale.id);
+                                onReceiptsUpdated();
+                              }}
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-500">Sin cobros registrados.</p>
+                )}
+
+                <div className="rounded-2xl border border-dashed border-sky-200 bg-white p-3">
+                  <ReceiptForm
+                    saleId={selectedSale.id}
+                    saleTotal={selectedSale.total}
+                    paymentMethods={paymentMethods}
+                    accounts={accounts}
+                    currencies={currencies}
+                    latestUsdRate={latestUsdRate}
+                    onCreated={() => {
+                      void loadReceipts(selectedSale.id);
+                      onReceiptsUpdated();
+                    }}
+                  />
+                </div>
+              </div>
+            ) : null}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

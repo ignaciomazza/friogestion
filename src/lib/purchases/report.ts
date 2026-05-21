@@ -3,6 +3,7 @@ import {
   PURCHASE_FISCAL_LINE_TYPE_LABELS,
   PURCHASE_FISCAL_LINE_TYPES,
   formatPurchaseInvoiceNumber,
+  isPurchaseFiscalComputable,
 } from "@/lib/purchases/fiscal";
 
 type DecimalLike = { toString(): string } | number | string | null | undefined;
@@ -83,6 +84,22 @@ const addToBucket = (
   bucket[key] = round2((bucket[key] ?? 0) + amount);
 };
 
+export function isPurchaseIncludedInFiscalReport(input: {
+  invoiceNumber?: string | null;
+  fiscalVoucherKind?: string | null;
+  fiscalVoucherType?: number | null;
+  fiscalPointOfSale?: number | null;
+  fiscalVoucherNumber?: number | null;
+}) {
+  return isPurchaseFiscalComputable({
+    invoiceNumber: input.invoiceNumber,
+    fiscalVoucherKind: input.fiscalVoucherKind,
+    fiscalVoucherType: input.fiscalVoucherType,
+    fiscalPointOfSale: input.fiscalPointOfSale,
+    fiscalVoucherNumber: input.fiscalVoucherNumber,
+  });
+}
+
 export async function buildPurchasesMonthlyReport(input: {
   organizationId: string;
   from: Date;
@@ -132,37 +149,47 @@ export async function buildPurchasesMonthlyReport(input: {
     },
   });
 
-  const purchasesReport: PurchaseReportLine[] = purchases.map((purchase) => {
-    const fiscalLineTotals = emptyFiscalLineTotals();
-    for (const line of purchase.fiscalLines) {
-      addToBucket(fiscalLineTotals, line.type, toNumber(line.amount));
-    }
+  const purchasesReport: PurchaseReportLine[] = purchases
+    .filter((purchase) =>
+      isPurchaseIncludedInFiscalReport({
+        invoiceNumber: purchase.invoiceNumber,
+        fiscalVoucherKind: purchase.fiscalVoucherKind,
+        fiscalVoucherType: purchase.fiscalVoucherType,
+        fiscalPointOfSale: purchase.fiscalPointOfSale,
+        fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+      }),
+    )
+    .map((purchase) => {
+      const fiscalLineTotals = emptyFiscalLineTotals();
+      for (const line of purchase.fiscalLines) {
+        addToBucket(fiscalLineTotals, line.type, toNumber(line.amount));
+      }
 
-    return {
-      id: purchase.id,
-      date: isoDate(purchase.invoiceDate ?? purchase.createdAt),
-      supplierName: purchase.supplier.displayName,
-      supplierTaxId: purchase.supplier.taxId,
-      voucher:
-        purchase.invoiceNumber ??
-        formatPurchaseInvoiceNumber(
-          purchase.fiscalPointOfSale,
-          purchase.fiscalVoucherNumber,
-        ),
-      voucherKind: purchase.fiscalVoucherKind,
-      pointOfSale: purchase.fiscalPointOfSale,
-      voucherNumber: purchase.fiscalVoucherNumber,
-      currencyCode: purchase.currencyCode,
-      netTaxed: toNumber(purchase.netTaxed),
-      netNonTaxed: toNumber(purchase.netNonTaxed),
-      exemptAmount: toNumber(purchase.exemptAmount),
-      vatTotal: toNumber(purchase.vatTotal),
-      otherTaxesTotal: toNumber(purchase.otherTaxesTotal),
-      total: toNumber(purchase.total),
-      fiscalLineTotals,
-      arcaValidationStatus: purchase.arcaValidationStatus,
-    };
-  });
+      return {
+        id: purchase.id,
+        date: isoDate(purchase.invoiceDate ?? purchase.createdAt),
+        supplierName: purchase.supplier.displayName,
+        supplierTaxId: purchase.supplier.taxId,
+        voucher:
+          purchase.invoiceNumber ??
+          formatPurchaseInvoiceNumber(
+            purchase.fiscalPointOfSale,
+            purchase.fiscalVoucherNumber,
+          ),
+        voucherKind: purchase.fiscalVoucherKind,
+        pointOfSale: purchase.fiscalPointOfSale,
+        voucherNumber: purchase.fiscalVoucherNumber,
+        currencyCode: purchase.currencyCode,
+        netTaxed: toNumber(purchase.netTaxed),
+        netNonTaxed: toNumber(purchase.netNonTaxed),
+        exemptAmount: toNumber(purchase.exemptAmount),
+        vatTotal: toNumber(purchase.vatTotal),
+        otherTaxesTotal: toNumber(purchase.otherTaxesTotal),
+        total: toNumber(purchase.total),
+        fiscalLineTotals,
+        arcaValidationStatus: purchase.arcaValidationStatus,
+      };
+    });
 
   const retentionsReport: PurchaseRetentionReportLine[] = retentions.map(
     (retention) => ({
