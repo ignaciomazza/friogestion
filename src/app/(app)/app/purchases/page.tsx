@@ -215,6 +215,9 @@ type PurchaseArcaRevalidationFeedback = {
 type PurchaseEditResponse = {
   id: string;
   supplier: SupplierOption;
+  hasInvoice?: boolean;
+  fiscalComputable?: boolean;
+  fiscalRecordType?: "FISCAL_COMPUTABLE" | "INTERNAL_NON_COMPUTABLE";
   invoiceNumber: string | null;
   invoiceDate: string | null;
   total: string | null;

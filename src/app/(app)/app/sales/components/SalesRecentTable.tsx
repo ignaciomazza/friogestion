@@ -317,7 +317,9 @@ export function SalesRecentTable({
                 );
                 const itemCount = sale.items?.length ?? 0;
                 const firstItemName =
-                  itemCount > 0 ? sale.items[0]?.productName ?? "Item" : "Sin items";
+                  itemCount > 0
+                    ? sale.items?.[0]?.productName ?? "Item"
+                    : "Sin items";
                 const isSelected = selectedSaleId === sale.id;
 
                 return (
