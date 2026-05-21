@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
+import { PlusIcon, TrashIcon } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput, normalizeIntegerInput } from "@/lib/input-format";
@@ -55,10 +56,9 @@ type ConfirmSaleModalProps = {
   confirmReceiptMode: ConfirmReceiptMode;
   confirmInstallmentsForm: ConfirmInstallmentsForm;
   isFinanceCatalogLoading: boolean;
-  confirmReceiptLine: ConfirmReceiptLine;
-  confirmReceiptRequiresAccount: boolean;
-  confirmCurrencyAccounts: AccountOption[];
+  confirmReceiptLines: ConfirmReceiptLine[];
   paymentMethods: PaymentMethodOption[];
+  accounts: AccountOption[];
   currencies: CurrencyOption[];
   latestUsdRateForReceipts: string | null;
   confirmSaleStatus: string | null;
@@ -67,7 +67,12 @@ type ConfirmSaleModalProps = {
   onSetRegisterReceiptOnConfirm: (next: boolean) => void;
   onSetConfirmReceiptMode: (next: ConfirmReceiptMode) => void;
   onSetConfirmInstallmentsForm: Dispatch<SetStateAction<ConfirmInstallmentsForm>>;
-  onSetConfirmReceiptLine: Dispatch<SetStateAction<ConfirmReceiptLine>>;
+  onAddConfirmReceiptLine: () => void;
+  onRemoveConfirmReceiptLine: (index: number) => void;
+  onUpdateConfirmReceiptLine: (
+    index: number,
+    updates: Partial<ConfirmReceiptLine>,
+  ) => void;
 };
 
 function MiniToggle({
@@ -119,10 +124,9 @@ export default function ConfirmSaleModal({
   confirmReceiptMode,
   confirmInstallmentsForm,
   isFinanceCatalogLoading,
-  confirmReceiptLine,
-  confirmReceiptRequiresAccount,
-  confirmCurrencyAccounts,
+  confirmReceiptLines,
   paymentMethods,
+  accounts,
   currencies,
   latestUsdRateForReceipts,
   confirmSaleStatus,
@@ -131,11 +135,28 @@ export default function ConfirmSaleModal({
   onSetRegisterReceiptOnConfirm,
   onSetConfirmReceiptMode,
   onSetConfirmInstallmentsForm,
-  onSetConfirmReceiptLine,
+  onAddConfirmReceiptLine,
+  onRemoveConfirmReceiptLine,
+  onUpdateConfirmReceiptLine,
 }: ConfirmSaleModalProps) {
   if (!isOpen) return null;
 
   const paymentMethodById = new Map(paymentMethods.map((method) => [method.id, method]));
+  const primaryReceiptLine = confirmReceiptLines[0] ?? {
+    paymentMethodId: paymentMethods[0]?.id ?? "",
+    accountId: "",
+    currencyCode: currencies[0]?.code ?? "ARS",
+    amount: "",
+    fxRateUsed: "",
+  };
+  const simpleReceiptTotalBase = confirmReceiptLines.reduce((sum, line) => {
+    const amount = Number(line.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) return sum;
+    if ((line.currencyCode || "ARS").toUpperCase() === "ARS") return sum + amount;
+    const fxRate = Number(line.fxRateUsed || 0);
+    if (!Number.isFinite(fxRate) || fxRate <= 0) return sum;
+    return sum + amount * fxRate;
+  }, 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
@@ -268,21 +289,168 @@ export default function ConfirmSaleModal({
 
             {isFinanceCatalogLoading ? (
               <p className="text-xs text-zinc-500">Cargando metodos, cuentas y monedas...</p>
+            ) : confirmReceiptMode === "SIMPLE" ? (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  {confirmReceiptLines.map((line, index) => {
+                    const method = paymentMethodById.get(line.paymentMethodId);
+                    const requiresAccount = Boolean(method?.requiresAccount);
+                    const currencyAccounts = accounts.filter(
+                      (account) => account.currencyCode === line.currencyCode,
+                    );
+
+                    return (
+                      <div
+                        key={`confirm-receipt-line-${index}`}
+                        className="flex flex-wrap items-end gap-3 rounded-xl border border-zinc-200/70 bg-white/80 p-3"
+                      >
+                        <label className="field-stack min-w-0 w-full sm:w-44">
+                          <span className="input-label">Metodo</span>
+                          <select
+                            className="input w-full min-w-0 text-xs"
+                            value={line.paymentMethodId}
+                            onChange={(event) => {
+                              const methodId = event.target.value;
+                              const nextMethod = paymentMethodById.get(methodId);
+                              onUpdateConfirmReceiptLine(index, {
+                                paymentMethodId: methodId,
+                                accountId: nextMethod?.requiresAccount
+                                  ? line.accountId
+                                  : "",
+                              });
+                            }}
+                          >
+                            <option value="">Seleccionar</option>
+                            {paymentMethods.map((methodOption) => (
+                              <option key={methodOption.id} value={methodOption.id}>
+                                {methodOption.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="field-stack min-w-0 w-full sm:w-24">
+                          <span className="input-label">Moneda</span>
+                          <select
+                            className="input w-full min-w-0 text-xs"
+                            value={line.currencyCode}
+                            onChange={(event) => {
+                              const currencyCode = event.target.value;
+                              onUpdateConfirmReceiptLine(index, {
+                                currencyCode,
+                                accountId: "",
+                                fxRateUsed:
+                                  currencyCode === "ARS"
+                                    ? ""
+                                    : line.fxRateUsed || latestUsdRateForReceipts || "",
+                              });
+                            }}
+                          >
+                            {currencies.map((currency) => (
+                              <option key={currency.id} value={currency.code}>
+                                {currency.code}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        {requiresAccount ? (
+                          <label className="field-stack min-w-0 w-full sm:w-44">
+                            <span className="input-label">Cuenta</span>
+                            <select
+                              className="input w-full min-w-0 text-xs"
+                              value={line.accountId}
+                              onChange={(event) =>
+                                onUpdateConfirmReceiptLine(index, {
+                                  accountId: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="">Seleccionar</option>
+                              {currencyAccounts.map((account) => (
+                                <option key={account.id} value={account.id}>
+                                  {account.name}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        ) : null}
+
+                        <label className="field-stack min-w-0 w-full sm:w-28">
+                          <span className="input-label">Importe</span>
+                          <MoneyInput
+                            className="input w-full min-w-0 text-xs"
+                            value={line.amount}
+                            onValueChange={(nextValue) =>
+                              onUpdateConfirmReceiptLine(index, { amount: nextValue })
+                            }
+                            placeholder="0,00"
+                            maxDecimals={2}
+                          />
+                        </label>
+
+                        {line.currencyCode !== "ARS" ? (
+                          <label className="field-stack min-w-0 w-full sm:w-28">
+                            <span className="input-label">Cotizacion</span>
+                            <input
+                              className="input w-full min-w-0 text-xs"
+                              inputMode="decimal"
+                              value={line.fxRateUsed}
+                              onChange={(event) =>
+                                onUpdateConfirmReceiptLine(index, {
+                                  fxRateUsed: normalizeDecimalInput(
+                                    event.target.value,
+                                    6,
+                                  ),
+                                })
+                              }
+                            />
+                          </label>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          className="btn btn-rose h-9 w-9 p-0"
+                          onClick={() => onRemoveConfirmReceiptLine(index)}
+                          disabled={confirmReceiptLines.length <= 1}
+                          aria-label="Quitar linea de ingreso"
+                        >
+                          <TrashIcon className="size-4" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <button type="button" className="btn w-full text-xs sm:w-auto" onClick={onAddConfirmReceiptLine}>
+                    <PlusIcon className="size-4" />
+                    Agregar linea
+                  </button>
+                  <span className="text-xs text-zinc-600">
+                    Total cobro ARS:{" "}
+                    <strong className="text-zinc-900">
+                      {formatCurrencyARS(simpleReceiptTotalBase)}
+                    </strong>
+                  </span>
+                </div>
+              </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 <label className="field-stack">
                   <span className="input-label">Metodo</span>
                   <select
                     className="input text-xs"
-                    value={confirmReceiptLine.paymentMethodId}
+                    value={primaryReceiptLine.paymentMethodId}
                     onChange={(event) => {
                       const methodId = event.target.value;
                       const method = paymentMethodById.get(methodId);
-                      onSetConfirmReceiptLine((prev) => ({
-                        ...prev,
+                      onUpdateConfirmReceiptLine(0, {
                         paymentMethodId: methodId,
-                        accountId: method?.requiresAccount ? prev.accountId : "",
-                      }));
+                        accountId: method?.requiresAccount
+                          ? primaryReceiptLine.accountId
+                          : "",
+                      });
                     }}
                   >
                     <option value="">Seleccionar</option>
@@ -298,18 +466,19 @@ export default function ConfirmSaleModal({
                   <span className="input-label">Moneda</span>
                   <select
                     className="input text-xs"
-                    value={confirmReceiptLine.currencyCode}
+                    value={primaryReceiptLine.currencyCode}
                     onChange={(event) => {
                       const currencyCode = event.target.value;
-                      onSetConfirmReceiptLine((prev) => ({
-                        ...prev,
+                      onUpdateConfirmReceiptLine(0, {
                         currencyCode,
                         accountId: "",
                         fxRateUsed:
                           currencyCode === "ARS"
                             ? ""
-                            : prev.fxRateUsed || latestUsdRateForReceipts || "",
-                      }));
+                            : primaryReceiptLine.fxRateUsed ||
+                              latestUsdRateForReceipts ||
+                              "",
+                      });
                     }}
                   >
                     {currencies.map((currency) => (
@@ -320,25 +489,32 @@ export default function ConfirmSaleModal({
                   </select>
                 </label>
 
-                {confirmReceiptRequiresAccount ? (
+                {Boolean(
+                  paymentMethodById.get(primaryReceiptLine.paymentMethodId)
+                    ?.requiresAccount,
+                ) ? (
                   <label className="field-stack">
                     <span className="input-label">Cuenta</span>
                     <select
                       className="input text-xs"
-                      value={confirmReceiptLine.accountId}
+                      value={primaryReceiptLine.accountId}
                       onChange={(event) =>
-                        onSetConfirmReceiptLine((prev) => ({
-                          ...prev,
+                        onUpdateConfirmReceiptLine(0, {
                           accountId: event.target.value,
-                        }))
+                        })
                       }
                     >
                       <option value="">Seleccionar</option>
-                      {confirmCurrencyAccounts.map((account) => (
+                      {accounts
+                        .filter(
+                          (account) =>
+                            account.currencyCode === primaryReceiptLine.currencyCode,
+                        )
+                        .map((account) => (
                         <option key={account.id} value={account.id}>
                           {account.name}
                         </option>
-                      ))}
+                        ))}
                     </select>
                   </label>
                 ) : null}
@@ -347,30 +523,28 @@ export default function ConfirmSaleModal({
                   <span className="input-label">Importe</span>
                   <MoneyInput
                     className="input text-xs"
-                    value={confirmReceiptLine.amount}
+                    value={primaryReceiptLine.amount}
                     onValueChange={(nextValue) =>
-                      onSetConfirmReceiptLine((prev) => ({
-                        ...prev,
+                      onUpdateConfirmReceiptLine(0, {
                         amount: nextValue,
-                      }))
+                      })
                     }
                     placeholder="0,00"
                     maxDecimals={2}
                   />
                 </label>
 
-                {confirmReceiptLine.currencyCode !== "ARS" ? (
+                {primaryReceiptLine.currencyCode !== "ARS" ? (
                   <label className="field-stack">
                     <span className="input-label">Cotizacion</span>
                     <input
                       className="input text-xs"
                       inputMode="decimal"
-                      value={confirmReceiptLine.fxRateUsed}
+                      value={primaryReceiptLine.fxRateUsed}
                       onChange={(event) =>
-                        onSetConfirmReceiptLine((prev) => ({
-                          ...prev,
+                        onUpdateConfirmReceiptLine(0, {
                           fxRateUsed: normalizeDecimalInput(event.target.value, 6),
-                        }))
+                        })
                       }
                     />
                   </label>

@@ -356,14 +356,6 @@ export function NewQuoteForm({
             <div className="field-stack">
               <p className="section-title">Items</p>
             </div>
-            <button
-              type="button"
-              className="btn btn-sky text-xs"
-              onClick={onAddItem}
-            >
-              <PlusIcon className="size-4" />
-              Agregar item
-            </button>
           </div>
           <div className="relative table-scroll lg:overflow-visible">
             <table className="w-full min-w-[860px] table-fixed text-left text-sm lg:min-w-[940px]">
@@ -598,6 +590,20 @@ export function NewQuoteForm({
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t border-zinc-200/60">
+                  <td colSpan={6} className="py-3 pr-3 text-right">
+                    <button
+                      type="button"
+                      className="btn btn-sky text-xs"
+                      onClick={onAddItem}
+                    >
+                      <PlusIcon className="size-4" />
+                      Agregar item
+                    </button>
+                  </td>
+                </tr>
+              </tfoot>
             </table>
           </div>
 

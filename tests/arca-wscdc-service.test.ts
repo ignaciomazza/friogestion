@@ -26,7 +26,7 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
       ensureServiceAuthorized: async (organizationId, service) => {
         ensuredArgs = { organizationId, service };
       },
-      getClient: (async () =>
+      getClient: async () =>
         ({
           CUIT: 30711222334,
           WebService: () => ({
@@ -54,7 +54,7 @@ test("validatePurchaseVoucherWithArca builds WSCDC payload and maps response usi
               };
             },
           }),
-        }) as unknown as Awaited<ReturnType<typeof import("../src/lib/afip/client").getAfipClient>>) as any,
+        }) as unknown as Awaited<ReturnType<typeof import("../src/lib/afip/client").getAfipClient>>,
     }
   );
 
@@ -125,7 +125,7 @@ test("validatePurchaseVoucherWithArca fails fast for invalid issuer CUIT", async
         },
         {
           ensureServiceAuthorized: async () => undefined,
-          getClient: (async () => {
+          getClient: async () => {
             getClientCalls += 1;
             return {
               CUIT: 30711222334,
@@ -134,7 +134,7 @@ test("validatePurchaseVoucherWithArca fails fast for invalid issuer CUIT", async
                 executeRequest: async () => ({}),
               }),
             } as unknown as Awaited<ReturnType<typeof import("../src/lib/afip/client").getAfipClient>>;
-          }) as any,
+          },
         }
       ),
     (error: unknown) =>

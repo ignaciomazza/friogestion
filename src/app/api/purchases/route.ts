@@ -36,6 +36,12 @@ const purchaseItemSchema = z.object({
   taxRate: z.coerce.number().min(0).max(100).optional(),
 });
 
+const cashOutLineSchema = z.object({
+  paymentMethodId: z.string().min(1),
+  accountId: z.string().min(1).optional(),
+  amount: z.coerce.number().positive(),
+});
+
 const purchaseSchema = z.object({
   supplierId: z.string().min(1),
   invoiceNumber: z.string().min(1).optional(),
@@ -52,6 +58,7 @@ const purchaseSchema = z.object({
   adjustStock: z.boolean().optional(),
   stockAdjustments: z.array(stockAdjustmentSchema).optional(),
   registerCashOut: z.boolean().optional(),
+  cashOutLines: z.array(cashOutLineSchema).min(1).optional(),
   cashOutPaymentMethodId: z.string().min(1).optional(),
   cashOutAccountId: z.string().min(1).optional(),
 });
@@ -83,9 +90,6 @@ const toNumber = (value: unknown) => {
 const resolveImmediatePaymentMethodName = (input: {
   purchaseId: string;
   invoiceNumber: string | null;
-  invoiceDate: Date | null;
-  createdAt: Date;
-  total: unknown;
   candidatesByPrefix: Map<string, ImmediateCashOutCandidate[]>;
 }) => {
   const references = Array.from(
@@ -96,48 +100,29 @@ const resolveImmediatePaymentMethodName = (input: {
     ),
   );
 
-  const purchaseTotal = toNumber(input.total);
-  const referenceDate = input.invoiceDate ?? input.createdAt;
-  const referenceTime = referenceDate.getTime();
-  let bestMatch:
-    | {
-        methodName: string;
-        score: number;
-        occurredAt: number;
-      }
-    | null = null;
-
+  const matches: ImmediateCashOutCandidate[] = [];
   for (const reference of references) {
     const prefix = purchaseImmediateCashOutPrefix(reference);
-    const candidates = input.candidatesByPrefix.get(prefix) ?? [];
-    const isPurchaseIdReference = reference === input.purchaseId;
-
-    for (const candidate of candidates) {
-      let score = isPurchaseIdReference ? 100 : 0;
-      if (Math.abs(candidate.amount - purchaseTotal) <= 0.01) {
-        score += 20;
-      }
-
-      const distanceInDays =
-        Math.abs(candidate.occurredAt.getTime() - referenceTime) / 86400000;
-      score += Math.max(0, 10 - Math.min(distanceInDays, 10));
-
-      const occurredAtMs = candidate.occurredAt.getTime();
-      if (
-        !bestMatch ||
-        score > bestMatch.score ||
-        (score === bestMatch.score && occurredAtMs > bestMatch.occurredAt)
-      ) {
-        bestMatch = {
-          methodName: candidate.methodName,
-          score,
-          occurredAt: occurredAtMs,
-        };
-      }
-    }
+    matches.push(...(input.candidatesByPrefix.get(prefix) ?? []));
   }
 
-  return bestMatch?.methodName ?? null;
+  if (!matches.length) return null;
+
+  const latestOccurredAt = Math.max(
+    ...matches.map((candidate) => candidate.occurredAt.getTime()),
+  );
+  const latestMethods = Array.from(
+    new Set(
+      matches
+        .filter((candidate) => candidate.occurredAt.getTime() === latestOccurredAt)
+        .map((candidate) => candidate.methodName.trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (!latestMethods.length) return null;
+  if (latestMethods.length === 1) return latestMethods[0] ?? null;
+  return `Pago mixto (${latestMethods.length})`;
 };
 
 export async function GET(req: NextRequest) {
@@ -219,9 +204,6 @@ export async function GET(req: NextRequest) {
         const immediatePaymentMethodName = resolveImmediatePaymentMethodName({
           purchaseId: purchase.id,
           invoiceNumber: purchase.invoiceNumber ?? null,
-          invoiceDate: purchase.invoiceDate,
-          createdAt: purchase.createdAt,
-          total: purchase.total,
           candidatesByPrefix: immediateCashOutCandidatesByPrefix,
         });
 
@@ -353,39 +335,43 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    let cashOutAccount:
-      | {
-          id: string;
-          name: string;
-          currencyCode: string;
-        }
-      | null = null;
-    let cashOutPaymentMethod:
-      | {
-          id: string;
-          name: string;
-        }
-      | null = null;
+    const requestedCashOutLines = registerCashOut
+      ? body.cashOutLines?.length
+        ? body.cashOutLines
+        : body.cashOutPaymentMethodId && body.cashOutAccountId
+          ? [
+              {
+                paymentMethodId: body.cashOutPaymentMethodId,
+                accountId: body.cashOutAccountId,
+                amount: totalAmount,
+              },
+            ]
+          : []
+      : [];
+
+    const normalizedCashOutLines: Array<{
+      paymentMethodId: string;
+      paymentMethodName: string;
+      accountId: string;
+      currencyCode: string;
+      amount: number;
+    }> = [];
 
     if (registerCashOut) {
-      if (!body.cashOutPaymentMethodId) {
+      if (!requestedCashOutLines.length) {
         return NextResponse.json(
-          { error: "Selecciona un metodo de pago para registrar egreso" },
+          { error: "Agrega al menos una linea para registrar egreso" },
           { status: 400 },
         );
       }
 
-      if (!body.cashOutAccountId) {
-        return NextResponse.json(
-          { error: "Selecciona una cuenta para registrar egreso" },
-          { status: 400 },
-        );
-      }
-
-      cashOutPaymentMethod = await prisma.paymentMethod.findFirst({
+      const paymentMethodIds = Array.from(
+        new Set(requestedCashOutLines.map((line) => line.paymentMethodId)),
+      );
+      const methods = await prisma.paymentMethod.findMany({
         where: {
-          id: body.cashOutPaymentMethodId,
           organizationId,
+          id: { in: paymentMethodIds },
           isActive: true,
         },
         select: {
@@ -393,37 +379,88 @@ export async function POST(req: NextRequest) {
           name: true,
         },
       });
-
-      if (!cashOutPaymentMethod) {
+      if (methods.length !== paymentMethodIds.length) {
         return NextResponse.json(
           { error: "Metodo de pago invalido" },
           { status: 400 },
         );
       }
+      const methodById = new Map(methods.map((method) => [method.id, method]));
 
-      cashOutAccount = await prisma.financeAccount.findFirst({
-        where: {
-          id: body.cashOutAccountId,
-          organizationId,
-          isActive: true,
-        },
-        select: {
-          id: true,
-          name: true,
-          currencyCode: true,
-        },
-      });
+      const accountIds = Array.from(
+        new Set(
+          requestedCashOutLines
+            .map((line) => line.accountId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      );
+      const accounts = accountIds.length
+        ? await prisma.financeAccount.findMany({
+            where: {
+              organizationId,
+              id: { in: accountIds },
+              isActive: true,
+            },
+            select: {
+              id: true,
+              currencyCode: true,
+            },
+          })
+        : [];
+      if (accounts.length !== accountIds.length) {
+        return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
+      }
+      const accountById = new Map(accounts.map((account) => [account.id, account]));
 
-      if (!cashOutAccount) {
-        return NextResponse.json(
-          { error: "Cuenta invalida" },
-          { status: 400 },
-        );
+      let linesTotal = 0;
+      for (const line of requestedCashOutLines) {
+        const method = methodById.get(line.paymentMethodId);
+        if (!method) {
+          return NextResponse.json(
+            { error: "Metodo de pago invalido" },
+            { status: 400 },
+          );
+        }
+
+        if (!line.accountId) {
+          return NextResponse.json(
+            { error: "Selecciona cuenta para cada linea de pago" },
+            { status: 400 },
+          );
+        }
+
+        const account = accountById.get(line.accountId);
+        if (!account) {
+          return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
+        }
+        if (account.currencyCode !== "ARS") {
+          return NextResponse.json(
+            { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
+            { status: 400 },
+          );
+        }
+
+        const amount = Number(line.amount ?? 0);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return NextResponse.json(
+            { error: "Importe invalido en lineas de pago" },
+            { status: 400 },
+          );
+        }
+
+        linesTotal += amount;
+        normalizedCashOutLines.push({
+          paymentMethodId: method.id,
+          paymentMethodName: method.name,
+          accountId: account.id,
+          currencyCode: account.currencyCode,
+          amount,
+        });
       }
 
-      if (cashOutAccount.currencyCode !== "ARS") {
+      if (Math.abs(linesTotal - totalAmount) > 0.01) {
         return NextResponse.json(
-          { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
+          { error: "La suma de lineas no coincide con el total de la compra" },
           { status: 400 },
         );
       }
@@ -600,18 +637,20 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      if (registerCashOut && cashOutAccount && cashOutPaymentMethod) {
-        await tx.accountMovement.create({
-          data: {
-            organizationId,
-            accountId: cashOutAccount.id,
-            occurredAt: invoiceDate ?? new Date(),
-            direction: "OUT",
-            amount: totalAmount.toFixed(2),
-            currencyCode: cashOutAccount.currencyCode,
-            note: `Compra ${purchaseInvoice.invoiceNumber ?? purchaseInvoice.id} · ${cashOutPaymentMethod.name}`,
-          },
-        });
+      if (registerCashOut && normalizedCashOutLines.length) {
+        for (const line of normalizedCashOutLines) {
+          await tx.accountMovement.create({
+            data: {
+              organizationId,
+              accountId: line.accountId,
+              occurredAt: invoiceDate ?? new Date(),
+              direction: "OUT",
+              amount: line.amount.toFixed(2),
+              currencyCode: line.currencyCode,
+              note: `Compra ${purchaseInvoice.id} · ${line.paymentMethodName}`,
+            },
+          });
+        }
       }
 
       return purchaseInvoice;
@@ -675,10 +714,12 @@ export async function POST(req: NextRequest) {
       hasInvoice,
       impactsAccount: impactCurrentAccount,
       adjustedStock: adjustStock,
-      cashOutRegistered: Boolean(registerCashOut && cashOutAccount),
+      cashOutRegistered: Boolean(registerCashOut && normalizedCashOutLines.length),
       immediatePaymentMethodName:
-        registerCashOut && cashOutPaymentMethod
-          ? cashOutPaymentMethod.name
+        registerCashOut && normalizedCashOutLines.length
+          ? normalizedCashOutLines.length > 1
+            ? `Pago mixto (${normalizedCashOutLines.length})`
+            : normalizedCashOutLines[0]?.paymentMethodName ?? null
           : null,
       arcaValidationStatus:
         arcaValidation?.status ?? purchase.arcaValidationStatus,

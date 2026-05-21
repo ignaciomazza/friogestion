@@ -14,6 +14,16 @@ export const runtime = "nodejs";
 
 const updatePaymentModeSchema = z.object({
   paymentMode: z.enum(["CURRENT_ACCOUNT", "IMMEDIATE_CASH_OUT", "OFF_BOOK"]),
+  cashOutLines: z
+    .array(
+      z.object({
+        paymentMethodId: z.string().min(1),
+        accountId: z.string().min(1).optional(),
+        amount: z.coerce.number().positive(),
+      }),
+    )
+    .min(1)
+    .optional(),
   cashOutPaymentMethodId: z.string().min(1).optional(),
   cashOutAccountId: z.string().min(1).optional(),
   paidAt: z.string().optional(),
@@ -303,38 +313,43 @@ export async function PATCH(
       );
     }
 
-    let cashOutPaymentMethod:
-      | {
-          id: string;
-          name: string;
-        }
-      | null = null;
-    let cashOutAccount:
-      | {
-          id: string;
-          name: string;
-          currencyCode: string;
-        }
-      | null = null;
+    const requestedCashOutLines = switchingToImmediateCashOut
+      ? body.cashOutLines?.length
+        ? body.cashOutLines
+        : body.cashOutPaymentMethodId && body.cashOutAccountId
+          ? [
+              {
+                paymentMethodId: body.cashOutPaymentMethodId,
+                accountId: body.cashOutAccountId,
+                amount: total,
+              },
+            ]
+          : []
+      : [];
+
+    const normalizedCashOutLines: Array<{
+      paymentMethodId: string;
+      paymentMethodName: string;
+      accountId: string;
+      currencyCode: string;
+      amount: number;
+    }> = [];
 
     if (switchingToImmediateCashOut) {
-      if (!body.cashOutPaymentMethodId) {
+      if (!requestedCashOutLines.length) {
         return NextResponse.json(
-          { error: "Selecciona un metodo de pago para registrar egreso" },
-          { status: 400 },
-        );
-      }
-      if (!body.cashOutAccountId) {
-        return NextResponse.json(
-          { error: "Selecciona una cuenta para registrar egreso" },
+          { error: "Agrega al menos una linea para registrar egreso" },
           { status: 400 },
         );
       }
 
-      cashOutPaymentMethod = await prisma.paymentMethod.findFirst({
+      const methodIds = Array.from(
+        new Set(requestedCashOutLines.map((line) => line.paymentMethodId)),
+      );
+      const methods = await prisma.paymentMethod.findMany({
         where: {
-          id: body.cashOutPaymentMethodId,
           organizationId: membership.organizationId,
+          id: { in: methodIds },
           isActive: true,
         },
         select: {
@@ -342,31 +357,85 @@ export async function PATCH(
           name: true,
         },
       });
-      if (!cashOutPaymentMethod) {
+      if (methods.length !== methodIds.length) {
         return NextResponse.json(
           { error: "Metodo de pago invalido" },
           { status: 400 },
         );
       }
+      const methodById = new Map(methods.map((method) => [method.id, method]));
 
-      cashOutAccount = await prisma.financeAccount.findFirst({
-        where: {
-          id: body.cashOutAccountId,
-          organizationId: membership.organizationId,
-          isActive: true,
-        },
-        select: {
-          id: true,
-          name: true,
-          currencyCode: true,
-        },
-      });
-      if (!cashOutAccount) {
+      const accountIds = Array.from(
+        new Set(
+          requestedCashOutLines
+            .map((line) => line.accountId)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      );
+      const accounts = accountIds.length
+        ? await prisma.financeAccount.findMany({
+            where: {
+              organizationId: membership.organizationId,
+              id: { in: accountIds },
+              isActive: true,
+            },
+            select: {
+              id: true,
+              currencyCode: true,
+            },
+          })
+        : [];
+      if (accounts.length !== accountIds.length) {
         return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
       }
-      if (cashOutAccount.currencyCode !== "ARS") {
+      const accountById = new Map(accounts.map((account) => [account.id, account]));
+
+      let linesTotal = 0;
+      for (const line of requestedCashOutLines) {
+        const method = methodById.get(line.paymentMethodId);
+        if (!method) {
+          return NextResponse.json(
+            { error: "Metodo de pago invalido" },
+            { status: 400 },
+          );
+        }
+        if (!line.accountId) {
+          return NextResponse.json(
+            { error: "Selecciona cuenta para cada linea de pago" },
+            { status: 400 },
+          );
+        }
+        const account = accountById.get(line.accountId);
+        if (!account) {
+          return NextResponse.json({ error: "Cuenta invalida" }, { status: 400 });
+        }
+        if (account.currencyCode !== "ARS") {
+          return NextResponse.json(
+            { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
+            { status: 400 },
+          );
+        }
+
+        const amount = Number(line.amount ?? 0);
+        if (!Number.isFinite(amount) || amount <= 0) {
+          return NextResponse.json(
+            { error: "Importe invalido en lineas de pago" },
+            { status: 400 },
+          );
+        }
+        linesTotal += amount;
+        normalizedCashOutLines.push({
+          paymentMethodId: method.id,
+          paymentMethodName: method.name,
+          accountId: account.id,
+          currencyCode: account.currencyCode,
+          amount,
+        });
+      }
+
+      if (Math.abs(linesTotal - total) > 0.01) {
         return NextResponse.json(
-          { error: "Por ahora el egreso inmediato solo admite cuentas en ARS" },
+          { error: "La suma de lineas no coincide con el total de la compra" },
           { status: 400 },
         );
       }
@@ -374,8 +443,28 @@ export async function PATCH(
 
     const occurredAt = paidAtResult.date ?? purchase.invoiceDate ?? new Date();
     const purchaseLabel = purchase.invoiceNumber ?? purchase.id;
+    const purchaseMovementNotePrefixes = Array.from(
+      new Set(
+        [purchase.invoiceNumber?.trim(), purchase.id].filter(
+          (reference): reference is string => Boolean(reference),
+        ),
+      ),
+    ).map((reference) => `Compra ${reference} · `);
 
     const updatedPurchase = await prisma.$transaction(async (tx) => {
+      if (purchaseMovementNotePrefixes.length) {
+        await tx.accountMovement.deleteMany({
+          where: {
+            organizationId: membership.organizationId,
+            direction: "OUT",
+            supplierPaymentLineId: null,
+            OR: purchaseMovementNotePrefixes.map((prefix) => ({
+              note: { startsWith: prefix },
+            })),
+          },
+        });
+      }
+
       if (switchingToCurrentAccount) {
         if (!hasCurrentAccountImpact) {
           await tx.currentAccountEntry.create({
@@ -425,18 +514,20 @@ export async function PATCH(
           },
         });
 
-        if (switchingToImmediateCashOut && cashOutAccount && cashOutPaymentMethod) {
-          await tx.accountMovement.create({
-            data: {
-              organizationId: membership.organizationId,
-              accountId: cashOutAccount.id,
-              occurredAt,
-              direction: "OUT",
-              amount: total.toFixed(2),
-              currencyCode: cashOutAccount.currencyCode,
-              note: `Compra ${purchaseLabel} · ${cashOutPaymentMethod.name}`,
-            },
-          });
+        if (switchingToImmediateCashOut && normalizedCashOutLines.length) {
+          for (const line of normalizedCashOutLines) {
+            await tx.accountMovement.create({
+              data: {
+                organizationId: membership.organizationId,
+                accountId: line.accountId,
+                occurredAt,
+                direction: "OUT",
+                amount: line.amount.toFixed(2),
+                currencyCode: line.currencyCode,
+                note: `Compra ${purchase.id} · ${line.paymentMethodName}`,
+              },
+            });
+          }
         }
       }
 
@@ -478,7 +569,7 @@ export async function PATCH(
         body.paymentMode === "CURRENT_ACCOUNT"
           ? "Compra configurada en cuenta corriente."
           : body.paymentMode === "IMMEDIATE_CASH_OUT"
-            ? "Compra marcada como pagada y egreso registrado."
+            ? "Compra marcada como pagada y egresos registrados."
             : "Compra marcada como pagada sin impacto financiero.",
     });
   } catch (error) {

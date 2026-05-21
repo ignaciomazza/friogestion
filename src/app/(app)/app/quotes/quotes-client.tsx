@@ -217,6 +217,25 @@ const buildConfirmReceiptLine = ({
   };
 };
 
+const buildConfirmReceiptLines = ({
+  paymentMethods,
+  currencies,
+  latestUsdRate,
+  amount,
+}: {
+  paymentMethods: PaymentMethodOption[];
+  currencies: CurrencyOption[];
+  latestUsdRate: string | null;
+  amount: string;
+}): ConfirmReceiptLine[] => [
+  buildConfirmReceiptLine({
+    paymentMethods,
+    currencies,
+    latestUsdRate,
+    amount,
+  }),
+];
+
 const buildConfirmInstallmentsForm = (): ConfirmInstallmentsForm => ({
   installmentsCount: "3",
   interestRate: "",
@@ -383,9 +402,9 @@ export default function QuotesClient({
     useState(true);
   const [confirmReceiptMode, setConfirmReceiptMode] =
     useState<ConfirmReceiptMode>("SIMPLE");
-  const [confirmReceiptLine, setConfirmReceiptLine] = useState<ConfirmReceiptLine>(
+  const [confirmReceiptLines, setConfirmReceiptLines] = useState<ConfirmReceiptLine[]>(
     () =>
-      buildConfirmReceiptLine({
+      buildConfirmReceiptLines({
         paymentMethods: [],
         currencies: [],
         latestUsdRate: initialLatestUsdRate,
@@ -471,19 +490,6 @@ export default function QuotesClient({
     () => new Map(paymentMethods.map((method) => [method.id, method])),
     [paymentMethods],
   );
-  const selectedConfirmPaymentMethod = paymentMethodById.get(
-    confirmReceiptLine.paymentMethodId,
-  );
-  const confirmReceiptRequiresAccount = Boolean(
-    selectedConfirmPaymentMethod?.requiresAccount,
-  );
-  const confirmCurrencyAccounts = useMemo(
-    () =>
-      accounts.filter(
-        (account) => account.currencyCode === confirmReceiptLine.currencyCode,
-      ),
-    [accounts, confirmReceiptLine.currencyCode],
-  );
   const selectedCustomerIdForValidation = selectedCustomer?.id ?? null;
   const selectedCustomerTaxIdForValidation = selectedCustomer?.taxId ?? null;
   const selectedCustomerFiscalProfileForValidation =
@@ -543,8 +549,8 @@ export default function QuotesClient({
     setRegisterReceiptOnConfirm(true);
     setConfirmReceiptMode("SIMPLE");
     setConfirmInstallmentsForm(buildConfirmInstallmentsForm());
-    setConfirmReceiptLine(
-      buildConfirmReceiptLine({
+    setConfirmReceiptLines(
+      buildConfirmReceiptLines({
         paymentMethods,
         currencies,
         latestUsdRate: latestUsdRateForReceipts,
@@ -655,8 +661,8 @@ export default function QuotesClient({
     setQuoteToConfirmSale(detail);
     setConfirmSaleOrigin(origin);
     void ensureFinanceCatalogs();
-    setConfirmReceiptLine(
-      buildConfirmReceiptLine({
+    setConfirmReceiptLines(
+      buildConfirmReceiptLines({
         paymentMethods,
         currencies,
         latestUsdRate: latestUsdRateForReceipts,
@@ -666,20 +672,92 @@ export default function QuotesClient({
     return true;
   };
 
+  const addConfirmReceiptLine = () => {
+    setConfirmReceiptLines((prev) => [
+      ...prev,
+      ...buildConfirmReceiptLines({
+        paymentMethods,
+        currencies,
+        latestUsdRate: latestUsdRateForReceipts,
+        amount: "",
+      }),
+    ]);
+  };
+
+  const removeConfirmReceiptLine = (index: number) => {
+    setConfirmReceiptLines((prev) => {
+      if (prev.length <= 1) return prev;
+      return prev.filter((_, currentIndex) => currentIndex !== index);
+    });
+  };
+
+  const updateConfirmReceiptLine = (
+    index: number,
+    updates: Partial<ConfirmReceiptLine>,
+  ) => {
+    setConfirmReceiptLines((prev) => {
+      const current = prev[index];
+      if (!current) return prev;
+
+      const next = [...prev];
+      const updated = { ...current, ...updates };
+
+      if (updates.paymentMethodId) {
+        const method = paymentMethodById.get(updates.paymentMethodId);
+        if (method && !method.requiresAccount) {
+          updated.accountId = "";
+        }
+      }
+
+      if (updates.currencyCode) {
+        if (updates.currencyCode === "ARS") {
+          updated.fxRateUsed = "";
+        } else {
+          updated.fxRateUsed =
+            updated.fxRateUsed || latestUsdRateForReceipts || "";
+        }
+      }
+
+      next[index] = updated;
+      return next;
+    });
+  };
+
   const handleConfirmSaleFromModal = async () => {
     if (!quoteToConfirmSale) return;
 
-    const paymentMethod = paymentMethodById.get(confirmReceiptLine.paymentMethodId);
-    const receiptAmount = toSafeNumber(confirmReceiptLine.amount);
-    const receiptFxRate = toSafeNumber(confirmReceiptLine.fxRateUsed);
-    const normalizedCurrencyCode = (
-      confirmReceiptLine.currencyCode || "ARS"
+    const primaryConfirmReceiptLine = confirmReceiptLines[0] ??
+      buildConfirmReceiptLine({
+        paymentMethods,
+        currencies,
+        latestUsdRate: latestUsdRateForReceipts,
+        amount: "",
+      });
+    const primaryPaymentMethod = paymentMethodById.get(
+      primaryConfirmReceiptLine.paymentMethodId,
+    );
+    const primaryReceiptAmount = toSafeNumber(primaryConfirmReceiptLine.amount);
+    const primaryReceiptFxRate = toSafeNumber(primaryConfirmReceiptLine.fxRateUsed);
+    const primaryCurrencyCode = (
+      primaryConfirmReceiptLine.currencyCode || "ARS"
     ).toUpperCase();
+    const normalizedSimpleLines = confirmReceiptLines.map((line) => ({
+      paymentMethodId: line.paymentMethodId,
+      accountId: line.accountId,
+      currencyCode: (line.currencyCode || "ARS").toUpperCase(),
+      amount: toSafeNumber(line.amount),
+      fxRateUsed: toSafeNumber(line.fxRateUsed),
+    }));
+    const simpleLinesWithAmount = normalizedSimpleLines.filter(
+      (line) => line.amount > 0,
+    );
     const installmentsCount = Number(confirmInstallmentsForm.installmentsCount || 0);
     const interestRate = toSafeNumber(confirmInstallmentsForm.interestRate);
     const shouldCreateReceipt =
       registerReceiptOnConfirm &&
-      (confirmReceiptMode === "SIMPLE" || receiptAmount > 0);
+      (confirmReceiptMode === "SIMPLE"
+        ? simpleLinesWithAmount.length > 0
+        : primaryReceiptAmount > 0);
 
     if (registerReceiptOnConfirm) {
       if (!paymentMethods.length || !currencies.length) {
@@ -688,7 +766,7 @@ export default function QuotesClient({
         );
         return;
       }
-      if (confirmReceiptMode === "SIMPLE" && receiptAmount <= 0) {
+      if (confirmReceiptMode === "SIMPLE" && simpleLinesWithAmount.length === 0) {
         setConfirmSaleStatus("Ingresa un importe de cobro valido.");
         return;
       }
@@ -702,29 +780,43 @@ export default function QuotesClient({
           return;
         }
       }
-      if (receiptAmount < 0) {
-        setConfirmSaleStatus("El importe no puede ser negativo.");
-        return;
-      }
-      if (shouldCreateReceipt && !paymentMethod) {
-        setConfirmSaleStatus("Selecciona un metodo de cobro.");
-        return;
-      }
-      if (
-        shouldCreateReceipt &&
-        confirmReceiptRequiresAccount &&
-        !confirmReceiptLine.accountId
-      ) {
-        setConfirmSaleStatus("Selecciona una cuenta para el metodo elegido.");
-        return;
-      }
-      if (
-        shouldCreateReceipt &&
-        normalizedCurrencyCode !== "ARS" &&
-        receiptFxRate <= 0
-      ) {
-        setConfirmSaleStatus("Completa la cotizacion para la moneda elegida.");
-        return;
+      if (confirmReceiptMode === "SIMPLE") {
+        const hasInvalidSimpleLine = simpleLinesWithAmount.some((line) => {
+          const method = paymentMethodById.get(line.paymentMethodId);
+          if (!method) return true;
+          if (method.requiresAccount && !line.accountId) return true;
+          if (line.currencyCode !== "ARS" && line.fxRateUsed <= 0) return true;
+          return false;
+        });
+        if (hasInvalidSimpleLine) {
+          setConfirmSaleStatus("Revisa metodos, cuentas, importes y cotizacion.");
+          return;
+        }
+      } else {
+        if (primaryReceiptAmount < 0) {
+          setConfirmSaleStatus("El importe no puede ser negativo.");
+          return;
+        }
+        if (shouldCreateReceipt && !primaryPaymentMethod) {
+          setConfirmSaleStatus("Selecciona un metodo de cobro.");
+          return;
+        }
+        if (
+          shouldCreateReceipt &&
+          primaryPaymentMethod?.requiresAccount &&
+          !primaryConfirmReceiptLine.accountId
+        ) {
+          setConfirmSaleStatus("Selecciona una cuenta para el metodo elegido.");
+          return;
+        }
+        if (
+          shouldCreateReceipt &&
+          primaryCurrencyCode !== "ARS" &&
+          primaryReceiptFxRate <= 0
+        ) {
+          setConfirmSaleStatus("Completa la cotizacion para la moneda elegida.");
+          return;
+        }
       }
     }
 
@@ -756,10 +848,10 @@ export default function QuotesClient({
       let financingSaved = false;
       if (registerReceiptOnConfirm && confirmReceiptMode === "INSTALLMENTS") {
         const principalFromAmount =
-          receiptAmount > 0
-            ? normalizedCurrencyCode === "ARS"
-              ? receiptAmount
-              : receiptAmount * receiptFxRate
+          primaryReceiptAmount > 0
+            ? primaryCurrencyCode === "ARS"
+              ? primaryReceiptAmount
+              : primaryReceiptAmount * primaryReceiptFxRate
             : 0;
         const principalAmount =
           principalFromAmount > 0
@@ -806,21 +898,34 @@ export default function QuotesClient({
 
       let receiptSaved = false;
       if (shouldCreateReceipt) {
+        const receiptLinesPayload =
+          confirmReceiptMode === "SIMPLE"
+            ? simpleLinesWithAmount.map((line) => ({
+                paymentMethodId: line.paymentMethodId,
+                accountId: line.accountId || undefined,
+                currencyCode: line.currencyCode,
+                amount: line.amount,
+                fxRateUsed:
+                  line.currencyCode === "ARS" ? undefined : line.fxRateUsed,
+              }))
+            : [
+                {
+                  paymentMethodId: primaryConfirmReceiptLine.paymentMethodId,
+                  accountId: primaryConfirmReceiptLine.accountId || undefined,
+                  currencyCode: primaryCurrencyCode,
+                  amount: primaryReceiptAmount,
+                  fxRateUsed:
+                    primaryCurrencyCode === "ARS"
+                      ? undefined
+                      : primaryReceiptFxRate,
+                },
+              ];
         const receiptRes = await fetch("/api/receipts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             saleId,
-            lines: [
-              {
-                paymentMethodId: confirmReceiptLine.paymentMethodId,
-                accountId: confirmReceiptLine.accountId || undefined,
-                currencyCode: normalizedCurrencyCode,
-                amount: receiptAmount,
-                fxRateUsed:
-                  normalizedCurrencyCode === "ARS" ? undefined : receiptFxRate,
-              },
-            ],
+            lines: receiptLinesPayload,
           }),
         });
         const receiptData = await receiptRes.json().catch(() => null);
@@ -875,23 +980,36 @@ export default function QuotesClient({
     if (!quoteToConfirmSale) return;
     if (!paymentMethods.length || !currencies.length) return;
 
-    setConfirmReceiptLine((previous) => {
-      const keepMethod = paymentMethods.some(
-        (method) => method.id === previous.paymentMethodId,
-      );
-      const keepCurrency = currencies.some(
-        (currency) => currency.code === previous.currencyCode,
-      );
-      if (keepMethod && keepCurrency) return previous;
+    setConfirmReceiptLines((previousLines) => {
+      if (!previousLines.length) {
+        return buildConfirmReceiptLines({
+          paymentMethods,
+          currencies,
+          latestUsdRate: latestUsdRateForReceipts,
+          amount: toSafeNumber(quoteToConfirmSale.total).toFixed(2),
+        });
+      }
 
-      const next = buildConfirmReceiptLine({
-        paymentMethods,
-        currencies,
-        latestUsdRate: latestUsdRateForReceipts,
-        amount:
-          previous.amount || toSafeNumber(quoteToConfirmSale.total).toFixed(2),
+      return previousLines.map((line, index) => {
+        const keepMethod = paymentMethods.some(
+          (method) => method.id === line.paymentMethodId,
+        );
+        const keepCurrency = currencies.some(
+          (currency) => currency.code === line.currencyCode,
+        );
+        if (keepMethod && keepCurrency) return line;
+
+        return buildConfirmReceiptLine({
+          paymentMethods,
+          currencies,
+          latestUsdRate: latestUsdRateForReceipts,
+          amount:
+            line.amount ||
+            (index === 0
+              ? toSafeNumber(quoteToConfirmSale.total).toFixed(2)
+              : ""),
+        });
       });
-      return next;
     });
   }, [
     quoteToConfirmSale,
@@ -3221,13 +3339,16 @@ export default function QuotesClient({
           confirmReceiptMode={confirmReceiptMode}
           confirmInstallmentsForm={confirmInstallmentsForm}
           isFinanceCatalogLoading={isFinanceCatalogLoading}
-          confirmReceiptLine={confirmReceiptLine}
-          confirmReceiptRequiresAccount={confirmReceiptRequiresAccount}
-          confirmCurrencyAccounts={confirmCurrencyAccounts}
+          confirmReceiptLines={confirmReceiptLines}
           paymentMethods={paymentMethods.map((method) => ({
             id: method.id,
             name: method.name,
             requiresAccount: method.requiresAccount,
+          }))}
+          accounts={accounts.map((account) => ({
+            id: account.id,
+            name: account.name,
+            currencyCode: account.currencyCode,
           }))}
           currencies={currencies.map((currency) => ({
             id: currency.id,
@@ -3240,7 +3361,9 @@ export default function QuotesClient({
           onSetRegisterReceiptOnConfirm={setRegisterReceiptOnConfirm}
           onSetConfirmReceiptMode={setConfirmReceiptMode}
           onSetConfirmInstallmentsForm={setConfirmInstallmentsForm}
-          onSetConfirmReceiptLine={setConfirmReceiptLine}
+          onAddConfirmReceiptLine={addConfirmReceiptLine}
+          onRemoveConfirmReceiptLine={removeConfirmReceiptLine}
+          onUpdateConfirmReceiptLine={updateConfirmReceiptLine}
         />
       ) : null}
     </div>

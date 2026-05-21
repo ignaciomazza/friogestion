@@ -8,6 +8,7 @@ import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { UNIT_VALUES } from "@/lib/units";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 
 const productSchema = z.object({
   name: z.string().min(2),
@@ -48,7 +49,58 @@ const parseOffset = (value: string | null) => {
   return normalized;
 };
 
-const parseSort = (value: string | null) => (value === "za" ? "za" : "az");
+const parseSort = (value: string | null): StockSort => {
+  if (value === "az") return "name-asc";
+  if (value === "za") return "name-desc";
+  return normalizeStockSort(value);
+};
+
+const productOrderBy = (
+  sort: StockSort,
+): Prisma.ProductOrderByWithRelationInput[] => {
+  if (sort === "created-asc") {
+    return [{ createdAt: "asc" }, { id: "asc" }];
+  }
+  if (sort === "code-asc") {
+    return [
+      { sku: { sort: "asc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "code-desc") {
+    return [
+      { sku: { sort: "desc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "name-asc") {
+    return [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
+  if (sort === "name-desc") {
+    return [{ name: "desc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
+  if (sort === "brand-asc") {
+    return [
+      { brand: { sort: "asc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  if (sort === "brand-desc") {
+    return [
+      { brand: { sort: "desc", nulls: "last" } },
+      { name: "asc" },
+      { createdAt: "desc" },
+      { id: "asc" },
+    ];
+  }
+  return [{ createdAt: "desc" }, { id: "asc" }];
+};
 
 export async function GET(req: NextRequest) {
   try {
@@ -82,10 +134,7 @@ export async function GET(req: NextRequest) {
       ...(unit ? { unit } : {}),
     };
 
-    const orderBy: Prisma.ProductOrderByWithRelationInput[] = [
-      { name: sort === "za" ? "desc" : "asc" },
-      { createdAt: "desc" },
-    ];
+    const orderBy = productOrderBy(sort);
 
     if (includePrices) {
       const [total, products] = await prisma.$transaction([

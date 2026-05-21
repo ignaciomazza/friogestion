@@ -108,6 +108,12 @@ type PurchasePaymentMode =
   | "IMMEDIATE_CASH_OUT"
   | "OFF_BOOK";
 
+type CashOutLineForm = {
+  paymentMethodId: string;
+  accountId: string;
+  amount: string;
+};
+
 type SimpleFiscalCondition = "GRAVADO" | "NO_GRAVADO" | "EXENTO";
 
 type PurchaseSectionId =
@@ -150,8 +156,11 @@ type PurchasePayload = {
   }>;
   adjustStock: boolean;
   registerCashOut: boolean;
-  cashOutPaymentMethodId?: string;
-  cashOutAccountId?: string;
+  cashOutLines?: Array<{
+    paymentMethodId: string;
+    accountId?: string;
+    amount: number;
+  }>;
   validateWithArca: boolean;
   arcaValidation?: Record<string, string | number>;
 };
@@ -775,6 +784,33 @@ const roundMoney = (value: number) =>
 
 const toMoneyValue = (value: number) => roundMoney(value).toFixed(2);
 
+const resolveDefaultCashOutAccountId = (
+  paymentMethodId: string,
+  paymentMethods: PaymentMethodOption[],
+  accounts: AccountOption[],
+) => {
+  const method = paymentMethods.find((candidate) => candidate.id === paymentMethodId);
+  if (!method) return accounts.find((account) => account.currencyCode === "ARS")?.id ?? accounts[0]?.id ?? "";
+  return (
+    accounts.find((account) => account.currencyCode === "ARS")?.id ??
+    accounts[0]?.id ??
+    ""
+  );
+};
+
+const buildCashOutLine = (
+  paymentMethods: PaymentMethodOption[],
+  accounts: AccountOption[],
+  amount?: string,
+): CashOutLineForm => {
+  const methodId = paymentMethods[0]?.id ?? "";
+  return {
+    paymentMethodId: methodId,
+    accountId: resolveDefaultCashOutAccountId(methodId, paymentMethods, accounts),
+    amount: amount ?? "",
+  };
+};
+
 function MiniToggle({
   checked,
   label,
@@ -977,8 +1013,7 @@ export default function PurchasesPage() {
     number | null
   >(null);
 
-  const [cashOutPaymentMethodId, setCashOutPaymentMethodId] = useState("");
-  const [cashOutAccountId, setCashOutAccountId] = useState("");
+  const [cashOutLines, setCashOutLines] = useState<CashOutLineForm[]>([]);
 
   const [arcaVoucherKind, setArcaVoucherKind] = useState<"A" | "B" | "C">(
     "B",
@@ -1042,9 +1077,9 @@ export default function PurchasesPage() {
   const [editingPaidAt, setEditingPaidAt] = useState(() =>
     toDateInputValue(new Date()),
   );
-  const [editingCashOutPaymentMethodId, setEditingCashOutPaymentMethodId] =
-    useState("");
-  const [editingCashOutAccountId, setEditingCashOutAccountId] = useState("");
+  const [editingCashOutLines, setEditingCashOutLines] = useState<
+    CashOutLineForm[]
+  >([]);
   const [isUpdatingPaymentMode, setIsUpdatingPaymentMode] = useState(false);
   const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
   const [isQrScannerActive, setIsQrScannerActive] = useState(false);
@@ -1194,6 +1229,14 @@ export default function PurchasesPage() {
     loadPurchases().catch(() => undefined);
     loadFinance().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!paymentMethods.length) return;
+    setCashOutLines((prev) => {
+      if (prev.length) return prev;
+      return [buildCashOutLine(paymentMethods, accounts)];
+    });
+  }, [paymentMethods, accounts]);
 
   useEffect(() => {
     setIsPortalReady(true);
@@ -2827,16 +2870,42 @@ export default function PurchasesPage() {
       return null;
     }
 
-    if (registerCashOut && !cashOutPaymentMethodId) {
-      setStatus("Selecciona un metodo de pago para el egreso");
+    const normalizedCashOutLines = registerCashOut
+      ? cashOutLines
+          .map((line) => ({
+            paymentMethodId: line.paymentMethodId,
+            accountId: line.accountId,
+            amount: Number(line.amount || 0),
+          }))
+          .filter((line) => line.amount > 0)
+      : [];
+
+    if (registerCashOut && !normalizedCashOutLines.length) {
+      setStatus("Agrega al menos una linea de pago para el egreso");
       setOpenPurchaseSection("payment");
       return null;
     }
 
-    if (registerCashOut && !cashOutAccountId) {
-      setStatus("Selecciona una cuenta para registrar el egreso");
+    if (
+      registerCashOut &&
+      normalizedCashOutLines.some(
+        (line) => !line.paymentMethodId || !line.accountId || line.amount <= 0,
+      )
+    ) {
+      setStatus("Completa metodo, cuenta y monto en cada linea");
       setOpenPurchaseSection("payment");
       return null;
+    }
+
+    if (registerCashOut) {
+      const linesTotal = roundMoney(
+        normalizedCashOutLines.reduce((sum, line) => sum + line.amount, 0),
+      );
+      if (Math.abs(linesTotal - total) > 0.01) {
+        setStatus("La suma de lineas debe coincidir con el total de la compra");
+        setOpenPurchaseSection("payment");
+        return null;
+      }
     }
 
     const arcaPayload = arcaEnabled ? buildArcaPayload() : null;
@@ -2876,20 +2945,32 @@ export default function PurchasesPage() {
           : undefined,
       adjustStock: shouldAdjustStock,
       registerCashOut,
-      cashOutPaymentMethodId: registerCashOut
-        ? cashOutPaymentMethodId
+      cashOutLines: registerCashOut
+        ? normalizedCashOutLines.map((line) => ({
+            paymentMethodId: line.paymentMethodId,
+            accountId: line.accountId || undefined,
+            amount: line.amount,
+          }))
         : undefined,
-      cashOutAccountId: registerCashOut ? cashOutAccountId : undefined,
       validateWithArca: arcaEnabled,
       arcaValidation: arcaEnabled && arcaPayload ? { ...arcaPayload } : undefined,
     };
+
+    const paymentPreviewLabel = registerCashOut
+      ? normalizedCashOutLines.length > 1
+        ? `Pago mixto (${normalizedCashOutLines.length} lineas)`
+        : paymentMethods.find(
+            (method) =>
+              method.id === normalizedCashOutLines[0]?.paymentMethodId,
+          )?.name ?? "Pago inmediato"
+      : paymentModeLabel;
 
     return {
       payload,
       supplierLabel: selectedSupplier?.displayName ?? supplierSearch,
       dateLabel: formatDateInputLabel(invoiceDate),
       invoiceLabel: invoiceSectionSummary,
-      paymentLabel: paymentModeLabel,
+      paymentLabel: paymentPreviewLabel,
       total,
       vatAmount,
       productCount: normalizedPurchaseProducts.length,
@@ -2923,8 +3004,7 @@ export default function PurchasesPage() {
     setAdjustStock(false);
     setPurchaseProducts([emptyPurchaseProduct()]);
     setSelectedProductsById({});
-    setCashOutPaymentMethodId("");
-    setCashOutAccountId("");
+    setCashOutLines([buildCashOutLine(paymentMethods, accounts)]);
     setArcaVoucherKind("B");
     setArcaAuthorizationCode("");
     setArcaValidationResult(null);
@@ -3053,8 +3133,7 @@ export default function PurchasesPage() {
       setSelectedProductsById(selectedProducts);
       setAdjustStock(false);
       setPaymentMode(purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK");
-      setCashOutPaymentMethodId("");
-      setCashOutAccountId("");
+      setCashOutLines([buildCashOutLine(paymentMethods, accounts)]);
       setArcaVoucherKind(voucherKind);
       setArcaAuthorizationCode(purchase.authorizationCode ?? "");
       setArcaValidationResult(null);
@@ -3403,10 +3482,16 @@ export default function PurchasesPage() {
   };
 
   const openPaymentModeEditor = (purchase: PurchaseRow) => {
+    const totalAmount = Number(purchase.total ?? 0);
     setEditingPaymentPurchase(purchase);
     setEditingPaymentMode(inferPurchasePaymentMode(purchase));
-    setEditingCashOutPaymentMethodId("");
-    setEditingCashOutAccountId("");
+    setEditingCashOutLines([
+      buildCashOutLine(
+        paymentMethods,
+        accounts,
+        totalAmount > 0 ? toMoneyValue(totalAmount) : "",
+      ),
+    ]);
     setEditingPaidAt(
       toCalendarDateInput(purchase.invoiceDate) ||
         toCalendarDateInput(purchase.createdAt) ||
@@ -3423,27 +3508,122 @@ export default function PurchasesPage() {
     setRevalidationFeedback(null);
   };
 
+  const addCashOutLine = () => {
+    setCashOutLines((prev) => [...prev, buildCashOutLine(paymentMethods, accounts)]);
+  };
+
+  const removeCashOutLine = (index: number) => {
+    setCashOutLines((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
+  };
+
+  const updateCashOutLine = (index: number, updates: Partial<CashOutLineForm>) => {
+    setCashOutLines((prev) => {
+      const next = [...prev];
+      const current = next[index];
+      if (!current) return prev;
+      const updated: CashOutLineForm = { ...current, ...updates };
+      if (updates.paymentMethodId !== undefined) {
+        updated.accountId = resolveDefaultCashOutAccountId(
+          updates.paymentMethodId,
+          paymentMethods,
+          accounts,
+        );
+      }
+      if (updates.amount !== undefined) {
+        updated.amount = normalizeDecimalInput(updates.amount, 2);
+      }
+      next[index] = updated;
+      return next;
+    });
+  };
+
+  const addEditingCashOutLine = () => {
+    setEditingCashOutLines((prev) => [
+      ...prev,
+      buildCashOutLine(paymentMethods, accounts),
+    ]);
+  };
+
+  const removeEditingCashOutLine = (index: number) => {
+    setEditingCashOutLines((prev) =>
+      prev.filter((_, currentIndex) => currentIndex !== index),
+    );
+  };
+
+  const updateEditingCashOutLine = (
+    index: number,
+    updates: Partial<CashOutLineForm>,
+  ) => {
+    setEditingCashOutLines((prev) => {
+      const next = [...prev];
+      const current = next[index];
+      if (!current) return prev;
+      const updated: CashOutLineForm = { ...current, ...updates };
+      if (updates.paymentMethodId !== undefined) {
+        updated.accountId = resolveDefaultCashOutAccountId(
+          updates.paymentMethodId,
+          paymentMethods,
+          accounts,
+        );
+      }
+      if (updates.amount !== undefined) {
+        updated.amount = normalizeDecimalInput(updates.amount, 2);
+      }
+      next[index] = updated;
+      return next;
+    });
+  };
+
   const handleUpdatePurchasePaymentMode = async () => {
     if (!editingPaymentPurchase) return;
     setIsUpdatingPaymentMode(true);
     setStatus(null);
     try {
-      const payload: Record<string, string> = {
+      const payload: Record<string, unknown> = {
         paymentMode: editingPaymentMode,
       };
       if (editingPaidAt) {
         payload.paidAt = editingPaidAt;
       }
       if (editingPaymentMode === "IMMEDIATE_CASH_OUT") {
-        if (!editingCashOutPaymentMethodId || !editingCashOutAccountId) {
-          const message =
-            "Selecciona metodo y cuenta para registrar pago inmediato.";
+        const normalizedLines = editingCashOutLines
+          .map((line) => ({
+            paymentMethodId: line.paymentMethodId,
+            accountId: line.accountId,
+            amount: Number(line.amount || 0),
+          }))
+          .filter((line) => line.amount > 0);
+
+        if (!normalizedLines.length) {
+          const message = "Agrega al menos una linea para registrar el pago.";
           setStatus(message);
           toast.error(message);
           return;
         }
-        payload.cashOutPaymentMethodId = editingCashOutPaymentMethodId;
-        payload.cashOutAccountId = editingCashOutAccountId;
+
+        const invalidLine = normalizedLines.some(
+          (line) => !line.paymentMethodId || !line.accountId,
+        );
+        if (invalidLine) {
+          const message = "Completa metodo, cuenta y monto en cada linea.";
+          setStatus(message);
+          toast.error(message);
+          return;
+        }
+
+        const linesTotal = roundMoney(
+          normalizedLines.reduce((sum, line) => sum + line.amount, 0),
+        );
+        const purchaseTotal = roundMoney(Number(editingPaymentPurchase.total ?? 0));
+        if (Math.abs(linesTotal - purchaseTotal) > 0.01) {
+          const message =
+            "La suma de lineas debe coincidir con el total de la compra.";
+          setStatus(message);
+          toast.error(message);
+          return;
+        }
+
+        payload.cashOutLines = normalizedLines;
       }
 
       const res = await fetch(`/api/purchases/${editingPaymentPurchase.id}`, {
@@ -4873,8 +5053,9 @@ export default function PurchasesPage() {
                       onClick={() => {
                         setPaymentMode(option.value);
                         if (option.value !== "IMMEDIATE_CASH_OUT") {
-                          setCashOutPaymentMethodId("");
-                          setCashOutAccountId("");
+                          setCashOutLines([
+                            buildCashOutLine(paymentMethods, accounts),
+                          ]);
                         }
                       }}
                       className={`rounded-xl border px-3 py-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
@@ -4897,44 +5078,136 @@ export default function PurchasesPage() {
               </div>
 
               {registerCashOut ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="field-stack">
-                    <span className="input-label">Metodo de pago</span>
-                    <select
-                      className="input cursor-pointer"
-                      value={cashOutPaymentMethodId}
-                      onChange={(event) =>
-                        setCashOutPaymentMethodId(event.target.value)
-                      }
-                      disabled={!paymentMethods.length}
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    {cashOutLines.map((line, index) => (
+                      <div
+                        key={`cash-out-line-${index}`}
+                        className="grid gap-3 rounded-xl border border-zinc-200/70 bg-white/40 p-3 sm:grid-cols-[minmax(160px,1.4fr)_minmax(170px,1.4fr)_minmax(120px,1fr)_auto] sm:items-end"
+                      >
+                        <label className="field-stack">
+                          <span className="input-label">Metodo de pago</span>
+                          <select
+                            className="input cursor-pointer"
+                            value={line.paymentMethodId}
+                            onChange={(event) =>
+                              updateCashOutLine(index, {
+                                paymentMethodId: event.target.value,
+                              })
+                            }
+                            disabled={!paymentMethods.length}
+                          >
+                            <option value="">
+                              {paymentMethods.length
+                                ? "Selecciona metodo"
+                                : "Sin metodos activos"}
+                            </option>
+                            {paymentMethods.map((method) => (
+                              <option key={method.id} value={method.id}>
+                                {method.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field-stack">
+                          <span className="input-label">Cuenta de egreso</span>
+                          <select
+                            className="input cursor-pointer"
+                            value={line.accountId}
+                            onChange={(event) =>
+                              updateCashOutLine(index, {
+                                accountId: event.target.value,
+                              })
+                            }
+                          >
+                            <option value="">Selecciona cuenta</option>
+                            {accounts.map((account) => (
+                              <option key={account.id} value={account.id}>
+                                {account.name} ({account.currencyCode})
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field-stack">
+                          <span className="input-label">Monto</span>
+                          <MoneyInput
+                            className="input w-full text-right tabular-nums"
+                            value={line.amount}
+                            onValueChange={(nextValue) =>
+                              updateCashOutLine(index, { amount: nextValue })
+                            }
+                            placeholder="0,00"
+                            maxDecimals={2}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn btn-rose text-xs sm:self-end"
+                          onClick={() => removeCashOutLine(index)}
+                          disabled={cashOutLines.length <= 1}
+                        >
+                          <TrashIcon className="size-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      className="btn text-xs"
+                      onClick={addCashOutLine}
                     >
-                      <option value="">
-                        {paymentMethods.length
-                          ? "Selecciona metodo"
-                          : "Sin metodos activos"}
-                      </option>
-                      {paymentMethods.map((method) => (
-                        <option key={method.id} value={method.id}>
-                          {method.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field-stack">
-                    <span className="input-label">Cuenta de egreso</span>
-                    <select
-                      className="input cursor-pointer"
-                      value={cashOutAccountId}
-                      onChange={(event) => setCashOutAccountId(event.target.value)}
-                    >
-                      <option value="">Selecciona cuenta</option>
-                      {accounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.name} ({account.currencyCode})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                      <PlusIcon className="size-4" />
+                      Agregar linea
+                    </button>
+                    <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
+                      <p>
+                        Total lineas:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(
+                            cashOutLines.reduce(
+                              (sum, line) => sum + Number(line.amount || 0),
+                              0,
+                            ),
+                          )}
+                        </span>
+                      </p>
+                      <p>
+                        Total compra:{" "}
+                        <span className="font-semibold text-zinc-900">
+                          {formatCurrencyARS(effectiveTotalNumeric)}
+                        </span>
+                      </p>
+                      <p>
+                        Diferencia:{" "}
+                        <span
+                          className={`font-semibold ${
+                            Math.abs(
+                              roundMoney(
+                                effectiveTotalNumeric -
+                                  cashOutLines.reduce(
+                                    (sum, line) => sum + Number(line.amount || 0),
+                                    0,
+                                  ),
+                              ),
+                            ) <= 0.01
+                              ? "text-emerald-700"
+                              : "text-rose-700"
+                          }`}
+                        >
+                          {formatCurrencyARS(
+                            roundMoney(
+                              effectiveTotalNumeric -
+                                cashOutLines.reduce(
+                                  (sum, line) => sum + Number(line.amount || 0),
+                                  0,
+                                ),
+                            ),
+                          )}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
                 </div>
               ) : null}
               </div>
@@ -5365,19 +5638,20 @@ export default function PurchasesPage() {
               paymentModeOptions={PURCHASE_PAYMENT_MODE_OPTIONS}
               editingPaymentMode={editingPaymentMode}
               editingPaidAt={editingPaidAt}
-              editingCashOutPaymentMethodId={editingCashOutPaymentMethodId}
-              editingCashOutAccountId={editingCashOutAccountId}
+              editingCashOutLines={editingCashOutLines}
               paymentMethods={paymentMethods}
               accounts={accounts}
               isUpdatingPaymentMode={isUpdatingPaymentMode}
               onSetEditingPaymentMode={setEditingPaymentMode}
               onResetCashOutTargets={() => {
-                setEditingCashOutPaymentMethodId("");
-                setEditingCashOutAccountId("");
+                setEditingCashOutLines([
+                  buildCashOutLine(paymentMethods, accounts),
+                ]);
               }}
               onSetEditingPaidAt={setEditingPaidAt}
-              onSetEditingCashOutPaymentMethodId={setEditingCashOutPaymentMethodId}
-              onSetEditingCashOutAccountId={setEditingCashOutAccountId}
+              onAddCashOutLine={addEditingCashOutLine}
+              onRemoveCashOutLine={removeEditingCashOutLine}
+              onUpdateCashOutLine={updateEditingCashOutLine}
               onClose={closePaymentModeEditor}
               onSave={handleUpdatePurchasePaymentMode}
             />,

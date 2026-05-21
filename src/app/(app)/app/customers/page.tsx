@@ -90,6 +90,7 @@ export default function CustomersPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isLookupLoading, setIsLookupLoading] = useState(false);
   const [isEditLookupLoading, setIsEditLookupLoading] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const loadCustomers = useCallback(
     async ({
@@ -461,155 +462,193 @@ export default function CustomersPage() {
         </div>
       </div>
 
-      <div className="card space-y-5 p-6">
-        <div className="field-stack">
-          <h2 className="text-lg font-semibold text-zinc-900">
-            Nuevo cliente
-          </h2>
-          <p className="section-subtitle">Alta rapida para operar en ventas.</p>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Nombre o razon social</span>
-              <input
-                className="input w-full"
-                value={form.displayName}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    displayName: event.target.value,
-                  }))
-                }
-                placeholder="Nombre o razon social"
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Lista de precios</span>
-              <select
-                className="input cursor-pointer"
-                value={form.defaultPriceListId}
-                onChange={(event) =>
-                  setForm((prev) => {
-                    const nextDefaultPriceListId = event.target.value;
-                    const selectedList = priceLists.find(
-                      (priceList) => priceList.id === nextDefaultPriceListId,
-                    );
-                    return {
-                      ...prev,
-                      defaultPriceListId: nextDefaultPriceListId,
-                      fiscalTaxProfile: selectedList?.isConsumerFinal
-                        ? "CONSUMIDOR_FINAL"
-                        : prev.fiscalTaxProfile,
-                    };
-                  })
-                }
-              >
-                <option value="">Sin lista por defecto</option>
-                {priceLists.map((priceList) => (
-                  <option key={priceList.id} value={priceList.id}>
-                    {priceList.name}
-                    {priceList.isDefault ? " (Default)" : ""}
-                    {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+      <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
+        <button
+          type="button"
+          className="w-full rounded-2xl bg-white/30 px-3 py-2 text-left transition hover:bg-white/50"
+          onClick={() => setShowCreateForm((prev) => !prev)}
+          aria-expanded={showCreateForm}
+          aria-controls="customers-create-form"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="section-title">Nuevo cliente</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                {showCreateForm
+                  ? "Alta rapida para operar en ventas."
+                  : "Crea un cliente rapido."}
+              </p>
+            </div>
+            <span
+              className={`pill border px-2.5 py-1 text-[11px] font-semibold ${
+                showCreateForm
+                  ? "border-sky-200 bg-white text-sky-900"
+                  : "border-sky-200 bg-white/60 text-sky-800"
+              }`}
+            >
+              {showCreateForm ? "Ocultar" : "Mostrar"}
+            </span>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">CUIT</span>
-              <input
-                className="input w-full"
-                value={form.taxId}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    taxId: normalizeTaxId(event.target.value),
-                  }))
-                }
-                placeholder="CUIT"
-              />
-              <button
-                type="button"
-                className="btn text-xs w-fit"
-                onClick={() => handleLookupByTaxId("new")}
-                disabled={isLookupLoading}
-              >
-                {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
-              </button>
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Condicion fiscal</span>
-              <select
-                className="input cursor-pointer"
-                value={form.fiscalTaxProfile}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    fiscalTaxProfile:
-                      event.target.value as CustomerFiscalTaxProfile,
-                  }))
-                }
-              >
-                {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
-                  <option key={profile} value={profile}>
-                    {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Correo</span>
-              <input
-                className="input"
-                value={form.email}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, email: event.target.value }))
-                }
-                placeholder="Correo"
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Telefono</span>
-              <input
-                className="input"
-                value={form.phone}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, phone: event.target.value }))
-                }
-                placeholder="Telefono"
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Direccion</span>
-            <input
-              className="input w-full"
-              value={form.address}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, address: event.target.value }))
-              }
-              placeholder="Direccion"
-            />
-          </label>
-          <button
-            type="submit"
-            className="btn btn-emerald w-full"
-            disabled={isSubmitting}
-          >
-            <CheckIcon className="size-4" />
-            {isSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {status ? (
-            <p className={`text-xs ${statusClass}`} role="status" aria-live="polite">
-              {status}
-            </p>
+        </button>
+        <AnimatePresence initial={false} mode="wait">
+          {showCreateForm ? (
+            <motion.div
+              key="customers-create-form-panel"
+              initial={{ opacity: 0, height: 0, y: -8 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -8 }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              className="reveal-motion"
+            >
+              <form id="customers-create-form" onSubmit={handleSubmit} className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Nombre o razon social</span>
+                    <input
+                      className="input w-full"
+                      value={form.displayName}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          displayName: event.target.value,
+                        }))
+                      }
+                      placeholder="Nombre o razon social"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Lista de precios</span>
+                    <select
+                      className="input cursor-pointer"
+                      value={form.defaultPriceListId}
+                      onChange={(event) =>
+                        setForm((prev) => {
+                          const nextDefaultPriceListId = event.target.value;
+                          const selectedList = priceLists.find(
+                            (priceList) => priceList.id === nextDefaultPriceListId,
+                          );
+                          return {
+                            ...prev,
+                            defaultPriceListId: nextDefaultPriceListId,
+                            fiscalTaxProfile: selectedList?.isConsumerFinal
+                              ? "CONSUMIDOR_FINAL"
+                              : prev.fiscalTaxProfile,
+                          };
+                        })
+                      }
+                    >
+                      <option value="">Sin lista por defecto</option>
+                      {priceLists.map((priceList) => (
+                        <option key={priceList.id} value={priceList.id}>
+                          {priceList.name}
+                          {priceList.isDefault ? " (Default)" : ""}
+                          {priceList.isConsumerFinal ? " (Consumidor final)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">CUIT</span>
+                    <input
+                      className="input w-full"
+                      value={form.taxId}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          taxId: normalizeTaxId(event.target.value),
+                        }))
+                      }
+                      placeholder="CUIT"
+                    />
+                    <button
+                      type="button"
+                      className="btn text-xs w-fit"
+                      onClick={() => handleLookupByTaxId("new")}
+                      disabled={isLookupLoading}
+                    >
+                      {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
+                    </button>
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Condicion fiscal</span>
+                    <select
+                      className="input cursor-pointer"
+                      value={form.fiscalTaxProfile}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          fiscalTaxProfile:
+                            event.target.value as CustomerFiscalTaxProfile,
+                        }))
+                      }
+                    >
+                      {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+                        <option key={profile} value={profile}>
+                          {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Correo</span>
+                    <input
+                      className="input"
+                      value={form.email}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, email: event.target.value }))
+                      }
+                      placeholder="Correo"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Telefono</span>
+                    <input
+                      className="input"
+                      value={form.phone}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, phone: event.target.value }))
+                      }
+                      placeholder="Telefono"
+                    />
+                  </label>
+                </div>
+                <label className="flex flex-col gap-3">
+                  <span className="input-label">Direccion</span>
+                  <input
+                    className="input w-full"
+                    value={form.address}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, address: event.target.value }))
+                    }
+                    placeholder="Direccion"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="btn btn-emerald w-full"
+                  disabled={isSubmitting}
+                >
+                  <CheckIcon className="size-4" />
+                  {isSubmitting ? "Guardando..." : "Guardar"}
+                </button>
+              </form>
+            </motion.div>
           ) : null}
-        </form>
+        </AnimatePresence>
+        {status ? (
+          <p
+            className={`px-3 text-xs ${statusClass}`}
+            role="status"
+            aria-live="polite"
+          >
+            {status}
+          </p>
+        ) : null}
       </div>
 
       <div className="card space-y-5">

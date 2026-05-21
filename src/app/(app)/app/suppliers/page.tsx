@@ -88,6 +88,7 @@ export default function SuppliersPage() {
   const [isLookupLoading, setIsLookupLoading] = useState(false);
   const [isEditLookupLoading, setIsEditLookupLoading] = useState(false);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const loadSuppliers = useCallback(
     async ({
@@ -419,112 +420,146 @@ export default function SuppliersPage() {
         </div>
       </div>
 
-      <div className="card space-y-5 p-6">
-        <div className="field-stack">
-          <h2 className="text-lg font-semibold text-zinc-900">
-            Nuevo proveedor
-          </h2>
-          <p className="section-subtitle">Alta rapida para compras y pagos.</p>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Nombre comercial</span>
-              <input
-                className="input"
-                value={form.displayName}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    displayName: event.target.value,
-                  }))
-                }
-                placeholder="Nombre comercial"
-                required
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Razon social</span>
-              <input
-                className="input"
-                value={form.legalName}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    legalName: event.target.value,
-                  }))
-                }
-                placeholder="Razon social"
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-3">
-            <span className="input-label">CUIT</span>
-            <input
-              className="input w-full"
-              value={form.taxId}
-              onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  taxId: normalizeTaxId(event.target.value),
-                }))
-              }
-              placeholder="CUIT"
-            />
-            <button
-              type="button"
-              className="btn text-xs w-fit"
-              onClick={() => handleLookupByTaxId("new")}
-              disabled={isLookupLoading}
+      <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
+        <button
+          type="button"
+          className="w-full rounded-2xl bg-white/30 px-3 py-2 text-left transition hover:bg-white/50"
+          onClick={() => setShowCreateForm((prev) => !prev)}
+          aria-expanded={showCreateForm}
+          aria-controls="suppliers-create-form"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="section-title">Nuevo proveedor</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                {showCreateForm
+                  ? "Alta rapida para compras y pagos."
+                  : "Crea un proveedor rapido."}
+              </p>
+            </div>
+            <span
+              className={`pill border px-2.5 py-1 text-[11px] font-semibold ${
+                showCreateForm
+                  ? "border-sky-200 bg-white text-sky-900"
+                  : "border-sky-200 bg-white/60 text-sky-800"
+              }`}
             >
-              {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
-            </button>
-          </label>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Correo</span>
-              <input
-                className="input"
-                value={form.email}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, email: event.target.value }))
-                }
-                placeholder="Correo"
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Telefono</span>
-              <input
-                className="input"
-                value={form.phone}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, phone: event.target.value }))
-                }
-                placeholder="Telefono"
-              />
-            </label>
+              {showCreateForm ? "Ocultar" : "Mostrar"}
+            </span>
           </div>
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Direccion</span>
-            <input
-              className="input w-full"
-              value={form.address}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, address: event.target.value }))
-              }
-              placeholder="Direccion"
-            />
-          </label>
-          <button
-            type="submit"
-            className="btn btn-emerald w-full"
-            disabled={isSubmitting}
-          >
-            <CheckIcon className="size-4" />
-            {isSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
-        </form>
+        </button>
+        <AnimatePresence initial={false} mode="wait">
+          {showCreateForm ? (
+            <motion.div
+              key="suppliers-create-form-panel"
+              initial={{ opacity: 0, height: 0, y: -8 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -8 }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              className="reveal-motion"
+            >
+              <form id="suppliers-create-form" onSubmit={handleSubmit} className="space-y-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Nombre comercial</span>
+                    <input
+                      className="input"
+                      value={form.displayName}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          displayName: event.target.value,
+                        }))
+                      }
+                      placeholder="Nombre comercial"
+                      required
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Razon social</span>
+                    <input
+                      className="input"
+                      value={form.legalName}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          legalName: event.target.value,
+                        }))
+                      }
+                      placeholder="Razon social"
+                    />
+                  </label>
+                </div>
+                <label className="flex flex-col gap-3">
+                  <span className="input-label">CUIT</span>
+                  <input
+                    className="input w-full"
+                    value={form.taxId}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        taxId: normalizeTaxId(event.target.value),
+                      }))
+                    }
+                    placeholder="CUIT"
+                  />
+                  <button
+                    type="button"
+                    className="btn text-xs w-fit"
+                    onClick={() => handleLookupByTaxId("new")}
+                    disabled={isLookupLoading}
+                  >
+                    {isLookupLoading ? "Buscando..." : "Buscar por CUIT"}
+                  </button>
+                </label>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Correo</span>
+                    <input
+                      className="input"
+                      value={form.email}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, email: event.target.value }))
+                      }
+                      placeholder="Correo"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Telefono</span>
+                    <input
+                      className="input"
+                      value={form.phone}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, phone: event.target.value }))
+                      }
+                      placeholder="Telefono"
+                    />
+                  </label>
+                </div>
+                <label className="flex flex-col gap-3">
+                  <span className="input-label">Direccion</span>
+                  <input
+                    className="input w-full"
+                    value={form.address}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, address: event.target.value }))
+                    }
+                    placeholder="Direccion"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  className="btn btn-emerald w-full"
+                  disabled={isSubmitting}
+                >
+                  <CheckIcon className="size-4" />
+                  {isSubmitting ? "Guardando..." : "Guardar"}
+                </button>
+              </form>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        {status ? <p className="px-3 text-xs text-zinc-500">{status}</p> : null}
       </div>
 
       <div className="card space-y-5">

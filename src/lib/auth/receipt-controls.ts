@@ -11,7 +11,8 @@ export function resolveConfiguredRoles(
 }
 
 export function resolveReceiptDoubleCheckRoles(
-  _configured: string[] | null | undefined
+  configured: string[] | null | undefined
 ): string[] {
+  void configured;
   return [...DEFAULT_RECEIPT_DOUBLE_CHECK_ROLES];
 }

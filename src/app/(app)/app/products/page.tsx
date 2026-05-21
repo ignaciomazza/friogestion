@@ -10,6 +10,11 @@ import {
   PencilSquareIcon,
   TrashIcon,
 } from "@/components/icons";
+import {
+  DEFAULT_STOCK_SORT,
+  normalizeStockSort,
+  type StockSort,
+} from "@/lib/stock-sort";
 import { UNIT_LABELS, UNIT_OPTIONS, UNIT_VALUES } from "@/lib/units";
 
 type ProductRow = {
@@ -30,6 +35,16 @@ type ProductsResponse = {
 };
 
 const PAGE_SIZE = 100;
+const PRODUCT_SORT_OPTIONS: Array<{ value: StockSort; label: string }> = [
+  { value: "created-desc", label: "Creacion reciente" },
+  { value: "created-asc", label: "Creacion antigua" },
+  { value: "code-asc", label: "Codigo A-Z" },
+  { value: "code-desc", label: "Codigo Z-A" },
+  { value: "name-asc", label: "Nombre A-Z" },
+  { value: "name-desc", label: "Nombre Z-A" },
+  { value: "brand-asc", label: "Marca A-Z" },
+  { value: "brand-desc", label: "Marca Z-A" },
+];
 
 export default function ProductsPage() {
   const [items, setItems] = useState<ProductRow[]>([]);
@@ -41,7 +56,7 @@ export default function ProductsPage() {
   const [productQuery, setProductQuery] = useState("");
   const [debouncedProductQuery, setDebouncedProductQuery] = useState("");
   const [unitFilter, setUnitFilter] = useState("ALL");
-  const [sortOrder, setSortOrder] = useState("az");
+  const [sortOrder, setSortOrder] = useState<StockSort>(DEFAULT_STOCK_SORT);
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [form, setForm] = useState({
@@ -63,6 +78,7 @@ export default function ProductsPage() {
   });
   const [isUpdating, setIsUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   const loadProducts = useCallback(
     async ({
@@ -319,103 +335,135 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      <div className="card space-y-5 p-6">
-        <div className="field-stack">
-          <h2 className="text-lg font-semibold text-zinc-900">
-            Nuevo producto
-          </h2>
-          <p className="section-subtitle">Alta rapida de catalogo.</p>
-        </div>
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <label className="flex flex-col gap-3">
-            <span className="input-label">Nombre</span>
-            <input
-              className="input w-full"
-              value={form.name}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, name: event.target.value }))
-              }
-              placeholder="Nombre"
-              required
-            />
-          </label>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Codigo interno</span>
-              <input
-                className="input"
-                value={form.sku}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, sku: event.target.value }))
-                }
-                placeholder="Codigo interno"
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Codigo compra</span>
-              <input
-                className="input"
-                value={form.purchaseCode}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    purchaseCode: event.target.value,
-                  }))
-                }
-                placeholder="Codigo compra"
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Unidad</span>
-              <select
-                className="input cursor-pointer"
-                value={form.unit}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, unit: event.target.value }))
-                }
-              >
-                {UNIT_OPTIONS.map((unit) => (
-                  <option key={unit.value} value={unit.value}>
-                    {unit.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+      <div className="card w-full space-y-2 border-dashed border-sky-200 p-3 md:p-4">
+        <button
+          type="button"
+          className="w-full rounded-2xl bg-white/30 px-3 py-2 text-left transition hover:bg-white/50"
+          onClick={() => setShowCreateForm((prev) => !prev)}
+          aria-expanded={showCreateForm}
+          aria-controls="products-create-form"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <h2 className="section-title">Nuevo producto</h2>
+              <p className="mt-0.5 text-xs text-zinc-500">
+                {showCreateForm ? "Alta rapida de catalogo." : "Crea un producto rapido."}
+              </p>
+            </div>
+            <span
+              className={`pill border px-2.5 py-1 text-[11px] font-semibold ${
+                showCreateForm
+                  ? "border-sky-200 bg-white text-sky-900"
+                  : "border-sky-200 bg-white/60 text-sky-800"
+              }`}
+            >
+              {showCreateForm ? "Ocultar" : "Mostrar"}
+            </span>
           </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Marca</span>
-              <input
-                className="input"
-                value={form.brand}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, brand: event.target.value }))
-                }
-                placeholder="Marca"
-              />
-            </label>
-            <label className="flex flex-col gap-3">
-              <span className="input-label">Modelo</span>
-              <input
-                className="input"
-                value={form.model}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, model: event.target.value }))
-                }
-                placeholder="Modelo"
-              />
-            </label>
-          </div>
-          <button
-            type="submit"
-            className="btn btn-emerald w-full"
-            disabled={isSubmitting}
-          >
-            <CheckIcon className="size-4" />
-            {isSubmitting ? "Guardando..." : "Guardar"}
-          </button>
-          {status ? <p className="text-xs text-zinc-500">{status}</p> : null}
-        </form>
+        </button>
+        <AnimatePresence initial={false} mode="wait">
+          {showCreateForm ? (
+            <motion.div
+              key="products-create-form-panel"
+              initial={{ opacity: 0, height: 0, y: -8 }}
+              animate={{ opacity: 1, height: "auto", y: 0 }}
+              exit={{ opacity: 0, height: 0, y: -8 }}
+              transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              className="reveal-motion"
+            >
+              <form id="products-create-form" onSubmit={handleSubmit} className="space-y-5">
+                <label className="flex flex-col gap-3">
+                  <span className="input-label">Nombre</span>
+                  <input
+                    className="input w-full"
+                    value={form.name}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, name: event.target.value }))
+                    }
+                    placeholder="Nombre"
+                    required
+                  />
+                </label>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Codigo interno</span>
+                    <input
+                      className="input"
+                      value={form.sku}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, sku: event.target.value }))
+                      }
+                      placeholder="Codigo interno"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Codigo compra</span>
+                    <input
+                      className="input"
+                      value={form.purchaseCode}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          purchaseCode: event.target.value,
+                        }))
+                      }
+                      placeholder="Codigo compra"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Unidad</span>
+                    <select
+                      className="input cursor-pointer"
+                      value={form.unit}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, unit: event.target.value }))
+                      }
+                    >
+                      {UNIT_OPTIONS.map((unit) => (
+                        <option key={unit.value} value={unit.value}>
+                          {unit.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Marca</span>
+                    <input
+                      className="input"
+                      value={form.brand}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, brand: event.target.value }))
+                      }
+                      placeholder="Marca"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-3">
+                    <span className="input-label">Modelo</span>
+                    <input
+                      className="input"
+                      value={form.model}
+                      onChange={(event) =>
+                        setForm((prev) => ({ ...prev, model: event.target.value }))
+                      }
+                      placeholder="Modelo"
+                    />
+                  </label>
+                </div>
+                <button
+                  type="submit"
+                  className="btn btn-emerald w-full"
+                  disabled={isSubmitting}
+                >
+                  <CheckIcon className="size-4" />
+                  {isSubmitting ? "Guardando..." : "Guardar"}
+                </button>
+              </form>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
+        {status ? <p className="px-3 text-xs text-zinc-500">{status}</p> : null}
       </div>
 
       <div className="card space-y-5">
@@ -434,7 +482,7 @@ export default function ProductsPage() {
             onClick={() => {
               setProductQuery("");
               setUnitFilter("ALL");
-              setSortOrder("az");
+              setSortOrder(DEFAULT_STOCK_SORT);
             }}
           >
             <svg
@@ -489,11 +537,16 @@ export default function ProductsPage() {
             <select
               className="input cursor-pointer text-xs"
               value={sortOrder}
-              onChange={(event) => setSortOrder(event.target.value)}
+              onChange={(event) =>
+                setSortOrder(normalizeStockSort(event.target.value))
+              }
               aria-label="Ordenar productos"
             >
-              <option value="az">A-Z</option>
-              <option value="za">Z-A</option>
+              {PRODUCT_SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
           </div>
         </div>
