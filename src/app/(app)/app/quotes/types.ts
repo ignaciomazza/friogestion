@@ -67,4 +67,5 @@ export type QuoteItemForm = {
   qty: string;
   unitPrice: string;
   taxRate: string;
+  unitPriceSource?: "ARS" | "USD" | null;
 };

@@ -23,7 +23,10 @@ import {
   summarizeTaxpayerLookupWarnings,
 } from "@/lib/arca/taxpayer-lookup-feedback";
 import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
-import { resolveSuggestedProductPrice } from "@/lib/pricing";
+import {
+  type SuggestedProductPriceCostCurrency,
+  resolveSuggestedProductPrice,
+} from "@/lib/pricing";
 import {
   calculateSaleAdjustment,
   getAdjustmentLabel,
@@ -191,6 +194,12 @@ const round2 = (value: number) => Math.round(value * 100) / 100;
 const toSafeNumber = (value: string | number | null | undefined) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+const normalizePriceCandidate = (value: string | null | undefined) => {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed.toFixed(2);
 };
 const buildConfirmReceiptLine = ({
   paymentMethods,
@@ -1307,10 +1316,12 @@ export default function QuotesClient({
     product,
     preferredPriceListId,
     customerPriceListId,
+    preferredCostCurrency,
   }: {
     product: ProductOption;
     preferredPriceListId: string;
     customerPriceListId?: string | null;
+    preferredCostCurrency?: SuggestedProductPriceCostCurrency;
   }) => {
     const effectiveCustomerPriceListId =
       customerPriceListId === undefined
@@ -1326,7 +1337,45 @@ export default function QuotesClient({
       defaultPriceListId,
       usdRateArs: latestUsdRate,
       priceListOrderIds,
+      preferredCostCurrency,
     });
+  };
+
+  const resolveItemPreferredCostCurrency = (
+    item: QuoteItemForm,
+  ): SuggestedProductPriceCostCurrency =>
+    item.unitPriceSource === "USD" ? "USD" : "ARS";
+
+  const getItemPriceSuggestions = (item: QuoteItemForm) => {
+    const product = productMap.get(item.productId);
+    if (!product) {
+      return {
+        ars: null,
+        usd: null,
+        hasDualPriceChoices: false,
+      };
+    }
+
+    const arsPrice = getSuggestedProductPrice({
+      product,
+      preferredPriceListId: selectedPriceListId,
+      preferredCostCurrency: "ARS",
+    });
+    const usdPrice = getSuggestedProductPrice({
+      product,
+      preferredPriceListId: selectedPriceListId,
+      preferredCostCurrency: "USD",
+    });
+
+    return {
+      ars: arsPrice,
+      usd: usdPrice,
+      hasDualPriceChoices:
+        normalizePriceCandidate(arsPrice) !== null &&
+        normalizePriceCandidate(usdPrice) !== null &&
+        normalizePriceCandidate(arsPrice) !==
+          normalizePriceCandidate(usdPrice),
+    };
   };
 
   const applyPriceListAndRefreshItems = ({
@@ -1346,6 +1395,7 @@ export default function QuotesClient({
           product,
           preferredPriceListId: nextPriceListId,
           customerPriceListId,
+          preferredCostCurrency: resolveItemPreferredCostCurrency(item),
         });
         if (!suggestedPrice || suggestedPrice === item.unitPrice) return item;
         return {
@@ -1381,6 +1431,7 @@ export default function QuotesClient({
       const updated = { ...next[index], [field]: value };
       if (field === "productSearch") {
         updated.productId = "";
+        updated.unitPriceSource = null;
       }
       next[index] = updated;
       return next;
@@ -1475,13 +1526,15 @@ export default function QuotesClient({
 
   const handleSelectProduct = (index: number, product: ProductOption) => {
     upsertProducts([product]);
-    const suggestedPrice = getSuggestedProductPrice({
-      product,
-      preferredPriceListId: selectedPriceListId,
-    });
 
     setItems((prev) => {
       const next = [...prev];
+      const preferredCostCurrency = resolveItemPreferredCostCurrency(next[index]);
+      const suggestedPrice = getSuggestedProductPrice({
+        product,
+        preferredPriceListId: selectedPriceListId,
+        preferredCostCurrency,
+      });
       next[index] = {
         ...next[index],
         productId: product.id,
@@ -1495,6 +1548,37 @@ export default function QuotesClient({
 
   const handleAddItem = () => {
     setItems((prev) => [...prev, { ...EMPTY_ITEM }]);
+  };
+
+  const handleItemUnitPriceSourceChange = (
+    index: number,
+    source: SuggestedProductPriceCostCurrency,
+  ) => {
+    setItems((prev) => {
+      const next = [...prev];
+      const current = next[index];
+      if (!current) return prev;
+      const product = productMap.get(current.productId);
+      if (!product) {
+        next[index] = {
+          ...current,
+          unitPriceSource: source,
+        };
+        return next;
+      }
+      const suggestedPrice = getSuggestedProductPrice({
+        product,
+        preferredPriceListId: selectedPriceListId,
+        preferredCostCurrency: source,
+      });
+
+      next[index] = {
+        ...current,
+        unitPriceSource: source,
+        unitPrice: suggestedPrice ?? current.unitPrice,
+      };
+      return next;
+    });
   };
 
   const handleSelectedPriceListChange = (nextPriceListId: string) => {
@@ -2241,6 +2325,7 @@ export default function QuotesClient({
           qty: item.qty,
           unitPrice: item.unitPrice,
           taxRate: item.taxRate ?? "21",
+          unitPriceSource: null,
         })),
       );
       setQuoteView("new");
@@ -2890,6 +2975,8 @@ export default function QuotesClient({
               getProductMatches={getProductMatches}
               isProductMatchesLoading={isProductMatchesLoading}
               onItemChange={handleItemChange}
+              getItemPriceSuggestions={getItemPriceSuggestions}
+              onItemUnitPriceSourceChange={handleItemUnitPriceSourceChange}
               onOpenProductIndexChange={setOpenProductIndex}
               onProductActiveIndexChange={setProductActiveIndex}
               onProductKeyDown={handleProductKeyDown}

@@ -19,19 +19,35 @@ import {
 const DEFAULT_STOCK_PAGE_SIZE = 60;
 const MAX_STOCK_PAGE_SIZE = 200;
 
+const normalizeNullableNumericInput = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  return value;
+};
+
+const nullableNonNegativeNumber = z.preprocess(
+  normalizeNullableNumericInput,
+  z.union([z.coerce.number().min(0), z.null()]),
+);
+
+const nullableNumber = z.preprocess(
+  normalizeNullableNumericInput,
+  z.union([z.coerce.number(), z.null()]),
+);
+
 const stockPatchSchema = z.object({
   productId: z.string().min(1),
-  cost: z.union([z.coerce.number().min(0), z.null()]).optional(),
-  costUsd: z.union([z.coerce.number().min(0), z.null()]).optional(),
+  cost: nullableNonNegativeNumber.optional(),
+  costUsd: nullableNonNegativeNumber.optional(),
   priceListId: z.string().min(1).optional(),
-  price: z.union([z.coerce.number().min(0), z.null()]).optional(),
-  percentage: z.union([z.coerce.number(), z.null()]).optional(),
+  price: nullableNonNegativeNumber.optional(),
+  percentage: nullableNumber.optional(),
   prices: z
     .array(
       z.object({
         priceListId: z.string().min(1),
-        price: z.union([z.coerce.number().min(0), z.null()]),
-        percentage: z.union([z.coerce.number(), z.null()]).optional(),
+        price: nullableNonNegativeNumber,
+        percentage: nullableNumber.optional(),
       }),
     )
     .optional(),

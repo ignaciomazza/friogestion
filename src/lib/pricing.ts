@@ -4,6 +4,8 @@ type ProductListPrice = {
   percentage?: string | null;
 };
 
+export type SuggestedProductPriceCostCurrency = "ARS" | "USD";
+
 const toNumber = (value: string | null | undefined) => {
   if (!value) return null;
   const parsed = Number(value);
@@ -208,6 +210,7 @@ export const resolveSuggestedProductPrice = ({
   defaultPriceListId,
   usdRateArs,
   priceListOrderIds,
+  preferredCostCurrency,
 }: {
   prices: ProductListPrice[] | null | undefined;
   productCost?: string | null | undefined;
@@ -218,6 +221,10 @@ export const resolveSuggestedProductPrice = ({
   defaultPriceListId: string | null | undefined;
   usdRateArs?: number | null | undefined;
   priceListOrderIds?: string[] | null | undefined;
+  preferredCostCurrency?:
+    | SuggestedProductPriceCostCurrency
+    | null
+    | undefined;
 }) =>
   (() => {
     const chosenPriceListId = findChosenPriceListId({
@@ -226,18 +233,20 @@ export const resolveSuggestedProductPrice = ({
       customerPriceListId,
       defaultPriceListId,
     });
+    const orderedPriceListIds = priceListOrderIds ?? [];
+    const selectedCostCurrency = preferredCostCurrency === "USD" ? "USD" : "ARS";
+    const shouldTryUsdDynamicPrice =
+      Boolean(chosenPriceListId) &&
+      Boolean(usdRateArs && usdRateArs > 0) &&
+      Boolean(orderedPriceListIds.length) &&
+      (selectedCostCurrency === "USD" || toNumber(productCost) === null);
 
-    if (
-      chosenPriceListId &&
-      usdRateArs &&
-      toNumber(productCost) === null &&
-      priceListOrderIds?.length
-    ) {
+    if (shouldTryUsdDynamicPrice && chosenPriceListId && usdRateArs) {
       const dynamicPrice = deriveDynamicUsdListPrice({
         prices,
         chosenPriceListId,
         defaultPriceListId,
-        priceListOrderIds,
+        priceListOrderIds: orderedPriceListIds,
         productCostUsd,
         usdRateArs,
       });
@@ -248,7 +257,7 @@ export const resolveSuggestedProductPrice = ({
       chosenPriceListId &&
       findListPrice(prices, chosenPriceListId) === null &&
       productCost &&
-      priceListOrderIds?.length
+      orderedPriceListIds.length
     ) {
       const costArs = toNumber(validPrice(productCost));
       const dynamicPrice =
@@ -258,7 +267,7 @@ export const resolveSuggestedProductPrice = ({
               prices,
               chosenPriceListId,
               defaultPriceListId,
-              priceListOrderIds,
+              priceListOrderIds: orderedPriceListIds,
               baseCostArs: costArs,
             });
       if (dynamicPrice) return dynamicPrice;

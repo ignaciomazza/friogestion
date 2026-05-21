@@ -16,6 +16,7 @@ import {
   formatQuantityInput,
   normalizeDecimalInput,
 } from "@/lib/input-format";
+import type { SuggestedProductPriceCostCurrency } from "@/lib/pricing";
 import {
   getAdjustmentLabel,
   isCardInterestAdjustment,
@@ -30,6 +31,12 @@ import type {
   QuoteItemForm,
 } from "../types";
 import { formatProductLabel, formatUnit } from "../utils";
+
+type ItemPriceSuggestions = {
+  ars: string | null;
+  usd: string | null;
+  hasDualPriceChoices: boolean;
+};
 
 type NewQuoteFormProps = {
   customerSearch: string;
@@ -71,6 +78,11 @@ type NewQuoteFormProps = {
     index: number,
     field: keyof QuoteItemForm,
     value: string,
+  ) => void;
+  getItemPriceSuggestions: (item: QuoteItemForm) => ItemPriceSuggestions;
+  onItemUnitPriceSourceChange: (
+    index: number,
+    source: SuggestedProductPriceCostCurrency,
   ) => void;
   onOpenProductIndexChange: Dispatch<SetStateAction<number | null>>;
   onProductActiveIndexChange: Dispatch<SetStateAction<number>>;
@@ -131,6 +143,8 @@ export function NewQuoteForm({
   getProductMatches,
   isProductMatchesLoading,
   onItemChange,
+  getItemPriceSuggestions,
+  onItemUnitPriceSourceChange,
   onOpenProductIndexChange,
   onProductActiveIndexChange,
   onProductKeyDown,
@@ -364,7 +378,7 @@ export function NewQuoteForm({
                 <col />
                 <col className="w-28" />
                 <col className="w-48" />
-                <col className="w-28" />
+                <col className="w-32" />
                 <col className="w-48" />
                 <col className="w-14" />
               </colgroup>
@@ -392,6 +406,12 @@ export function NewQuoteForm({
                   const product = productMap.get(item.productId);
                   const isOpen = openProductIndex === index;
                   const productMatches = getProductMatches(item.productSearch);
+                  const itemPriceSuggestions = getItemPriceSuggestions(item);
+                  const unitPriceSource: SuggestedProductPriceCostCurrency =
+                    item.unitPriceSource === "USD" &&
+                    itemPriceSuggestions.hasDualPriceChoices
+                      ? "USD"
+                      : "ARS";
                   return (
                     <tr
                       key={`${item.productId}-${index}`}
@@ -539,20 +559,52 @@ export function NewQuoteForm({
                         />
                       </td>
                       <td className="align-top py-3 pr-3">
-                        <div className="relative">
-                          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
-                            $
-                          </span>
-                          <MoneyInput
-                            className="input no-spinner w-full pl-10 text-right tabular-nums"
-                            value={item.unitPrice}
-                            onValueChange={(nextValue) => {
-                              onItemChange(index, "unitPrice", nextValue);
-                            }}
-                            placeholder="0,00"
-                            maxDecimals={2}
-                            required
-                          />
+                        <div className="flex items-center gap-2">
+                          {itemPriceSuggestions.hasDualPriceChoices ? (
+                            <div className="inline-flex rounded-full border border-zinc-200 bg-white p-0.5 text-[10px] font-semibold">
+                              {(["ARS", "USD"] as const).map((source) => {
+                                const isActive = unitPriceSource === source;
+                                const title =
+                                  source === "ARS"
+                                    ? `Precio sugerido ARS: $${itemPriceSuggestions.ars ?? "-"}`
+                                    : `Precio sugerido USD: $${itemPriceSuggestions.usd ?? "-"}`;
+
+                                return (
+                                  <button
+                                    key={`${index}-${source}`}
+                                    type="button"
+                                    className={`rounded-full px-2 py-1 transition ${
+                                      isActive
+                                        ? "bg-sky-100 text-sky-900"
+                                        : "text-zinc-500 hover:bg-zinc-100"
+                                    }`}
+                                    onClick={() =>
+                                      onItemUnitPriceSourceChange(index, source)
+                                    }
+                                    aria-pressed={isActive}
+                                    title={title}
+                                  >
+                                    {source}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                          <div className="relative flex-1">
+                            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                              $
+                            </span>
+                            <MoneyInput
+                              className="input no-spinner w-full pl-10 text-right tabular-nums"
+                              value={item.unitPrice}
+                              onValueChange={(nextValue) => {
+                                onItemChange(index, "unitPrice", nextValue);
+                              }}
+                              placeholder="0,00"
+                              maxDecimals={2}
+                              required
+                            />
+                          </div>
                         </div>
                       </td>
                       <td className="align-top py-3 pr-3">

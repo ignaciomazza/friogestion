@@ -87,6 +87,26 @@ test("resolveSuggestedProductPrice keeps ARS list price when both costs exist", 
   assert.equal(result, "150.00");
 });
 
+test("resolveSuggestedProductPrice allows choosing USD-based list price when both costs exist", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: "130.00", percentage: "30.00" },
+      { priceListId: "special", price: "150.00", percentage: "15.3846" },
+    ],
+    productCost: "100.00",
+    productCostUsd: "10.00",
+    productPrice: "150.00",
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+    usdRateArs: 12,
+    priceListOrderIds: ["general", "special"],
+    preferredCostCurrency: "USD",
+  });
+
+  assert.equal(result, "180.00");
+});
+
 test("resolveSuggestedProductPrice uses stored percentages with USD-only cost", () => {
   const result = resolveSuggestedProductPrice({
     prices: [

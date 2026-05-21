@@ -35,6 +35,7 @@ export const EMPTY_ITEM: QuoteItemForm = {
   qty: "",
   unitPrice: "",
   taxRate: "21",
+  unitPriceSource: null,
 };
 
 export const QUOTE_TAX_RATE_OPTIONS = [
