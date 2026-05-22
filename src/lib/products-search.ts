@@ -105,6 +105,7 @@ const scoreTokenInTarget = (token: string, target: SearchTarget) => {
     return 102 * target.weight;
   }
   if (HAS_DIGIT_REGEX.test(token)) return 0;
+  if (token.length <= 2) return 0;
 
   const allowedDistance = maxTokenDistance(token.length);
   let bestDistance: number | null = null;

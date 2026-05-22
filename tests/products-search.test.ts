@@ -47,6 +47,22 @@ const PRODUCTS = [
     brand: "FrioSur",
     model: "R0",
   },
+  {
+    id: "p6",
+    name: "A.A LG ART COOL INVERTER",
+    sku: "AA-123",
+    purchaseCode: "LG-AC",
+    brand: "LG",
+    model: "AC-1",
+  },
+  {
+    id: "p7",
+    name: "Pesa Digital",
+    sku: "KG-100",
+    purchaseCode: "BAL-KG",
+    brand: "Medir",
+    model: "K-100",
+  },
 ];
 
 test("normalizeSearchText normaliza tildes, simbolos y espacios", () => {
@@ -88,4 +104,10 @@ test("rankProductsBySearchQuery exige match compacto para queries de codigo con 
   const ranked = rankProductsBySearchQuery(PRODUCTS, "218-3");
   assert.ok(ranked.some((product) => product.id === "p4"));
   assert.ok(!ranked.some((product) => product.id === "p5"));
+});
+
+test("rankProductsBySearchQuery no mezcla tokens cortos por fuzzy cuando hay separadores", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "kg-");
+  assert.ok(ranked.some((product) => product.id === "p7"));
+  assert.ok(!ranked.some((product) => product.id === "p6"));
 });
