@@ -13,7 +13,7 @@ import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import {
   normalizeSearchText,
-  rankProductsBySearchQuery,
+  scoreProductSearchMatch,
 } from "@/lib/products-search";
 
 const DEFAULT_STOCK_PAGE_SIZE = 60;
@@ -126,9 +126,11 @@ export async function GET(req: NextRequest) {
         where: productWhere,
         orderBy: productOrderBy(sort),
       });
-      const rankedProducts = rankProductsBySearchQuery(allProducts, query);
-      total = rankedProducts.length;
-      products = rankedProducts.slice(offset, offset + limit);
+      const matchedProducts = allProducts.filter(
+        (product) => scoreProductSearchMatch(product, query) !== null,
+      );
+      total = matchedProducts.length;
+      products = matchedProducts.slice(offset, offset + limit);
     } else {
       const [count, pagedProducts] = await Promise.all([
         prisma.product.count({ where: productWhere }),

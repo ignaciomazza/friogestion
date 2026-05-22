@@ -11,7 +11,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 import {
   normalizeSearchText,
-  rankProductsBySearchQuery,
+  scoreProductSearchMatch,
 } from "@/lib/products-search";
 
 const productSchema = z.object({
@@ -135,9 +135,11 @@ export async function GET(req: NextRequest) {
         where,
         orderBy,
       });
-      const rankedProducts = rankProductsBySearchQuery(allProducts, query);
-      const total = rankedProducts.length;
-      const pagedProducts = rankedProducts.slice(offset, offset + limit);
+      const matchedProducts = allProducts.filter(
+        (product) => scoreProductSearchMatch(product, query) !== null,
+      );
+      const total = matchedProducts.length;
+      const pagedProducts = matchedProducts.slice(offset, offset + limit);
       const nextOffset = offset + pagedProducts.length;
       const hasMore = nextOffset < total;
 
