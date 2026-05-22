@@ -1265,7 +1265,7 @@ export default function QuotesClient({
         const params = new URLSearchParams();
         params.set("limit", String(AUTOCOMPLETE_LIMIT));
         params.set("offset", "0");
-        params.set("sort", "az");
+        params.set("sort", query ? "relevance" : "az");
         params.set("includePrices", "1");
         if (query) {
           params.set("q", query);

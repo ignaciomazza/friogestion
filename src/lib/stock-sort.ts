@@ -1,4 +1,5 @@
 export const STOCK_SORT_VALUES = [
+  "relevance",
   "created-desc",
   "created-asc",
   "code-asc",

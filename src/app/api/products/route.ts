@@ -11,6 +11,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 import {
   normalizeSearchText,
+  rankProductsBySearchQuery,
   scoreProductSearchMatch,
 } from "@/lib/products-search";
 
@@ -103,6 +104,9 @@ const productOrderBy = (
       { id: "asc" },
     ];
   }
+  if (sort === "relevance") {
+    return [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
   return [{ createdAt: "desc" }, { id: "asc" }];
 };
 
@@ -135,9 +139,12 @@ export async function GET(req: NextRequest) {
         where,
         orderBy,
       });
-      const matchedProducts = allProducts.filter(
-        (product) => scoreProductSearchMatch(product, query) !== null,
-      );
+      const matchedProducts =
+        sort === "relevance"
+          ? rankProductsBySearchQuery(allProducts, query)
+          : allProducts.filter(
+              (product) => scoreProductSearchMatch(product, query) !== null,
+            );
       const total = matchedProducts.length;
       const pagedProducts = matchedProducts.slice(offset, offset + limit);
       const nextOffset = offset + pagedProducts.length;

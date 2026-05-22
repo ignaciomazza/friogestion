@@ -13,6 +13,7 @@ import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
 import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import {
   normalizeSearchText,
+  rankProductsBySearchQuery,
   scoreProductSearchMatch,
 } from "@/lib/products-search";
 
@@ -97,6 +98,9 @@ const productOrderBy = (
       { id: "asc" },
     ];
   }
+  if (sort === "relevance") {
+    return [{ name: "asc" }, { createdAt: "desc" }, { id: "asc" }];
+  }
 
   return [{ createdAt: "desc" }, { id: "asc" }];
 };
@@ -126,9 +130,12 @@ export async function GET(req: NextRequest) {
         where: productWhere,
         orderBy: productOrderBy(sort),
       });
-      const matchedProducts = allProducts.filter(
-        (product) => scoreProductSearchMatch(product, query) !== null,
-      );
+      const matchedProducts =
+        sort === "relevance"
+          ? rankProductsBySearchQuery(allProducts, query)
+          : allProducts.filter(
+              (product) => scoreProductSearchMatch(product, query) !== null,
+            );
       total = matchedProducts.length;
       products = matchedProducts.slice(offset, offset + limit);
     } else {

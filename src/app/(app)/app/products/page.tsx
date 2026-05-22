@@ -36,6 +36,7 @@ type ProductsResponse = {
 
 const PAGE_SIZE = 100;
 const PRODUCT_SORT_OPTIONS: Array<{ value: StockSort; label: string }> = [
+  { value: "relevance", label: "Proximidad" },
   { value: "created-desc", label: "Creacion reciente" },
   { value: "created-asc", label: "Creacion antigua" },
   { value: "code-asc", label: "Codigo A-Z" },
