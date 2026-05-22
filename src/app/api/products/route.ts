@@ -9,6 +9,10 @@ import { UNIT_VALUES } from "@/lib/units";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { normalizeStockSort, type StockSort } from "@/lib/stock-sort";
+import {
+  normalizeSearchText,
+  rankProductsBySearchQuery,
+} from "@/lib/products-search";
 
 const productSchema = z.object({
   name: z.string().min(2),
@@ -106,6 +110,7 @@ export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
     const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const normalizedQuery = normalizeSearchText(query);
     const limit = parseLimit(req.nextUrl.searchParams.get("limit"));
     const offset = parseOffset(req.nextUrl.searchParams.get("offset"));
     const sort = parseSort(req.nextUrl.searchParams.get("sort"));
@@ -120,21 +125,94 @@ export async function GET(req: NextRequest) {
 
     const where: Prisma.ProductWhereInput = {
       organizationId,
-      ...(query
-        ? {
-            OR: [
-              { name: { contains: query, mode: "insensitive" } },
-              { sku: { contains: query, mode: "insensitive" } },
-              { purchaseCode: { contains: query, mode: "insensitive" } },
-              { brand: { contains: query, mode: "insensitive" } },
-              { model: { contains: query, mode: "insensitive" } },
-            ],
-          }
-        : {}),
       ...(unit ? { unit } : {}),
     };
 
     const orderBy = productOrderBy(sort);
+
+    if (normalizedQuery) {
+      const allProducts = await prisma.product.findMany({
+        where,
+        orderBy,
+      });
+      const rankedProducts = rankProductsBySearchQuery(allProducts, query);
+      const total = rankedProducts.length;
+      const pagedProducts = rankedProducts.slice(offset, offset + limit);
+      const nextOffset = offset + pagedProducts.length;
+      const hasMore = nextOffset < total;
+
+      if (includePrices) {
+        const productIds = pagedProducts.map((product) => product.id);
+        const positionById = new Map(
+          productIds.map((productId, index) => [productId, index]),
+        );
+        const productsWithPrices = productIds.length
+          ? await prisma.product.findMany({
+              where: {
+                id: { in: productIds },
+              },
+              include: {
+                priceItems: {
+                  select: {
+                    priceListId: true,
+                    price: true,
+                    percentage: true,
+                  },
+                },
+              },
+            })
+          : [];
+
+        productsWithPrices.sort((a, b) => {
+          const aPosition = positionById.get(a.id) ?? 0;
+          const bPosition = positionById.get(b.id) ?? 0;
+          return aPosition - bPosition;
+        });
+
+        return NextResponse.json({
+          items: productsWithPrices.map((product) => ({
+            id: product.id,
+            name: product.name,
+            sku: product.sku,
+            purchaseCode: product.purchaseCode,
+            brand: product.brand,
+            model: product.model,
+            unit: product.unit,
+            cost: product.cost?.toString() ?? null,
+            costUsd: product.costUsd?.toString() ?? null,
+            price: product.price?.toString() ?? null,
+            isActive: product.isActive,
+            prices: product.priceItems.map((priceItem) => ({
+              priceListId: priceItem.priceListId,
+              price: priceItem.price?.toString() ?? null,
+              percentage: priceItem.percentage?.toString() ?? null,
+            })),
+          })),
+          total,
+          nextOffset: hasMore ? nextOffset : null,
+          hasMore,
+        });
+      }
+
+      return NextResponse.json({
+        items: pagedProducts.map((product) => ({
+          id: product.id,
+          name: product.name,
+          sku: product.sku,
+          purchaseCode: product.purchaseCode,
+          brand: product.brand,
+          model: product.model,
+          unit: product.unit,
+          cost: product.cost?.toString() ?? null,
+          costUsd: product.costUsd?.toString() ?? null,
+          price: product.price?.toString() ?? null,
+          isActive: product.isActive,
+        })),
+        total,
+        nextOffset: hasMore ? nextOffset : null,
+        hasMore,
+      });
+    }
 
     if (includePrices) {
       const [total, products] = await prisma.$transaction([
