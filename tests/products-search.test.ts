@@ -31,6 +31,22 @@ const PRODUCTS = [
     brand: "Térmico",
     model: "N-12",
   },
+  {
+    id: "p4",
+    name: "Marco Escotilla 218",
+    sku: "218-300",
+    purchaseCode: "X-218-3",
+    brand: "Series",
+    model: "M218",
+  },
+  {
+    id: "p5",
+    name: "Terminal Rotalock",
+    sku: "000-000",
+    purchaseCode: "R-000",
+    brand: "FrioSur",
+    model: "R0",
+  },
 ];
 
 test("normalizeSearchText normaliza tildes, simbolos y espacios", () => {
@@ -62,3 +78,14 @@ test("scoreProductSearchMatch tolera errores de tipeo por proximidad", () => {
   assert.ok((score ?? 0) > 0);
 });
 
+test("rankProductsBySearchQuery evita fuzzy numerico en busquedas con guion", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "300-");
+  assert.ok(ranked.some((product) => product.id === "p4"));
+  assert.ok(!ranked.some((product) => product.id === "p5"));
+});
+
+test("rankProductsBySearchQuery exige match compacto para queries de codigo con separador", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "218-3");
+  assert.ok(ranked.some((product) => product.id === "p4"));
+  assert.ok(!ranked.some((product) => product.id === "p5"));
+});

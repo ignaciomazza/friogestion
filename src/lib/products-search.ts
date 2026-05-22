@@ -23,6 +23,9 @@ type SearchTarget = {
 const SPACES_REGEX = /\s+/g;
 const DIACRITICS_REGEX = /[\u0300-\u036f]/g;
 const NON_ALNUM_REGEX = /[^\p{L}\p{N}]+/gu;
+const HAS_DIGIT_REGEX = /\d/;
+const NUMERIC_TOKEN_REGEX = /^\d+$/;
+const CODE_SEPARATOR_REGEX = /[-_/.\s]/;
 
 export const normalizeSearchText = (value: string) =>
   value
@@ -85,9 +88,11 @@ const levenshteinWithin = (a: string, b: string, maxDistance: number) => {
 
 const scoreTokenInTarget = (token: string, target: SearchTarget) => {
   if (!token || !target.value) return 0;
+  const isNumericToken = NUMERIC_TOKEN_REGEX.test(token);
 
   if (target.value === token) return 150 * target.weight;
   if (target.words.includes(token)) return 138 * target.weight;
+  if (isNumericToken && token.length === 1) return 0;
   if (target.value.startsWith(token)) return 124 * target.weight;
   if (target.value.includes(token)) return 110 * target.weight;
 
@@ -99,6 +104,7 @@ const scoreTokenInTarget = (token: string, target: SearchTarget) => {
   ) {
     return 102 * target.weight;
   }
+  if (HAS_DIGIT_REGEX.test(token)) return 0;
 
   const allowedDistance = maxTokenDistance(token.length);
   let bestDistance: number | null = null;
@@ -149,6 +155,23 @@ export const scoreProductSearchMatch = (
 
   const combinedCompact = compactSearchText(combined);
   const queryCompact = compactSearchText(normalizedQuery);
+  const normalizedSkuCompact = compactSearchText(normalizedSku);
+  const normalizedPurchaseCodeCompact = compactSearchText(normalizedPurchaseCode);
+  const normalizedModelCompact = compactSearchText(normalizedModel);
+  const codeCompacts = [
+    normalizedSkuCompact,
+    normalizedPurchaseCodeCompact,
+    normalizedModelCompact,
+  ].filter(Boolean);
+
+  const isCodeLikeQuery =
+    HAS_DIGIT_REGEX.test(rawQuery) && CODE_SEPARATOR_REGEX.test(rawQuery);
+  if (isCodeLikeQuery && queryCompact.length >= 3) {
+    const hasStrictCodeMatch = codeCompacts.some((value) =>
+      value.includes(queryCompact),
+    );
+    if (!hasStrictCodeMatch) return null;
+  }
 
   const targets: SearchTarget[] = [
     {
@@ -254,4 +277,3 @@ export const rankProductsBySearchQuery = <T extends SearchableProduct>(
 
   return ranked.map((entry) => entry.product);
 };
-
