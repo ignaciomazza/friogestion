@@ -40,6 +40,7 @@ const compactSearchText = (value: string) => value.replace(SPACES_REGEX, "");
 
 const maxTokenDistance = (tokenLength: number) => {
   if (tokenLength <= 4) return 1;
+  if (tokenLength <= 6) return 1;
   if (tokenLength <= 8) return 2;
   return 3;
 };
@@ -136,6 +137,9 @@ export const scoreProductSearchMatch = (
 
   const tokens = normalizedQuery.split(" ").filter(Boolean);
   if (tokens.length === 0) return null;
+  const areAllNumericTokens = tokens.every((token) =>
+    NUMERIC_TOKEN_REGEX.test(token),
+  );
 
   const normalizedName = normalizeSearchText(product.name ?? "");
   const normalizedSku = normalizeSearchText(product.sku ?? "");
@@ -166,7 +170,9 @@ export const scoreProductSearchMatch = (
   ].filter(Boolean);
 
   const isCodeLikeQuery =
-    HAS_DIGIT_REGEX.test(rawQuery) && CODE_SEPARATOR_REGEX.test(rawQuery);
+    areAllNumericTokens &&
+    HAS_DIGIT_REGEX.test(rawQuery) &&
+    CODE_SEPARATOR_REGEX.test(rawQuery);
   if (isCodeLikeQuery && queryCompact.length >= 3) {
     const hasStrictCodeMatch = codeCompacts.some((value) =>
       value.includes(queryCompact),

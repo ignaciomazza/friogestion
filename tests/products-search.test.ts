@@ -63,6 +63,30 @@ const PRODUCTS = [
     brand: "Medir",
     model: "K-100",
   },
+  {
+    id: "p8",
+    name: "1/4 FM X 14 MM HEMBRA ( P /MANGUERA R - 134 )",
+    sku: "204-353",
+    purchaseCode: "MANG-14",
+    brand: "Acme",
+    model: "R-134",
+  },
+  {
+    id: "p9",
+    name: "Canio para balanza",
+    sku: "KG-001",
+    purchaseCode: "CAN-1",
+    brand: "Medir",
+    model: "C-1",
+  },
+  {
+    id: "p10",
+    name: "A.A CANDY 2250 FRIO/CALOR INVERTER",
+    sku: "213-130",
+    purchaseCode: "AA-CAN",
+    brand: "Candy",
+    model: "A2250",
+  },
 ];
 
 test("normalizeSearchText normaliza tildes, simbolos y espacios", () => {
@@ -110,4 +134,20 @@ test("rankProductsBySearchQuery no mezcla tokens cortos por fuzzy cuando hay sep
   const ranked = rankProductsBySearchQuery(PRODUCTS, "kg-");
   assert.ok(ranked.some((product) => product.id === "p7"));
   assert.ok(!ranked.some((product) => product.id === "p6"));
+});
+
+test("rankProductsBySearchQuery no exige match de codigo cuando la query mezcla letras y fracciones", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "x 1/4");
+  assert.ok(ranked.some((product) => product.id === "p8"));
+});
+
+test("rankProductsBySearchQuery encuentra fracciones aunque se busquen compactadas", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "x 14");
+  assert.ok(ranked.some((product) => product.id === "p8"));
+});
+
+test("rankProductsBySearchQuery evita confundir canio con candy y prioriza token corto relevante", () => {
+  const ranked = rankProductsBySearchQuery(PRODUCTS, "kg canio");
+  assert.ok(ranked.some((product) => product.id === "p9"));
+  assert.ok(!ranked.some((product) => product.id === "p10"));
 });
