@@ -42,3 +42,16 @@ test("fixed discount is negative and labelled as discount", () => {
   assert.equal(result.amount, -50);
   assert.equal(getAdjustmentLabel(result.type, result.amount), "Descuento");
 });
+
+test("percentage discount over total uses subtotal + IVA as base", () => {
+  const result = calculateSaleAdjustment({
+    subtotal: 1000,
+    taxes: 210,
+    type: "DISCOUNT_TOTAL_PERCENT",
+    value: 10,
+  });
+
+  assert.equal(result.base, 1210);
+  assert.equal(result.amount, -121);
+  assert.equal(getAdjustmentLabel(result.type, result.amount), "Descuento");
+});

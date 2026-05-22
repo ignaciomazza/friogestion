@@ -3,6 +3,8 @@ export const EXTRA_CHARGE_TYPES = [
   "FIXED",
   "DISCOUNT_PERCENT",
   "DISCOUNT_FIXED",
+  "DISCOUNT_TOTAL_PERCENT",
+  "DISCOUNT_TOTAL_FIXED",
   "CARD_INTEREST_PERCENT",
   "CARD_INTEREST_FIXED",
 ] as const;
@@ -32,12 +34,26 @@ export function isPercentAdjustment(type?: string | null) {
   return (
     type === "PERCENT" ||
     type === "DISCOUNT_PERCENT" ||
+    type === "DISCOUNT_TOTAL_PERCENT" ||
     type === "CARD_INTEREST_PERCENT"
   );
 }
 
 export function isDiscountAdjustment(type?: string | null) {
+  return (
+    type === "DISCOUNT_PERCENT" ||
+    type === "DISCOUNT_FIXED" ||
+    type === "DISCOUNT_TOTAL_PERCENT" ||
+    type === "DISCOUNT_TOTAL_FIXED"
+  );
+}
+
+export function isSubtotalDiscountAdjustment(type?: string | null) {
   return type === "DISCOUNT_PERCENT" || type === "DISCOUNT_FIXED";
+}
+
+export function isTotalDiscountAdjustment(type?: string | null) {
+  return type === "DISCOUNT_TOTAL_PERCENT" || type === "DISCOUNT_TOTAL_FIXED";
 }
 
 export function isCardInterestAdjustment(type?: string | null) {
@@ -66,7 +82,7 @@ export function calculateSaleAdjustment({
   const safeValue = Number.isFinite(numericValue) ? Math.max(numericValue, 0) : 0;
   const safeSubtotal = Number.isFinite(subtotal) ? subtotal : 0;
   const safeTaxes = Number.isFinite(Number(taxes ?? 0)) ? Number(taxes ?? 0) : 0;
-  const cardInterestBase = round2(safeSubtotal + safeTaxes);
+  const totalWithTaxesBase = round2(safeSubtotal + safeTaxes);
 
   let amount = 0;
   if (normalizedType === "PERCENT") {
@@ -81,8 +97,14 @@ export function calculateSaleAdjustment({
   if (normalizedType === "DISCOUNT_FIXED") {
     amount = -safeValue;
   }
+  if (normalizedType === "DISCOUNT_TOTAL_PERCENT") {
+    amount = -(totalWithTaxesBase * (safeValue / 100));
+  }
+  if (normalizedType === "DISCOUNT_TOTAL_FIXED") {
+    amount = -safeValue;
+  }
   if (normalizedType === "CARD_INTEREST_PERCENT") {
-    amount = cardInterestBase * (safeValue / 100);
+    amount = totalWithTaxesBase * (safeValue / 100);
   }
   if (normalizedType === "CARD_INTEREST_FIXED") {
     amount = safeValue;
@@ -93,8 +115,9 @@ export function calculateSaleAdjustment({
     value: safeValue,
     amount: round2(amount),
     base:
-      normalizedType === "CARD_INTEREST_PERCENT"
-        ? cardInterestBase
+      normalizedType === "CARD_INTEREST_PERCENT" ||
+      normalizedType === "DISCOUNT_TOTAL_PERCENT"
+        ? totalWithTaxesBase
         : safeSubtotal,
     label: getAdjustmentLabel(normalizedType, amount),
   };

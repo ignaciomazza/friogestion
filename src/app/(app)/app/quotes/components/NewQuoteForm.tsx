@@ -20,8 +20,9 @@ import type { SuggestedProductPriceCostCurrency } from "@/lib/pricing";
 import {
   getAdjustmentLabel,
   isCardInterestAdjustment,
-  isDiscountAdjustment,
   isPercentAdjustment,
+  isSubtotalDiscountAdjustment,
+  isTotalDiscountAdjustment,
 } from "@/lib/sale-adjustments";
 import { QUOTE_TAX_RATE_OPTIONS } from "../constants";
 import type {
@@ -166,18 +167,25 @@ export function NewQuoteForm({
   const isPercentExtra = isPercentAdjustment(extraType);
   const adjustmentMode = isCardInterestAdjustment(extraType)
     ? "CARD_INTEREST"
-    : isDiscountAdjustment(extraType)
-      ? "DISCOUNT"
-      : extraType === "PERCENT" || extraType === "FIXED"
-        ? "SURCHARGE"
-        : "NONE";
+    : isSubtotalDiscountAdjustment(extraType)
+      ? "DISCOUNT_SUBTOTAL"
+      : isTotalDiscountAdjustment(extraType)
+        ? "DISCOUNT_TOTAL"
+        : extraType === "PERCENT" || extraType === "FIXED"
+          ? "SURCHARGE"
+          : "NONE";
   const extraSummaryLabel = getAdjustmentLabel(extraType, extraAmount);
   const nextTypeForUnit = (unit: "PERCENT" | "FIXED") => {
     if (adjustmentMode === "CARD_INTEREST") {
       return unit === "PERCENT" ? "CARD_INTEREST_PERCENT" : "CARD_INTEREST_FIXED";
     }
-    if (adjustmentMode === "DISCOUNT") {
+    if (adjustmentMode === "DISCOUNT_SUBTOTAL") {
       return unit === "PERCENT" ? "DISCOUNT_PERCENT" : "DISCOUNT_FIXED";
+    }
+    if (adjustmentMode === "DISCOUNT_TOTAL") {
+      return unit === "PERCENT"
+        ? "DISCOUNT_TOTAL_PERCENT"
+        : "DISCOUNT_TOTAL_FIXED";
     }
     return unit === "PERCENT" ? "PERCENT" : "FIXED";
   };
@@ -699,12 +707,26 @@ export function NewQuoteForm({
                 <button
                   type="button"
                   className={`toggle-pill ${
-                    adjustmentMode === "DISCOUNT" ? "toggle-pill-active" : ""
+                    adjustmentMode === "DISCOUNT_SUBTOTAL"
+                      ? "toggle-pill-active"
+                      : ""
                   }`}
                   onClick={() => onExtraTypeChange("DISCOUNT_PERCENT")}
-                  aria-pressed={adjustmentMode === "DISCOUNT"}
+                  aria-pressed={adjustmentMode === "DISCOUNT_SUBTOTAL"}
                 >
-                  Descuento
+                  Desc. subtotal
+                </button>
+                <button
+                  type="button"
+                  className={`toggle-pill ${
+                    adjustmentMode === "DISCOUNT_TOTAL"
+                      ? "toggle-pill-active"
+                      : ""
+                  }`}
+                  onClick={() => onExtraTypeChange("DISCOUNT_TOTAL_PERCENT")}
+                  aria-pressed={adjustmentMode === "DISCOUNT_TOTAL"}
+                >
+                  Desc. total
                 </button>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -783,6 +805,8 @@ export function NewQuoteForm({
                   ? "Sin ajustes aplicados."
                   : adjustmentMode === "CARD_INTEREST" && isPercentExtra
                     ? "El interes de tarjeta se calcula sobre subtotal + IVA."
+                    : adjustmentMode === "DISCOUNT_TOTAL" && isPercentExtra
+                      ? "El descuento porcentual se calcula sobre subtotal + IVA."
                     : isPercentExtra
                       ? "El porcentaje se aplica sobre el subtotal."
                       : "El importe fijo se suma o descuenta del total."}
