@@ -47,6 +47,14 @@ type IssueCreditNoteInput = {
   serviceDates?: ServiceDates | null;
 };
 
+type IssueDebitNoteInput = {
+  organizationId: string;
+  fiscalCreditNoteId: string;
+  pointOfSale?: number | null;
+  issueDate?: Date | null;
+  serviceDates?: ServiceDates | null;
+};
+
 type Totals = {
   net: number;
   iva: number;
@@ -59,6 +67,17 @@ const CURRENCY_MAP: Record<string, string> = {
   ARS: "PES",
   USD: "DOL",
 };
+
+function getDebitNoteDelegate() {
+  return (
+    prisma as unknown as {
+      fiscalDebitNote?: {
+        findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+        create: (args: unknown) => Promise<Record<string, unknown>>;
+      };
+    }
+  ).fiscalDebitNote;
+}
 
 function formatAfipDate(date: Date) {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -819,4 +838,220 @@ export async function issueCreditNote(input: IssueCreditNoteInput) {
       payloadAfip: payloadAfip as Prisma.JsonObject,
     },
   });
+}
+
+export async function issueDebitNote(input: IssueDebitNoteInput) {
+  const debitNoteDelegate = getDebitNoteDelegate();
+  if (!debitNoteDelegate) {
+    throw new Error("FISCAL_DEBIT_NOTE_MODEL_NOT_AVAILABLE");
+  }
+
+  const creditNote = await prisma.fiscalCreditNote.findFirst({
+    where: {
+      id: input.fiscalCreditNoteId,
+      organizationId: input.organizationId,
+    },
+    include: {
+      fiscalInvoice: {
+        include: {
+          sale: { include: { customer: true } },
+          organization: true,
+        },
+      },
+      sale: true,
+      organization: true,
+    },
+  });
+
+  if (!creditNote) {
+    throw new Error("FISCAL_CREDIT_NOTE_NOT_FOUND");
+  }
+
+  const existingDebitNote = await debitNoteDelegate.findFirst({
+    where: {
+      organizationId: input.organizationId,
+      fiscalCreditNoteId: creditNote.id,
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true },
+  });
+  if (existingDebitNote) {
+    throw new Error("FISCAL_CREDIT_NOTE_ALREADY_REVERTED");
+  }
+
+  if (creditNote.type !== "A" && creditNote.type !== "B") {
+    throw new Error("CREDIT_NOTE_TYPE_INVALID");
+  }
+
+  const afip = await getAfipClient(input.organizationId);
+  const voucherType = creditNote.type === "A" ? 2 : 7;
+  const pointOfSale =
+    input.pointOfSale ?? (creditNote.pointOfSale ? Number(creditNote.pointOfSale) : null);
+  if (!pointOfSale || !Number.isFinite(pointOfSale) || pointOfSale <= 0) {
+    throw new Error("SALES_POINT_INVALID");
+  }
+
+  const issueDate = input.issueDate ?? new Date();
+  ensureNotFuture(issueDate);
+
+  const payload = creditNote.payloadAfip as Record<string, unknown> | null;
+  const voucherData =
+    payload && typeof payload === "object"
+      ? (payload.voucherData as Record<string, unknown> | null)
+      : null;
+
+  if (!voucherData) {
+    throw new Error("CREDIT_NOTE_VOUCHER_DATA_MISSING");
+  }
+
+  if (Number(voucherData.Concepto ?? 1) !== 1) {
+    throw new Error("CONCEPTO_NOT_SUPPORTED");
+  }
+
+  if (input.serviceDates) {
+    throw new Error("SERVICE_DATES_NOT_SUPPORTED");
+  }
+
+  const docType = Number(voucherData.DocTipo);
+  const docNumber = Number(voucherData.DocNro);
+
+  const totals = {
+    total: Number(voucherData.ImpTotal),
+    net: Number(voucherData.ImpNeto),
+    iva: Number(voucherData.ImpIVA),
+    exempt: Number(voucherData.ImpOpEx ?? 0),
+    ivaItems: Array.isArray(voucherData.Iva) ? voucherData.Iva : [],
+  };
+
+  const monId = typeof voucherData.MonId === "string" ? voucherData.MonId : "PES";
+  const monCotiz =
+    typeof voucherData.MonCotiz === "number"
+      ? voucherData.MonCotiz
+      : Number(voucherData.MonCotiz ?? 1);
+
+  const condicionIva =
+    typeof voucherData.CondicionIVAReceptorId === "number"
+      ? voucherData.CondicionIVAReceptorId
+      : creditNote.type === "A"
+        ? 1
+        : 5;
+
+  const originalVoucherType = Number(
+    voucherData.CbteTipo ?? (creditNote.type === "A" ? 3 : 8)
+  );
+  if (!Number.isFinite(originalVoucherType)) {
+    throw new Error("CREDIT_NOTE_TYPE_INVALID");
+  }
+
+  const originalPointOfSale = Number(
+    voucherData.PtoVta ?? creditNote.pointOfSale ?? pointOfSale
+  );
+  if (!Number.isFinite(originalPointOfSale) || originalPointOfSale <= 0) {
+    throw new Error("SALES_POINT_INVALID");
+  }
+
+  const originalNumber = Number(
+    creditNote.creditNumber ?? voucherData.CbteDesde ?? voucherData.CbteHasta
+  );
+  if (!Number.isFinite(originalNumber)) {
+    throw new Error("CREDIT_NOTE_NUMBER_MISSING");
+  }
+
+  const voucherBase: Record<string, unknown> = {
+    CantReg: 1,
+    PtoVta: pointOfSale,
+    CbteTipo: voucherType,
+    Concepto: voucherData.Concepto ?? 1,
+    DocTipo: docType,
+    DocNro: docNumber,
+    CondicionIVAReceptorId: condicionIva,
+    CbteFch: formatAfipDate(issueDate),
+    ImpTotal: totals.total,
+    ImpTotConc: 0,
+    ImpNeto: totals.net,
+    ImpOpEx: totals.exempt,
+    ImpIVA: totals.iva,
+    ImpTrib: 0,
+    MonId: monId,
+    MonCotiz: monCotiz,
+    CbtesAsoc: [
+      {
+        Tipo: originalVoucherType,
+        PtoVta: originalPointOfSale,
+        Nro: originalNumber,
+        Cuit: Number(afip.CUIT),
+      },
+    ],
+  };
+
+  if (totals.ivaItems.length) {
+    voucherBase.Iva = totals.ivaItems;
+  }
+
+  const result = await afip.ElectronicBilling.createNextVoucher(voucherBase);
+  const cae = result?.CAE;
+  const caeDue = result?.CAEFchVto;
+  const voucherNumber = Number(
+    result?.voucherNumber ?? result?.voucher_number
+  );
+
+  if (!cae) {
+    throw new Error("AFIP_CAE_MISSING");
+  }
+
+  if (!Number.isFinite(voucherNumber)) {
+    throw new Error("AFIP_VOUCHER_NUMBER_MISSING");
+  }
+
+  voucherBase.CbteDesde = voucherNumber;
+  voucherBase.CbteHasta = voucherNumber;
+
+  const qrPayload = buildQrPayload({
+    issueDate,
+    cuit: Number(afip.CUIT),
+    pointOfSale,
+    voucherType,
+    voucherNumber,
+    total: totals.total,
+    monId,
+    monCotiz,
+    docType,
+    docNumber,
+    cae,
+  });
+
+  const qrBase64 = await buildQrDataUrl(qrPayload);
+
+  const payloadAfip = {
+    voucherData: voucherBase,
+    qrBase64,
+    serviceDates: null,
+  };
+
+  const created = await debitNoteDelegate.create({
+    data: {
+      organizationId: creditNote.organizationId,
+      saleId: creditNote.saleId,
+      fiscalInvoiceId: creditNote.fiscalInvoiceId,
+      fiscalCreditNoteId: creditNote.id,
+      debitNumber: voucherNumber.toString(),
+      pointOfSale: pointOfSale.toString(),
+      type: creditNote.type,
+      cae,
+      caeDueDate: caeDue ? new Date(caeDue) : null,
+      issuedAt: issueDate,
+      payloadAfip: payloadAfip as Prisma.JsonObject,
+    },
+  });
+  return created as {
+    id: string;
+    fiscalCreditNoteId: string | null;
+    fiscalInvoiceId: string | null;
+    debitNumber: string | null;
+    pointOfSale: string | null;
+    type: string | null;
+    cae: string | null;
+    issuedAt: Date | null;
+    createdAt: Date;
+  };
 }

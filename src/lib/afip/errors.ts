@@ -65,11 +65,21 @@ const ERROR_MESSAGES: Record<string, string> = {
   FISCAL_INVOICE_NOT_FOUND: "Factura no encontrada.",
   FISCAL_INVOICE_ALREADY_ANNULLED:
     "La factura ya tiene una nota de credito asociada.",
+  FISCAL_CREDIT_NOTE_NOT_FOUND: "Nota de credito no encontrada.",
+  FISCAL_CREDIT_NOTE_ALREADY_REVERTED:
+    "La nota de credito ya tiene una nota de debito asociada.",
+  FISCAL_DEBIT_NOTE_MODEL_NOT_AVAILABLE:
+    "El sistema no tiene habilitado el modelo de notas de debito. Ejecuta migraciones y prisma generate.",
   INVOICE_TYPE_INVALID: "Tipo de factura invalido.",
+  CREDIT_NOTE_TYPE_INVALID: "Tipo de nota de credito invalido.",
   INVOICE_VOUCHER_DATA_MISSING:
     "No hay datos de ARCA suficientes para emitir la nota de credito.",
+  CREDIT_NOTE_VOUCHER_DATA_MISSING:
+    "No hay datos de ARCA suficientes para emitir la nota de debito.",
   INVOICE_NUMBER_MISSING:
     "No se pudo determinar el numero del comprobante original.",
+  CREDIT_NOTE_NUMBER_MISSING:
+    "No se pudo determinar el numero de la nota de credito original.",
   FISCAL_ISSUE_JOB_ORG_CONFLICT:
     "Existe un conflicto de cola para esta venta. Reintente en unos segundos.",
 };

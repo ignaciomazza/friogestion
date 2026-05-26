@@ -62,6 +62,23 @@ export default async function BillingPage() {
     orderBy: { createdAt: "desc" },
     take: 200,
   });
+  const debitNoteDelegate = (
+    prisma as unknown as {
+      fiscalDebitNote?: {
+        findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+      };
+    }
+  ).fiscalDebitNote;
+  const debitNotes = debitNoteDelegate
+    ? await debitNoteDelegate.findMany({
+        where: {
+          organizationId: membership.organizationId,
+          fiscalCreditNoteId: { not: null },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      })
+    : [];
 
   const afipStatus = await getAfipStatus(membership.organizationId);
   let clientReady = false;
@@ -100,6 +117,33 @@ export default async function BillingPage() {
           id: note.id,
           fiscalInvoiceId: note.fiscalInvoiceId ?? "",
           number: note.creditNumber ?? null,
+          pointOfSale: note.pointOfSale ?? null,
+          type: note.type ?? null,
+          cae: note.cae ?? null,
+          issuedAt: note.issuedAt?.toISOString() ?? null,
+          createdAt: note.createdAt.toISOString(),
+        }))}
+      initialDebitNotes={debitNotes
+        .map((rawNote) => {
+          const note = rawNote as {
+            id: string;
+            fiscalCreditNoteId: string | null;
+            fiscalInvoiceId: string | null;
+            debitNumber: string | null;
+            pointOfSale: string | null;
+            type: string | null;
+            cae: string | null;
+            issuedAt: Date | null;
+            createdAt: Date;
+          };
+          return note;
+        })
+        .filter((note) => Boolean(note.fiscalCreditNoteId))
+        .map((note) => ({
+          id: note.id,
+          fiscalCreditNoteId: note.fiscalCreditNoteId ?? "",
+          fiscalInvoiceId: note.fiscalInvoiceId ?? null,
+          number: note.debitNumber ?? null,
           pointOfSale: note.pointOfSale ?? null,
           type: note.type ?? null,
           cae: note.cae ?? null,

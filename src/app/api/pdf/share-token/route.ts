@@ -18,6 +18,7 @@ const bodySchema = z.object({
     "deliveryNote",
     "fiscalInvoice",
     "creditNote",
+    "debitNote",
   ]),
   documentId: z.string().min(1),
 });
@@ -68,8 +69,23 @@ const findDocument = async (
       select: { id: true },
     });
   }
-
-  return prisma.fiscalCreditNote.findFirst({
+  if (documentType === "creditNote") {
+    return prisma.fiscalCreditNote.findFirst({
+      where: { id: documentId, organizationId },
+      select: { id: true },
+    });
+  }
+  const debitNoteDelegate = (
+    prisma as unknown as {
+      fiscalDebitNote?: {
+        findFirst: (args: unknown) => Promise<Record<string, unknown> | null>;
+      };
+    }
+  ).fiscalDebitNote;
+  if (!debitNoteDelegate) {
+    return null;
+  }
+  return debitNoteDelegate.findFirst({
     where: { id: documentId, organizationId },
     select: { id: true },
   });
@@ -118,7 +134,9 @@ const buildSharedPdfUrl = (
   const path =
     documentType === "fiscalInvoice"
       ? `/api/fiscal-invoices/${documentId}/pdf`
-      : `/api/credit-notes/${documentId}/pdf`;
+      : documentType === "creditNote"
+        ? `/api/credit-notes/${documentId}/pdf`
+        : `/api/debit-notes/${documentId}/pdf`;
   const url = new URL(path, req.nextUrl.origin);
   url.searchParams.set("shareToken", shareToken);
   return url.toString();

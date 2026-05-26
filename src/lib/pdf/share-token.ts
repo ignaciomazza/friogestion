@@ -10,7 +10,8 @@ export type PdfShareDocumentType =
   | "supplierPayment"
   | "deliveryNote"
   | "fiscalInvoice"
-  | "creditNote";
+  | "creditNote"
+  | "debitNote";
 
 type PdfSharePayload = {
   documentType: PdfShareDocumentType;
@@ -27,6 +28,7 @@ const PDF_SHARE_DOCUMENT_TYPES = new Set<string>([
   "deliveryNote",
   "fiscalInvoice",
   "creditNote",
+  "debitNote",
 ]);
 
 const getSecret = () => {

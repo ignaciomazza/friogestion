@@ -271,6 +271,7 @@ model Organization {
   stockMoves     StockMovement[]
   fiscalInvoices FiscalInvoice[]
   creditNotes    FiscalCreditNote[]
+  debitNotes     FiscalDebitNote[]
   installmentPlans InstallmentPlan[]
   fiscalConfig   OrganizationFiscalConfig?
   arcaJobs       ArcaConnectionJob[]
@@ -664,6 +665,7 @@ model Sale {
   fiscalInvoice FiscalInvoice?
   fiscalInvoiceIssueJob FiscalInvoiceIssueJob?
   creditNotes  FiscalCreditNote[]
+  debitNotes   FiscalDebitNote[]
   deliveryNotes DeliveryNote[]
 
   @@index([organizationId])
@@ -1030,6 +1032,7 @@ model FiscalInvoice {
   sale         Sale        @relation(fields: [saleId], references: [id])
   issueJob     FiscalInvoiceIssueJob?
   creditNotes  FiscalCreditNote[]
+  debitNotes   FiscalDebitNote[]
 
   @@index([organizationId])
 }
@@ -1090,10 +1093,38 @@ model FiscalCreditNote {
   organization  Organization  @relation(fields: [organizationId], references: [id])
   sale          Sale?          @relation(fields: [saleId], references: [id])
   fiscalInvoice FiscalInvoice? @relation(fields: [fiscalInvoiceId], references: [id])
+  debitNotes    FiscalDebitNote[]
 
   @@index([organizationId])
   @@index([saleId])
   @@index([fiscalInvoiceId])
+}
+
+model FiscalDebitNote {
+  id                 String   @id @default(cuid())
+  organizationId     String
+  saleId             String?
+  fiscalInvoiceId    String?
+  fiscalCreditNoteId String?  @unique
+  debitNumber        String?
+  pointOfSale        String?
+  type               String?
+  cae                String?
+  caeDueDate         DateTime?
+  issuedAt           DateTime?
+  payloadAfip        Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization    Organization    @relation(fields: [organizationId], references: [id])
+  sale            Sale?            @relation(fields: [saleId], references: [id])
+  fiscalInvoice   FiscalInvoice?   @relation(fields: [fiscalInvoiceId], references: [id])
+  fiscalCreditNote FiscalCreditNote? @relation(fields: [fiscalCreditNoteId], references: [id])
+
+  @@index([organizationId])
+  @@index([saleId])
+  @@index([fiscalInvoiceId])
+  @@index([fiscalCreditNoteId])
 }
 
 model OrganizationFiscalConfig {

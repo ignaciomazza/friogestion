@@ -44,6 +44,7 @@ type BillingClientProps = {
   initialSales: SaleRow[];
   initialIssuedInvoices: IssuedInvoiceRow[];
   initialCreditNotes: IssuedCreditNoteRow[];
+  initialDebitNotes: IssuedDebitNoteRow[];
   afipStatus: AfipStatus;
 };
 
@@ -86,6 +87,18 @@ type IssuedInvoicePayload = {
 type IssuedCreditNoteRow = {
   id: string;
   fiscalInvoiceId: string;
+  number: string | null;
+  pointOfSale: string | null;
+  type: string | null;
+  cae: string | null;
+  issuedAt: string | null;
+  createdAt: string;
+};
+
+type IssuedDebitNoteRow = {
+  id: string;
+  fiscalCreditNoteId: string;
+  fiscalInvoiceId: string | null;
   number: string | null;
   pointOfSale: string | null;
   type: string | null;
@@ -240,6 +253,7 @@ export default function BillingClient({
   initialSales,
   initialIssuedInvoices,
   initialCreditNotes,
+  initialDebitNotes,
   afipStatus,
 }: BillingClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
@@ -247,6 +261,8 @@ export default function BillingClient({
     useState<IssuedInvoiceRow[]>(initialIssuedInvoices);
   const [issuedCreditNotes, setIssuedCreditNotes] =
     useState<IssuedCreditNoteRow[]>(initialCreditNotes);
+  const [issuedDebitNotes, setIssuedDebitNotes] =
+    useState<IssuedDebitNoteRow[]>(initialDebitNotes);
   const [sortOrder, setSortOrder] = useState("newest");
   const [billingQuery, setBillingQuery] = useState("");
   const [issuedQuery, setIssuedQuery] = useState("");
@@ -267,9 +283,17 @@ export default function BillingClient({
     requiresIncomeTaxDeduction: false,
   });
   const [invoiceToCancel, setInvoiceToCancel] = useState<IssuedInvoiceRow | null>(null);
+  const [creditNoteStep, setCreditNoteStep] = useState<"FORM" | "CONFIRM">("FORM");
   const [creditPreview, setCreditPreview] = useState<CreditNotePreview | null>(null);
   const [creditPreviewStatus, setCreditPreviewStatus] = useState<string | null>(null);
   const [isIssuingCreditNote, setIsIssuingCreditNote] = useState(false);
+  const [creditNoteToRevert, setCreditNoteToRevert] = useState<{
+    invoice: IssuedInvoiceRow;
+    creditNote: IssuedCreditNoteRow;
+  } | null>(null);
+  const [debitNoteStep, setDebitNoteStep] = useState<"FORM" | "CONFIRM">("FORM");
+  const [debitPreviewStatus, setDebitPreviewStatus] = useState<string | null>(null);
+  const [isIssuingDebitNote, setIsIssuingDebitNote] = useState(false);
   const [arcaValidation, setArcaValidation] = useState<ArcaValidationState>({
     status: "idle",
     message: null,
@@ -347,6 +371,15 @@ export default function BillingClient({
     return map;
   }, [issuedCreditNotes]);
 
+  const debitNoteByCreditNoteId = useMemo(() => {
+    const map = new Map<string, IssuedDebitNoteRow>();
+    for (const note of issuedDebitNotes) {
+      if (!note.fiscalCreditNoteId || map.has(note.fiscalCreditNoteId)) continue;
+      map.set(note.fiscalCreditNoteId, note);
+    }
+    return map;
+  }, [issuedDebitNotes]);
+
   const billed = useMemo(
     () => sales.filter((sale) => sale.billingStatus === "BILLED"),
     [sales]
@@ -412,6 +445,7 @@ export default function BillingClient({
 
   const openCreditNoteModal = (invoice: IssuedInvoiceRow) => {
     setInvoiceToCancel(invoice);
+    setCreditNoteStep("FORM");
     setCreditPreview(null);
     setCreditPreviewStatus("Cargando datos de la factura...");
     setInvoiceStatus(null);
@@ -420,9 +454,26 @@ export default function BillingClient({
 
   const closeCreditNoteModal = () => {
     if (isIssuingCreditNote) return;
+    setCreditNoteStep("FORM");
     setInvoiceToCancel(null);
     setCreditPreview(null);
     setCreditPreviewStatus(null);
+  };
+
+  const openDebitNoteModal = (
+    invoice: IssuedInvoiceRow,
+    creditNote: IssuedCreditNoteRow,
+  ) => {
+    setCreditNoteToRevert({ invoice, creditNote });
+    setDebitNoteStep("FORM");
+    setDebitPreviewStatus(null);
+  };
+
+  const closeDebitNoteModal = () => {
+    if (isIssuingDebitNote) return;
+    setCreditNoteToRevert(null);
+    setDebitNoteStep("FORM");
+    setDebitPreviewStatus(null);
   };
 
   useEffect(() => {
@@ -596,6 +647,33 @@ export default function BillingClient({
   const linkedCreditNoteForSelectedInvoice = invoiceToCancel
     ? creditNoteByInvoiceId.get(invoiceToCancel.id) ?? null
     : null;
+  const linkedDebitNoteForSelectedCreditNote = creditNoteToRevert
+    ? debitNoteByCreditNoteId.get(creditNoteToRevert.creditNote.id) ?? null
+    : null;
+
+  const goToCreditNoteConfirmStep = () => {
+    if (!invoiceToCancel) return;
+    if (creditNoteByInvoiceId.has(invoiceToCancel.id)) {
+      setCreditPreviewStatus("La factura ya tiene una nota de credito emitida.");
+      return;
+    }
+    if (!creditPreview) {
+      setCreditPreviewStatus("Esperando datos de la factura para anular.");
+      return;
+    }
+    setCreditPreviewStatus(null);
+    setCreditNoteStep("CONFIRM");
+  };
+
+  const goToDebitNoteConfirmStep = () => {
+    if (!creditNoteToRevert) return;
+    if (debitNoteByCreditNoteId.has(creditNoteToRevert.creditNote.id)) {
+      setDebitPreviewStatus("La nota de credito ya tiene una nota de debito emitida.");
+      return;
+    }
+    setDebitPreviewStatus(null);
+    setDebitNoteStep("CONFIRM");
+  };
 
   const buildInvoiceDraft = (): InvoiceDraftResult => {
     if (!saleToInvoice) {
@@ -1171,6 +1249,10 @@ export default function BillingClient({
       setCreditPreviewStatus("La factura ya tiene una nota de credito emitida.");
       return;
     }
+    if (creditNoteStep !== "CONFIRM") {
+      setCreditPreviewStatus("Revisa la anulacion y confirma en el paso final.");
+      return;
+    }
 
     setIsIssuingCreditNote(true);
     setCreditPreviewStatus(null);
@@ -1220,6 +1302,7 @@ export default function BillingClient({
         "_blank",
         "noopener,noreferrer"
       );
+      setCreditNoteStep("FORM");
       setInvoiceToCancel(null);
       setCreditPreview(null);
       setCreditPreviewStatus(null);
@@ -1227,6 +1310,80 @@ export default function BillingClient({
       setCreditPreviewStatus("No se pudo emitir nota de credito");
     } finally {
       setIsIssuingCreditNote(false);
+    }
+  };
+
+  const submitDebitNote = async () => {
+    if (!creditNoteToRevert) return;
+    if (debitNoteByCreditNoteId.has(creditNoteToRevert.creditNote.id)) {
+      setDebitPreviewStatus("La nota de credito ya tiene una nota de debito emitida.");
+      return;
+    }
+    if (debitNoteStep !== "CONFIRM") {
+      setDebitPreviewStatus("Revisa la reversion y confirma en el paso final.");
+      return;
+    }
+
+    setIsIssuingDebitNote(true);
+    setDebitPreviewStatus(null);
+    setInvoiceStatus(null);
+    try {
+      const res = await fetch("/api/debit-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fiscalCreditNoteId: creditNoteToRevert.creditNote.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDebitPreviewStatus(data?.error ?? "No se pudo emitir nota de debito");
+        return;
+      }
+
+      if (typeof data?.id !== "string") {
+        setDebitPreviewStatus("No se pudo emitir nota de debito");
+        return;
+      }
+
+      const noteEntry: IssuedDebitNoteRow = {
+        id: data.id,
+        fiscalCreditNoteId:
+          typeof data?.fiscalCreditNoteId === "string"
+            ? data.fiscalCreditNoteId
+            : creditNoteToRevert.creditNote.id,
+        fiscalInvoiceId:
+          typeof data?.fiscalInvoiceId === "string" ? data.fiscalInvoiceId : null,
+        number: typeof data?.number === "string" ? data.number : null,
+        pointOfSale:
+          typeof data?.pointOfSale === "string" ? data.pointOfSale : null,
+        type: typeof data?.type === "string" ? data.type : null,
+        cae: typeof data?.cae === "string" ? data.cae : null,
+        issuedAt: typeof data?.issuedAt === "string" ? data.issuedAt : null,
+        createdAt:
+          typeof data?.createdAt === "string" ? data.createdAt : new Date().toISOString(),
+      };
+      setIssuedDebitNotes((prev) => [
+        noteEntry,
+        ...prev.filter((item) => item.id !== noteEntry.id),
+      ]);
+      setInvoiceStatus(
+        `NC ${formatVoucherLabel(
+          creditNoteToRevert.creditNote.pointOfSale,
+          creditNoteToRevert.creditNote.number,
+        )} revertida con nota de debito.`,
+      );
+      setInvoiceWarnings([]);
+      window.open(
+        `/api/debit-notes/${noteEntry.id}/pdf`,
+        "_blank",
+        "noopener,noreferrer",
+      );
+      setCreditNoteToRevert(null);
+      setDebitNoteStep("FORM");
+      setDebitPreviewStatus(null);
+    } catch {
+      setDebitPreviewStatus("No se pudo emitir nota de debito");
+    } finally {
+      setIsIssuingDebitNote(false);
     }
   };
 
@@ -1711,6 +1868,15 @@ export default function BillingClient({
                                 linkedCreditNote.number
                               )
                             : null;
+                          const linkedDebitNote = linkedCreditNote
+                            ? debitNoteByCreditNoteId.get(linkedCreditNote.id) ?? null
+                            : null;
+                          const debitNoteLabel = linkedDebitNote
+                            ? formatVoucherLabel(
+                                linkedDebitNote.pointOfSale,
+                                linkedDebitNote.number
+                              )
+                            : null;
 
                           return (
                             <tr
@@ -1784,9 +1950,45 @@ export default function BillingClient({
                                         customerPhone={invoice.customerPhone}
                                         className="btn btn-emerald text-xs"
                                       />
-                                      <span className="rounded-full border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-800">
-                                        Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""}
-                                      </span>
+                                      {linkedDebitNote ? (
+                                        <>
+                                          <span className="rounded-full border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-800">
+                                            Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""}
+                                          </span>
+                                          <a
+                                            className="btn btn-amber text-xs"
+                                            href={`/api/debit-notes/${linkedDebitNote.id}/pdf`}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                          >
+                                            <ArrowDownTrayIcon className="size-4" />
+                                            PDF ND
+                                          </a>
+                                          <WhatsappPdfButton
+                                            documentType="debitNote"
+                                            documentId={linkedDebitNote.id}
+                                            documentLabel={`Nota de debito ${
+                                              debitNoteLabel ?? ""
+                                            }`.trim()}
+                                            customerName={invoice.customerName}
+                                            customerPhone={invoice.customerPhone}
+                                            className="btn btn-emerald text-xs"
+                                          />
+                                          <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium text-emerald-800">
+                                            Revertida {debitNoteLabel ? `· ND ${debitNoteLabel}` : ""}
+                                          </span>
+                                        </>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="btn btn-amber text-xs"
+                                          onClick={() =>
+                                            openDebitNoteModal(invoice, linkedCreditNote)
+                                          }
+                                        >
+                                          Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""} · Revertir NC
+                                        </button>
+                                      )}
                                     </>
                                   ) : (
                                     <button
@@ -1841,6 +2043,23 @@ export default function BillingClient({
               >
                 Cerrar
               </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                {creditNoteStep === "FORM"
+                  ? "Paso 1 de 2 · Revisar anulacion"
+                  : "Paso 2 de 2 · Confirmar nota de credito"}
+              </span>
+              {creditNoteStep === "CONFIRM" ? (
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={() => setCreditNoteStep("FORM")}
+                  disabled={isIssuingCreditNote}
+                >
+                  Volver
+                </button>
+              ) : null}
             </div>
 
             {linkedCreditNoteForSelectedInvoice ? (
@@ -1918,6 +2137,11 @@ export default function BillingClient({
                 {creditPreviewStatus}
               </p>
             ) : null}
+            {creditNoteStep === "CONFIRM" ? (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+                Esta accion emitira la nota de credito y dejara la factura anulada.
+              </p>
+            ) : null}
 
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm text-zinc-600">
@@ -1930,20 +2154,177 @@ export default function BillingClient({
                       : "-"}
                 </span>
               </p>
+              {creditNoteStep === "FORM" ? (
+                <button
+                  type="button"
+                  className="btn btn-sky text-xs"
+                  onClick={goToCreditNoteConfirmStep}
+                  disabled={
+                    isIssuingCreditNote ||
+                    !creditPreview ||
+                    Boolean(linkedCreditNoteForSelectedInvoice)
+                  }
+                >
+                  Revisar anulacion
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-rose text-xs"
+                  onClick={submitCreditNote}
+                  disabled={
+                    isIssuingCreditNote ||
+                    !creditPreview ||
+                    Boolean(linkedCreditNoteForSelectedInvoice)
+                  }
+                >
+                  {isIssuingCreditNote
+                    ? "Confirmando..."
+                    : "Confirmar nota de credito"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {creditNoteToRevert ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
+          <div className="card w-full max-w-xl space-y-4 p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-zinc-900">
+                  Revertir nota de credito con nota de debito
+                </h3>
+                <p className="text-xs text-zinc-500">
+                  NC{" "}
+                  {formatVoucherLabel(
+                    creditNoteToRevert.creditNote.pointOfSale,
+                    creditNoteToRevert.creditNote.number,
+                  )}
+                  {creditNoteToRevert.creditNote.type
+                    ? ` · ${creditNoteToRevert.creditNote.type}`
+                    : ""}
+                </p>
+              </div>
               <button
                 type="button"
-                className="btn btn-rose text-xs"
-                onClick={submitCreditNote}
-                disabled={
-                  isIssuingCreditNote ||
-                  !creditPreview ||
-                  Boolean(linkedCreditNoteForSelectedInvoice)
-                }
+                className="btn text-xs"
+                onClick={closeDebitNoteModal}
+                disabled={isIssuingDebitNote}
               >
-                {isIssuingCreditNote
-                  ? "Confirmando..."
-                  : "Confirmar nota de credito"}
+                Cerrar
               </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                {debitNoteStep === "FORM"
+                  ? "Paso 1 de 2 · Revisar reversion"
+                  : "Paso 2 de 2 · Confirmar nota de debito"}
+              </span>
+              {debitNoteStep === "CONFIRM" ? (
+                <button
+                  type="button"
+                  className="btn text-xs"
+                  onClick={() => setDebitNoteStep("FORM")}
+                  disabled={isIssuingDebitNote}
+                >
+                  Volver
+                </button>
+              ) : null}
+            </div>
+
+            {linkedDebitNoteForSelectedCreditNote ? (
+              <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
+                Esta nota de credito ya fue revertida con la ND{" "}
+                {formatVoucherLabel(
+                  linkedDebitNoteForSelectedCreditNote.pointOfSale,
+                  linkedDebitNoteForSelectedCreditNote.number,
+                )}
+                .
+              </div>
+            ) : null}
+
+            <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
+              <p className="mt-1 text-xs text-zinc-600">
+                Se emitira una nota de debito asociada a la nota de credito para
+                revertir la anulacion de la factura original.
+              </p>
+              <div className="mt-3 grid gap-2 text-xs text-zinc-600 sm:grid-cols-2">
+                <p>
+                  <span className="font-medium text-zinc-900">Factura origen:</span>{" "}
+                  {formatVoucherLabel(
+                    creditNoteToRevert.invoice.pointOfSale,
+                    creditNoteToRevert.invoice.number,
+                  )}
+                </p>
+                <p>
+                  <span className="font-medium text-zinc-900">NC a revertir:</span>{" "}
+                  {formatVoucherLabel(
+                    creditNoteToRevert.creditNote.pointOfSale,
+                    creditNoteToRevert.creditNote.number,
+                  )}
+                </p>
+                <p>
+                  <span className="font-medium text-zinc-900">Cliente:</span>{" "}
+                  {creditNoteToRevert.invoice.customerName}
+                </p>
+                <p>
+                  <span className="font-medium text-zinc-900">Fecha NC:</span>{" "}
+                  {creditNoteToRevert.creditNote.issuedAt
+                    ? new Date(creditNoteToRevert.creditNote.issuedAt).toLocaleDateString("es-AR")
+                    : "-"}
+                </p>
+              </div>
+            </div>
+
+            {debitPreviewStatus ? (
+              <p className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-700">
+                {debitPreviewStatus}
+              </p>
+            ) : null}
+            {debitNoteStep === "CONFIRM" ? (
+              <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Esta accion emitira la nota de debito y revertira el efecto de la nota de credito.
+              </p>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-zinc-600">
+                Total a revertir:{" "}
+                <span className="font-semibold text-zinc-900">
+                  {creditNoteToRevert.invoice.total
+                    ? formatCurrencyARS(creditNoteToRevert.invoice.total)
+                    : "-"}
+                </span>
+              </p>
+              {debitNoteStep === "FORM" ? (
+                <button
+                  type="button"
+                  className="btn btn-sky text-xs"
+                  onClick={goToDebitNoteConfirmStep}
+                  disabled={
+                    isIssuingDebitNote ||
+                    Boolean(linkedDebitNoteForSelectedCreditNote)
+                  }
+                >
+                  Revisar reversion
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-amber text-xs"
+                  onClick={submitDebitNote}
+                  disabled={
+                    isIssuingDebitNote ||
+                    Boolean(linkedDebitNoteForSelectedCreditNote)
+                  }
+                >
+                  {isIssuingDebitNote
+                    ? "Confirmando..."
+                    : "Confirmar nota de debito"}
+                </button>
+              )}
             </div>
           </div>
         </div>
