@@ -87,14 +87,14 @@ export default function PurchasePaymentModeModal({
     );
 
   return (
-    <div className="fixed inset-0 z-[120] overflow-y-auto bg-zinc-950/25 p-3 sm:p-4">
+    <div className="fixed inset-0 z-[120] bg-zinc-950/25 p-2 sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="purchase-payment-mode-title"
-        className="mx-auto my-2 flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)] sm:my-4"
+        className="mx-auto flex h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)] sm:h-[calc(100dvh-2rem)]"
       >
-        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:max-h-[calc(100dvh-3rem)] sm:p-6">
+        <div className="shrink-0 p-5 pb-3 sm:p-6 sm:pb-4">
           <div className="space-y-1">
             <h2 id="purchase-payment-mode-title" className="text-lg font-semibold text-zinc-900">
               Ajustar pago de compra
@@ -104,8 +104,10 @@ export default function PurchasePaymentModeModal({
               {formatCurrencyARS(editingPaymentPurchase.total)}
             </p>
           </div>
+        </div>
 
-          <div className="mt-4 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 sm:px-6 sm:pb-6">
+          <div className="space-y-4">
             <div className="grid gap-2 sm:grid-cols-3">
               {paymentModeOptions.map((option) => {
                 const isActive = editingPaymentMode === option.value;
@@ -283,22 +285,22 @@ export default function PurchasePaymentModeModal({
           </div>
         </div>
 
-        <div className="border-t border-zinc-200/70 px-5 py-4 sm:px-6">
+        <div className="shrink-0 border-t border-zinc-200/70 px-5 py-4 sm:px-6">
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            className="btn w-full sm:mr-auto sm:w-auto"
-            onClick={onOpenSupplierGroupedPayment}
-            disabled={isUpdatingPaymentMode}
-          >
-            Pagar varias compras
-          </button>
-          <button type="button" className="btn w-full sm:w-auto" onClick={onClose} disabled={isUpdatingPaymentMode}>
-            Cancelar
-          </button>
-          <button type="button" className="btn btn-emerald w-full sm:w-auto" onClick={onSave} disabled={isUpdatingPaymentMode}>
-            {isUpdatingPaymentMode ? "Guardando..." : "Guardar ajuste"}
-          </button>
+            <button
+              type="button"
+              className="btn w-full sm:mr-auto sm:w-auto"
+              onClick={onOpenSupplierGroupedPayment}
+              disabled={isUpdatingPaymentMode}
+            >
+              Pagar varias compras
+            </button>
+            <button type="button" className="btn w-full sm:w-auto" onClick={onClose} disabled={isUpdatingPaymentMode}>
+              Cancelar
+            </button>
+            <button type="button" className="btn btn-emerald w-full sm:w-auto" onClick={onSave} disabled={isUpdatingPaymentMode}>
+              {isUpdatingPaymentMode ? "Guardando..." : "Guardar ajuste"}
+            </button>
           </div>
         </div>
       </div>

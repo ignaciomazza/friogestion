@@ -321,28 +321,28 @@ export default function SupplierGroupedPaymentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[121] overflow-y-auto bg-zinc-950/25 p-3 sm:p-4">
+    <div className="fixed inset-0 z-[121] bg-zinc-950/25 p-2 sm:p-4">
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="supplier-grouped-payment-title"
-        className="mx-auto my-2 flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)] sm:my-4"
+        className="mx-auto flex h-[calc(100dvh-1rem)] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)] sm:h-[calc(100dvh-2rem)]"
       >
-        <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-5 sm:max-h-[calc(100dvh-3rem)] sm:p-6">
-          <div className="space-y-1">
-            <h2
-              id="supplier-grouped-payment-title"
-              className="text-lg font-semibold text-zinc-900"
-            >
-              Pagar compras del proveedor
-            </h2>
-            <p className="text-xs text-zinc-500">
-              {purchase.supplierName} · desde{" "}
-              {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
-            </p>
-          </div>
+        <div className="shrink-0 p-5 pb-3 sm:p-6 sm:pb-4">
+          <h2
+            id="supplier-grouped-payment-title"
+            className="text-lg font-semibold text-zinc-900"
+          >
+            Pagar compras del proveedor
+          </h2>
+          <p className="mt-1 text-xs text-zinc-500">
+            {purchase.supplierName} · desde{" "}
+            {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
+          </p>
+        </div>
 
-          <div className="mt-4 space-y-4">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 sm:px-6 sm:pb-6">
+          <div className="space-y-4">
             <div className="flex flex-wrap items-end gap-3">
               <label className="field-stack min-w-0">
                 <span className="input-label">Fecha</span>
@@ -492,9 +492,10 @@ export default function SupplierGroupedPaymentModal({
                     );
                   })
                 ) : (
-                  <p className="text-xs text-zinc-500">
-                    No hay compras abiertas para este proveedor.
-                  </p>
+                  <div className="space-y-1 text-xs text-zinc-500">
+                    <p>No hay compras abiertas para este proveedor.</p>
+                    <p>El proveedor ya no tiene saldo pendiente para imputar.</p>
+                  </div>
                 )}
               </div>
             </div>
@@ -530,24 +531,24 @@ export default function SupplierGroupedPaymentModal({
           </div>
         </div>
 
-        <div className="border-t border-zinc-200/70 px-5 py-4 sm:px-6">
+        <div className="shrink-0 border-t border-zinc-200/70 px-5 py-4 sm:px-6">
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button
-            type="button"
-            className="btn w-full sm:w-auto"
-            onClick={onClose}
-            disabled={isSubmitting}
-          >
-            Cancelar
-          </button>
-          <button
-            type="button"
-            className="btn btn-emerald w-full sm:w-auto"
-            onClick={handleSubmit}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Registrando..." : "Registrar pago"}
-          </button>
+            <button
+              type="button"
+              className="btn w-full sm:w-auto"
+              onClick={onClose}
+              disabled={isSubmitting}
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn btn-emerald w-full sm:w-auto"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? "Registrando..." : "Registrar pago"}
+            </button>
           </div>
         </div>
       </div>

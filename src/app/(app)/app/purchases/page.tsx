@@ -439,6 +439,19 @@ const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode =>
 
 const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
   if (purchase.impactsAccount) {
+    const normalizedPaymentStatus = purchase.paymentStatus?.toUpperCase();
+    if (normalizedPaymentStatus === "PAID") {
+      return {
+        label: "Pagada",
+        tone: "immediate" as const,
+      };
+    }
+    if (normalizedPaymentStatus === "PARTIAL") {
+      return {
+        label: "Cta. Cte (Parcial)",
+        tone: "current-account" as const,
+      };
+    }
     return {
       label: "Cta. Cte",
       tone: "current-account" as const,
