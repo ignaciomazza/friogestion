@@ -12,6 +12,7 @@ type MoneyInputProps = Omit<
   maxDecimals?: number;
   prefix?: string;
   suffix?: string;
+  caretToEndOnFocus?: boolean;
 };
 
 const normalizeInteger = (value: string) => {
@@ -74,9 +75,30 @@ const formatMoneyDisplay = (value: string, prefix?: string, suffix?: string) => 
 
 export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(
   function MoneyInput(
-    { value, onValueChange, maxDecimals = 2, prefix, suffix, ...props },
+    {
+      value,
+      onValueChange,
+      maxDecimals = 2,
+      prefix,
+      suffix,
+      caretToEndOnFocus = false,
+      onFocus,
+      onMouseUp,
+      ...props
+    },
     ref
   ) {
+    const moveCaretToEnd = (input: HTMLInputElement) => {
+      const end = input.value.length;
+      requestAnimationFrame(() => {
+        try {
+          input.setSelectionRange(end, end);
+        } catch {
+          // No-op: some input types/browsers may not support selection updates.
+        }
+      });
+    };
+
     return (
       <input
         {...props}
@@ -86,6 +108,18 @@ export const MoneyInput = forwardRef<HTMLInputElement, MoneyInputProps>(
         value={formatMoneyDisplay(value, prefix, suffix)}
         onChange={(event) => {
           onValueChange(normalizeMoneyInput(event.target.value, maxDecimals));
+        }}
+        onFocus={(event) => {
+          onFocus?.(event);
+          if (caretToEndOnFocus) {
+            moveCaretToEnd(event.currentTarget);
+          }
+        }}
+        onMouseUp={(event) => {
+          onMouseUp?.(event);
+          if (caretToEndOnFocus) {
+            moveCaretToEnd(event.currentTarget);
+          }
         }}
       />
     );

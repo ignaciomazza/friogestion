@@ -163,6 +163,13 @@ export function NewQuoteForm({
   showSubmitAndCreateSale,
   submitLabel,
 }: NewQuoteFormProps) {
+  const formatTaxOptionLabel = (label: string) =>
+    label
+      .replaceAll("%", "")
+      .replace(/\s*\(0\)\s*/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
   const isConsumerFinalToggleDisabled = isResolvingConsumerFinal || isSubmitting;
   const isPercentExtra = isPercentAdjustment(extraType);
   const adjustmentMode = isCardInterestAdjustment(extraType)
@@ -380,15 +387,15 @@ export function NewQuoteForm({
               <p className="section-title">Items</p>
             </div>
           </div>
-          <div className="relative table-scroll lg:overflow-visible">
-            <table className="w-full min-w-[860px] table-fixed text-left text-sm lg:min-w-[940px]">
+          <div className="relative table-scroll pb-1 lg:overflow-visible">
+            <table className="w-full min-w-[820px] table-fixed text-left text-sm lg:min-w-[840px]">
               <colgroup>
                 <col />
-                <col className="w-28" />
-                <col className="w-48" />
+                <col className="w-[5.5rem]" />
                 <col className="w-32" />
-                <col className="w-48" />
-                <col className="w-14" />
+                <col className="w-32" />
+                <col className="w-32" />
+                <col className="w-11" />
               </colgroup>
               <thead className="text-xs uppercase tracking-wide text-zinc-500">
                 <tr>
@@ -427,9 +434,13 @@ export function NewQuoteForm({
                     >
                       <td className="align-top py-3 pr-3">
                         <div className="space-y-1">
-                          <div className="relative">
+                          <div className={`relative ${isOpen ? "z-[90]" : ""}`}>
                             <input
-                              className="input w-full min-w-[140px]"
+                              className={`input w-full min-w-[140px] transition-[min-width] duration-150 ${
+                                isOpen
+                                  ? "min-w-[min(550px,calc(100vw-9rem))]"
+                                  : ""
+                              }`}
                               value={item.productSearch}
                               onChange={(event) => {
                                 onItemChange(
@@ -482,7 +493,11 @@ export function NewQuoteForm({
                                     duration: 0.18,
                                     ease: [0.22, 1, 0.36, 1],
                                   }}
-                                  className="absolute z-[80] mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_18px_48px_-28px_rgba(24,24,27,0.6)] backdrop-blur-xl"
+                                  className={`absolute z-[80] mt-2 max-h-72 w-full overflow-y-auto rounded-2xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_18px_48px_-28px_rgba(24,24,27,0.6)] backdrop-blur-xl ${
+                                    isOpen
+                                      ? "min-w-[min(550px,calc(100vw-9rem))]"
+                                      : ""
+                                  }`}
                                 >
                                   {hasProducts ? (
                                     productMatches.length ? (
@@ -550,24 +565,27 @@ export function NewQuoteForm({
                         </div>
                       </td>
                       <td className="align-top py-3 pr-3">
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          className="input no-spinner w-full text-right tabular-nums"
-                          value={formatQuantityInput(item.qty)}
-                          onChange={(event) => {
-                            const nextValue = normalizeDecimalInput(
-                              event.target.value,
-                              3,
-                            );
-                            onItemChange(index, "qty", nextValue);
-                          }}
-                          placeholder="0"
-                          required
-                        />
+                        <div className="ml-auto w-full max-w-[5.75rem]">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            className="input no-spinner w-full text-right tabular-nums"
+                            value={formatQuantityInput(item.qty)}
+                            onChange={(event) => {
+                              const nextValue = normalizeDecimalInput(
+                                event.target.value,
+                                3,
+                              );
+                              onItemChange(index, "qty", nextValue);
+                            }}
+                            placeholder="0"
+                            maxLength={10}
+                            required
+                          />
+                        </div>
                       </td>
                       <td className="align-top py-3 pr-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center justify-end gap-1.5">
                           {itemPriceSuggestions.hasDualPriceChoices ? (
                             <div className="inline-flex rounded-full border border-zinc-200 bg-white p-0.5 text-[10px] font-semibold">
                               {(["ARS", "USD"] as const).map((source) => {
@@ -581,7 +599,7 @@ export function NewQuoteForm({
                                   <button
                                     key={`${index}-${source}`}
                                     type="button"
-                                    className={`rounded-full px-2 py-1 transition ${
+                                    className={`rounded-full px-1.5 py-1 transition ${
                                       isActive
                                         ? "bg-sky-100 text-sky-900"
                                         : "text-zinc-500 hover:bg-zinc-100"
@@ -598,18 +616,17 @@ export function NewQuoteForm({
                               })}
                             </div>
                           ) : null}
-                          <div className="relative flex-1">
-                            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-500">
-                              $
-                            </span>
+                          <div className="relative w-full">
                             <MoneyInput
-                              className="input no-spinner w-full pl-10 text-right tabular-nums"
+                              className="input no-spinner w-full text-right tabular-nums"
                               value={item.unitPrice}
                               onValueChange={(nextValue) => {
                                 onItemChange(index, "unitPrice", nextValue);
                               }}
                               placeholder="0,00"
                               maxDecimals={2}
+                              maxLength={18}
+                              prefix="$"
                               required
                             />
                           </div>
@@ -625,20 +642,24 @@ export function NewQuoteForm({
                         >
                           {QUOTE_TAX_RATE_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
-                              {option.label}
+                              {formatTaxOptionLabel(option.label)}
                             </option>
                           ))}
                         </select>
                       </td>
-                      <td className="align-top whitespace-nowrap py-3 pr-3 text-right tabular-nums text-zinc-900">
-                        {Number.isFinite(lineTotal)
-                          ? formatCurrencyARS(lineTotal)
-                          : "-"}
-                        {Number.isFinite(lineTax) ? (
-                          <p className="mt-1 text-[11px] text-zinc-500">
-                            IVA {formatCurrencyARS(lineTax)}
+                      <td className="align-top py-3 pr-3 text-right tabular-nums text-zinc-900">
+                        <div className="ml-auto w-full max-w-[9rem]">
+                          <p className="truncate">
+                            {Number.isFinite(lineTotal)
+                              ? formatCurrencyARS(lineTotal)
+                              : "-"}
                           </p>
-                        ) : null}
+                          {Number.isFinite(lineTax) ? (
+                            <p className="mt-1 truncate text-[11px] text-zinc-500">
+                              IVA {formatCurrencyARS(lineTax)}
+                            </p>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="align-top py-3 pr-2 text-right">
                         <button

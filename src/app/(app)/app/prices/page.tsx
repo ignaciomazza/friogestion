@@ -1,7 +1,7 @@
 "use client";
 
 import type { FocusEvent, FormEvent, MouseEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ToastContainer, toast, type Id as ToastId } from "react-toastify";
@@ -1783,6 +1783,8 @@ export default function PricesPage() {
     stockExitGuardAction?.type === "reload"
       ? "Recargar sin guardar"
       : "Salir sin guardar";
+  const shouldWrapPriceLists = priceLists.length > 2;
+  const wrappedTableColumnCount = STOCK_ACCOUNTING_ENABLED ? 5 : 4;
 
   if (!PRICE_PAGE_ENABLED) {
     return null;
@@ -1969,7 +1971,7 @@ export default function PricesPage() {
               • {products.length} de {totalProducts}
             </span>
           </h2>
-          <div className="flex w-full flex-wrap items-center justify-start gap-3 sm:w-auto sm:flex-nowrap sm:justify-end">
+          <div className="flex w-full flex-wrap items-center justify-start gap-3">
             <label className="inline-flex items-center gap-2">
               <span className="text-xs font-medium text-zinc-500">Ordenar</span>
               <select
@@ -1986,7 +1988,7 @@ export default function PricesPage() {
               </select>
             </label>
             <input
-              className="input min-w-[260px] flex-1 sm:w-96 sm:flex-none"
+              className="input min-w-[220px] flex-1 basis-[20rem]"
               ref={productSearchInputRef}
               value={query}
               onChange={(event) => handleSearchQueryChange(event.target.value)}
@@ -1994,22 +1996,58 @@ export default function PricesPage() {
             />
           </div>
         </div>
-        <div className="table-scroll">
-          <table className="w-full min-w-[860px] text-left text-xs">
+        <div className="pb-1">
+          <table className="w-full text-left text-xs">
             <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
               <tr>
-                <th className="w-[220px] py-2 pr-2">Producto</th>
-                <th className="w-[108px] py-2 pr-2">Costo ARS</th>
-                <th className="w-[108px] py-2 pr-2">Costo USD</th>
-                {priceLists.map((priceList) => (
-                  <th key={priceList.id} className="w-[112px] py-2 pr-2">
-                    {priceList.name}
-                  </th>
-                ))}
+                <th
+                  className={
+                    shouldWrapPriceLists
+                      ? "w-[30%] py-2 pr-2"
+                      : "w-[30%] min-w-[18rem] py-2 pr-2"
+                  }
+                >
+                  <span className="sr-only">Producto</span>
+                </th>
+                <th
+                  className={
+                    shouldWrapPriceLists
+                      ? "w-[14%] py-2 pr-2"
+                      : "w-[14%] min-w-[10rem] py-2 pr-2"
+                  }
+                >
+                  <span className="sr-only">Costo ARS</span>
+                </th>
+                <th
+                  className={
+                    shouldWrapPriceLists
+                      ? "w-[14%] py-2 pr-2"
+                      : "w-[14%] min-w-[10rem] py-2 pr-2"
+                  }
+                >
+                  <span className="sr-only">Costo USD</span>
+                </th>
+                {!shouldWrapPriceLists
+                  ? (
+                  priceLists.map((priceList) => (
+                    <th key={priceList.id} className="w-[94px] py-2 pr-2">
+                      {priceList.name}
+                    </th>
+                  ))
+                  )
+                  : null}
                 {STOCK_ACCOUNTING_ENABLED ? (
-                  <th className="w-[220px] py-2 pr-2">Stock</th>
+                  <th
+                    className={
+                      shouldWrapPriceLists
+                        ? "w-[18%] py-2 pr-2"
+                        : "w-[18%] min-w-[11rem] py-2 pr-2"
+                    }
+                  >
+                    Stock
+                  </th>
                 ) : null}
-                <th className="sticky right-0 z-20 w-[104px] bg-white/95 py-2 pr-2 text-right">
+                <th className="2xl:sticky 2xl:right-0 2xl:z-20 w-[92px] bg-white/95 py-2 pr-2 text-right">
                   <span className="sr-only">Acciones</span>
                 </th>
               </tr>
@@ -2068,7 +2106,8 @@ export default function PricesPage() {
                 const calculatorPriceBasisLabel =
                   calculatorPriceBasis === "usd" ? "USD" : "ARS";
                 const calculatorColSpan =
-                  priceLists.length + 2 + (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
+                  (shouldWrapPriceLists ? 3 : priceLists.length + 2) +
+                  (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
                 const hasRowChanges = rowState.hasRowChanges;
                 const isRowSavePending =
                   draft.saveStatus === "queued" ||
@@ -2094,13 +2133,591 @@ export default function PricesPage() {
                       ? "text-rose-700"
                       : "text-zinc-500";
 
+                if (shouldWrapPriceLists) {
+                  return (
+                    <Fragment key={product.id}>
+                      <tr
+                        key={`${product.id}-top`}
+                        className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
+                      >
+                        <td colSpan={wrappedTableColumnCount} className="py-3 pr-2 align-top">
+                          <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+                            <div className="min-w-0 flex-[2_1_16rem]">
+                              <p
+                                className="min-w-0 truncate text-sm font-medium text-zinc-900"
+                                onMouseEnter={(event) =>
+                                  updateProductTooltip(product, event)
+                                }
+                                onMouseMove={(event) =>
+                                  updateProductTooltip(product, event)
+                                }
+                                onMouseLeave={() => setProductTooltip(null)}
+                                aria-label={product.name}
+                              >
+                                {product.name}
+                              </p>
+                              <p className="max-w-full text-[11px] leading-snug text-zinc-500">
+                                {product.sku ? (
+                                  <>
+                                    <span className="break-all font-medium tabular-nums text-zinc-600">
+                                      {product.sku}
+                                    </span>
+                                    <span className="text-zinc-400"> · </span>
+                                  </>
+                                ) : null}
+                                {product.purchaseCode ? (
+                                  <>
+                                    <span className="break-all font-medium tabular-nums text-amber-700">
+                                      Compra {product.purchaseCode}
+                                    </span>
+                                    <span className="text-zinc-400"> · </span>
+                                  </>
+                                ) : null}
+                                <span className="whitespace-nowrap">
+                                  {formatUnit(product.unit)}
+                                </span>
+                              </p>
+                            </div>
+                            <div className="w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                Costo ARS
+                              </p>
+                              <MoneyInput
+                                className="input no-spinner w-full px-1.5 text-right tabular-nums"
+                                value={draft.cost}
+                                onValueChange={(nextValue) =>
+                                  updateEditableRow(product.id, {
+                                    cost: normalizeMoney(nextValue),
+                                  })
+                                }
+                                placeholder="0,00"
+                                maxDecimals={2}
+                                prefix="$"
+                                caretToEndOnFocus
+                                disabled={isRowSavePending}
+                              />
+                            </div>
+                            <div className="w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                Costo USD
+                              </p>
+                              <MoneyInput
+                                className="input no-spinner w-full px-1.5 text-right tabular-nums"
+                                value={draft.costUsd}
+                                onValueChange={(nextValue) =>
+                                  updateUsdCost(product.id, nextValue)
+                                }
+                                placeholder="0,00"
+                                maxDecimals={2}
+                                prefix="USD "
+                                caretToEndOnFocus
+                                disabled={isRowSavePending}
+                              />
+                            </div>
+                            {STOCK_ACCOUNTING_ENABLED ? (
+                              <div className="min-w-[12rem] flex-1">
+                                <div className="flex min-h-10 flex-wrap items-center gap-2">
+                                  <span className="font-semibold text-zinc-800">
+                                    {formatStock(product.stock)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                                    onClick={() =>
+                                      nudgeStockAdjustment(product.id, -1)
+                                    }
+                                    disabled={isRowSavePending}
+                                    aria-label="Restar una unidad"
+                                  >
+                                    <MinusIcon className="size-3.5" />
+                                  </button>
+                                  <input
+                                    className="input w-16 text-right tabular-nums"
+                                    inputMode="decimal"
+                                    value={draft.adjustmentQty}
+                                    onChange={(event) =>
+                                      updateEditableRow(product.id, {
+                                        adjustmentQty: normalizeSignedQuantity(
+                                          event.target.value,
+                                        ),
+                                        adjustmentRequestId: null,
+                                      })
+                                    }
+                                    disabled={isRowSavePending}
+                                    placeholder="+/-"
+                                  />
+                                  <button
+                                    type="button"
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-zinc-200 text-zinc-700 transition hover:bg-white"
+                                    onClick={() =>
+                                      nudgeStockAdjustment(product.id, 1)
+                                    }
+                                    disabled={isRowSavePending}
+                                    aria-label="Sumar una unidad"
+                                  >
+                                    <PlusIcon className="size-3.5" />
+                                  </button>
+                                  <span
+                                    className={`text-[11px] font-semibold ${adjustmentClass}`}
+                                  >
+                                    {adjustmentLabel}
+                                  </span>
+                                  <span className="text-zinc-500">=</span>
+                                  <span
+                                    className={`font-semibold ${
+                                      isProjectedNegative
+                                        ? "text-amber-700"
+                                        : "text-emerald-700"
+                                    }`}
+                                  >
+                                    {formatStock(projectedStock)}
+                                  </span>
+                                </div>
+                                {draft.warning ? (
+                                  <p className="mt-1 text-[11px] text-amber-700">
+                                    {draft.warning}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            <div className="ml-auto flex min-w-[5rem] flex-col items-end justify-end gap-0.5 self-end">
+                              <div className="flex items-center justify-end gap-2">
+                                <div className="group relative">
+                                  <button
+                                    type="button"
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-700 transition hover:bg-zinc-50"
+                                    onClick={() => toggleCalculatorRow(product.id)}
+                                    aria-label="Abrir simulador"
+                                    aria-pressed={false}
+                                  >
+                                    <CalculatorIcon className="size-4" />
+                                  </button>
+                                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                                    Simulador
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className={`btn h-10 w-10 p-0 ${
+                                    draft.saveStatus === "failed"
+                                      ? "btn-rose"
+                                      : "btn-emerald"
+                                  }`}
+                                  disabled={
+                                    draft.isSaving || isLoading || !hasRowChanges
+                                  }
+                                  onClick={() => saveRow(product.id)}
+                                  aria-label={saveButtonLabel}
+                                  title={saveButtonLabel}
+                                >
+                                  <CheckIcon className="size-4" />
+                                  <span className="sr-only">{saveButtonLabel}</span>
+                                </button>
+                              </div>
+                              {draft.saveStatus === "queued" ? (
+                                <span className="max-w-[96px] truncate text-[10px] font-semibold text-sky-700">
+                                  En cola
+                                </span>
+                              ) : null}
+                              {draft.saveStatus === "saving" ? (
+                                <span className="max-w-[96px] truncate text-[10px] font-semibold text-emerald-700">
+                                  Guardando
+                                </span>
+                              ) : null}
+                              {draft.saveStatus === "failed" && draft.saveError ? (
+                                <span
+                                  className="max-w-[96px] truncate text-[10px] font-semibold text-rose-700"
+                                  title={draft.saveError}
+                                >
+                                  Error
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                      {calculatorActive ? (
+                        <tr
+                          key={`${product.id}-calculator`}
+                          className="border-b border-zinc-200/60"
+                        >
+                          <td
+                            colSpan={wrappedTableColumnCount}
+                            className="pb-3 pr-2 pt-1 align-top"
+                          >
+                            <motion.div
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.18, ease: "easeOut" }}
+                              className="rounded-xl border border-zinc-200/80 bg-zinc-50/80 p-2.5"
+                            >
+                              <div className="flex flex-wrap items-end gap-2.5">
+                                <div className="min-w-[12rem] flex-[2_1_14rem] rounded-xl border border-zinc-200/80 bg-white px-2.5 py-1.5">
+                                  <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                    Costo base
+                                  </p>
+                                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
+                                    <span
+                                      className="cursor-help whitespace-nowrap font-semibold tabular-nums text-zinc-800 outline-none"
+                                      onMouseEnter={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                          `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                          calculatorUnitCost,
+                                          event,
+                                        )
+                                      }
+                                      onMouseMove={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                          `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                          calculatorUnitCost,
+                                          event,
+                                        )
+                                      }
+                                      onMouseLeave={() => setTaxTooltip(null)}
+                                      onFocus={(event) =>
+                                        focusTaxTooltip(
+                                          `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                          `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                          calculatorUnitCost,
+                                          event,
+                                        )
+                                      }
+                                      onBlur={() => setTaxTooltip(null)}
+                                      tabIndex={0}
+                                    >
+                                      {calculatorPriceBasisLabel}{" "}
+                                      {formatPriceWithIva21Preview(calculatorUnitCost)}
+                                      <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                        c/IVA 21
+                                      </span>
+                                    </span>
+                                    {calculatorPriceBasis === "usd" &&
+                                    hasCurrentCostUsd ? (
+                                      <>
+                                        <span className="text-zinc-300">/</span>
+                                        <span className="font-semibold tabular-nums text-zinc-600">
+                                          {formatUsdPreview(currentCostUsd)}
+                                        </span>
+                                      </>
+                                    ) : null}
+                                  </div>
+                                </div>
+                                {canUseCalculatorArs && canUseCalculatorUsd ? (
+                                  <div className="flex items-center rounded-xl border border-zinc-200/90 bg-white p-0.5 text-[11px] font-semibold shadow-[inset_0_0_0_1px_rgba(228,228,231,0.75)]">
+                                    {(["ars", "usd"] as const).map((basis) => {
+                                      const isActive =
+                                        calculatorPriceBasis === basis;
+                                      return (
+                                        <button
+                                          key={`${product.id}-calculator-${basis}`}
+                                          type="button"
+                                          className={`h-8 rounded-lg px-3 transition ${
+                                            isActive
+                                              ? "bg-sky-100 text-sky-900 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.75)]"
+                                              : "text-zinc-500 hover:bg-zinc-100"
+                                          }`}
+                                          onClick={() =>
+                                            setCalculatorPriceBasis(
+                                              product.id,
+                                              basis,
+                                            )
+                                          }
+                                          disabled={isRowSavePending}
+                                          aria-pressed={isActive}
+                                        >
+                                          {basis.toUpperCase()}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                                <div className="rounded-xl border border-zinc-200/90 bg-white px-2 py-1 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.7)]">
+                                  <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                    Cantidad
+                                  </p>
+                                  <div className="mt-0.5 flex items-center gap-1">
+                                    <button
+                                      type="button"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-zinc-100"
+                                      onClick={() =>
+                                        nudgeCalculatorQuantity(product.id, -1)
+                                      }
+                                      disabled={isRowSavePending}
+                                      aria-label="Restar cantidad"
+                                    >
+                                      <MinusIcon className="size-3.5" />
+                                    </button>
+                                    <MoneyInput
+                                      className="h-7 w-16 bg-transparent px-1 text-center text-xs font-semibold tabular-nums text-zinc-900 outline-none"
+                                      value={draft.calculatorQty}
+                                      onValueChange={(nextValue) =>
+                                        updateRow(product.id, {
+                                          calculatorQty:
+                                            normalizeCalculatorQuantity(
+                                              nextValue,
+                                            ),
+                                        })
+                                      }
+                                      placeholder="1"
+                                      maxDecimals={3}
+                                      disabled={isRowSavePending}
+                                      aria-label="Cantidad"
+                                    />
+                                    <button
+                                      type="button"
+                                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-zinc-100"
+                                      onClick={() =>
+                                        nudgeCalculatorQuantity(product.id, 1)
+                                      }
+                                      disabled={isRowSavePending}
+                                      aria-label="Sumar cantidad"
+                                    >
+                                      <PlusIcon className="size-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(130px,1fr))]">
+                                {priceLists.map((priceList) => {
+                                  const unitPrice =
+                                    calculatorPrices[priceList.id];
+                                  const finalPrice =
+                                    unitPrice !== null &&
+                                    calculatorQuantity !== null
+                                      ? normalizePriceNumber(
+                                          unitPrice * calculatorQuantity,
+                                        )
+                                      : null;
+
+                                  return (
+                                    <div
+                                      key={`${product.id}-${priceList.id}-calculator`}
+                                      className="rounded-xl border border-zinc-200/90 bg-white px-2.5 py-1.5"
+                                    >
+                                      <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                        {priceList.name}
+                                      </p>
+                                      <p
+                                        className="mt-0.5 cursor-help whitespace-nowrap text-sm font-semibold tabular-nums text-zinc-900 outline-none"
+                                        onMouseEnter={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-total`,
+                                            `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                            finalPrice,
+                                            event,
+                                          )
+                                        }
+                                        onMouseMove={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-total`,
+                                            `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                            finalPrice,
+                                            event,
+                                          )
+                                        }
+                                        onMouseLeave={() => setTaxTooltip(null)}
+                                        onFocus={(event) =>
+                                          focusTaxTooltip(
+                                            `${product.id}-${priceList.id}-total`,
+                                            `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                            finalPrice,
+                                            event,
+                                          )
+                                        }
+                                        onBlur={() => setTaxTooltip(null)}
+                                        tabIndex={0}
+                                      >
+                                        {formatPriceWithIva21Preview(finalPrice)}
+                                        <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                          c/IVA 21
+                                        </span>
+                                      </p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </motion.div>
+                          </td>
+                        </tr>
+                      ) : (
+                        <tr key={`${product.id}-lists`} className="border-b border-zinc-200/60">
+                            <td colSpan={wrappedTableColumnCount} className="pb-3 pr-2 pt-2 align-top">
+                            <div
+                              className="grid gap-x-2 gap-y-3 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]"
+                            >
+                              {priceLists.map((priceList) => {
+                                const priceFromArs =
+                                  rowState.computedPricesFromArs[priceList.id];
+                                const priceFromUsd =
+                                  rowState.computedPricesFromUsd[priceList.id];
+                                const showDualCostPrices =
+                                  rowState.currentCost !== null &&
+                                  rowState.currentCostUsdArs !== null &&
+                                  priceFromArs !== null &&
+                                  priceFromUsd !== null &&
+                                  normalizePriceNumber(priceFromArs) !==
+                                    normalizePriceNumber(priceFromUsd);
+
+                                return (
+                                  <div key={`${product.id}-${priceList.id}-wrap`} className="min-w-0">
+                                    <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                      {priceList.name}
+                                    </p>
+                                    <div className="relative mt-1">
+                                      <MoneyInput
+                                        className="input no-spinner w-full pl-2 pr-9 text-right tabular-nums"
+                                        value={draft.percentages[priceList.id] ?? ""}
+                                        onValueChange={(nextValue) =>
+                                          updateRowPercentage(
+                                            product.id,
+                                            priceList.id,
+                                            normalizePercent(nextValue),
+                                          )
+                                        }
+                                        placeholder="0"
+                                        maxDecimals={4}
+                                        caretToEndOnFocus
+                                        disabled={isRowSavePending}
+                                      />
+                                      <span
+                                        aria-hidden="true"
+                                        className="pointer-events-none absolute inset-y-1 right-1.5 inline-flex min-w-[1.3rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:right-2"
+                                      >
+                                        %
+                                      </span>
+                                    </div>
+                                    {showDualCostPrices ? (
+                                      <div className="mt-1 min-h-8 space-y-0.5 text-right text-[10px] font-medium tabular-nums leading-tight">
+                                        <p
+                                          className="cursor-help break-words text-zinc-700 outline-none"
+                                          onMouseEnter={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onMouseMove={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onMouseLeave={() => setTaxTooltip(null)}
+                                          onFocus={(event) =>
+                                            focusTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onBlur={() => setTaxTooltip(null)}
+                                          tabIndex={0}
+                                        >
+                                          ARS {formatPriceWithIva21Preview(priceFromArs)}
+                                          <span className="ml-1 font-semibold text-zinc-400">
+                                            c/IVA 21
+                                          </span>
+                                        </p>
+                                        <p
+                                          className="cursor-help break-words text-amber-700 outline-none"
+                                          onMouseEnter={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onMouseMove={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onMouseLeave={() => setTaxTooltip(null)}
+                                          onFocus={(event) =>
+                                            focusTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onBlur={() => setTaxTooltip(null)}
+                                          tabIndex={0}
+                                        >
+                                          USD {formatPriceWithIva21Preview(priceFromUsd)}
+                                          <span className="ml-1 font-semibold text-amber-600/70">
+                                            c/IVA 21
+                                          </span>
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <p
+                                        className="mt-1 min-h-4 cursor-help break-words text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
+                                        onMouseEnter={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onMouseMove={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onMouseLeave={() => setTaxTooltip(null)}
+                                        onFocus={(event) =>
+                                          focusTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onBlur={() => setTaxTooltip(null)}
+                                        tabIndex={0}
+                                      >
+                                        {formatPriceWithIva21Preview(
+                                          computedPrices[priceList.id],
+                                        )}
+                                        <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                          c/IVA 21
+                                        </span>
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                }
+
                 return (
                   <tr
                     key={product.id}
                     className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                   >
                     <td className="py-3 pr-2 align-top">
-                      <div className="flex min-h-10 max-w-[220px] min-w-0 flex-col justify-center gap-0.5">
+                      <div className="flex min-h-10 w-full min-w-0 flex-col justify-center gap-0.5">
                         <p
                           className="min-w-0 truncate text-sm font-medium text-zinc-900"
                           onMouseEnter={(event) =>
@@ -2146,182 +2763,198 @@ export default function PricesPage() {
                           initial={{ opacity: 0, y: -4 }}
                           animate={{ opacity: 1, y: 0 }}
                           transition={{ duration: 0.18, ease: "easeOut" }}
-                          className="flex min-h-[3.75rem] flex-wrap items-center gap-4"
+                          className="rounded-2xl border border-zinc-200/80 bg-zinc-50/80 p-2.5"
                         >
-                          <div className="flex items-center gap-2 pr-1 text-[11px]">
-                            <span className="text-zinc-400">Base</span>
-                            <span
-                              className="cursor-help whitespace-nowrap font-semibold tabular-nums text-zinc-800 outline-none"
-                              onMouseEnter={(event) =>
-                                updateTaxTooltip(
-                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
-                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
-                                  calculatorUnitCost,
-                                  event,
-                                )
-                              }
-                              onMouseMove={(event) =>
-                                updateTaxTooltip(
-                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
-                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
-                                  calculatorUnitCost,
-                                  event,
-                                )
-                              }
-                              onMouseLeave={() => setTaxTooltip(null)}
-                              onFocus={(event) =>
-                                focusTaxTooltip(
-                                  `${product.id}-calculator-cost-${calculatorPriceBasis}`,
-                                  `Costo unitario base ${calculatorPriceBasisLabel}`,
-                                  calculatorUnitCost,
-                                  event,
-                                )
-                              }
-                              onBlur={() => setTaxTooltip(null)}
-                              tabIndex={0}
-                            >
-                              {calculatorPriceBasisLabel}{" "}
-                              {formatPriceWithIva21Preview(calculatorUnitCost)}
-                              <span className="ml-1 text-[10px] font-semibold text-zinc-400">
-                                c/IVA 21
-                              </span>
-                            </span>
-                            {calculatorPriceBasis === "usd" &&
-                            hasCurrentCostUsd ? (
-                              <>
-                                <span className="text-zinc-300">/</span>
-                                <span className="font-semibold tabular-nums text-zinc-600">
-                                  {formatUsdPreview(currentCostUsd)}
-                                </span>
-                              </>
-                            ) : null}
-                          </div>
-                          {canUseCalculatorArs && canUseCalculatorUsd ? (
-                            <div className="flex items-center rounded-full bg-white p-0.5 text-[11px] font-semibold shadow-[inset_0_0_0_1px_rgba(228,228,231,0.95)]">
-                              {(["ars", "usd"] as const).map((basis) => {
-                                const isActive = calculatorPriceBasis === basis;
-                                return (
-                                  <button
-                                    key={`${product.id}-calculator-${basis}`}
-                                    type="button"
-                                    className={`h-7 rounded-full px-3 transition ${
-                                      isActive
-                                        ? "bg-sky-100 text-sky-900 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.75)]"
-                                        : "text-zinc-500 hover:bg-zinc-100"
-                                    }`}
-                                    onClick={() =>
-                                      setCalculatorPriceBasis(product.id, basis)
-                                    }
-                                    disabled={isRowSavePending}
-                                    aria-pressed={isActive}
-                                  >
-                                    {basis.toUpperCase()}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          ) : null}
-                          <div className="flex items-center gap-1 rounded-full bg-white p-0.5 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.9)]">
-                            <button
-                              type="button"
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
-                              onClick={() =>
-                                nudgeCalculatorQuantity(product.id, -1)
-                              }
-                              disabled={isRowSavePending}
-                              aria-label="Restar cantidad"
-                            >
-                              <MinusIcon className="size-3.5" />
-                            </button>
-                            <MoneyInput
-                              className="h-7 w-16 bg-transparent px-1 text-center text-xs font-semibold tabular-nums text-zinc-900 outline-none"
-                              value={draft.calculatorQty}
-                              onValueChange={(nextValue) =>
-                                updateRow(product.id, {
-                                  calculatorQty:
-                                    normalizeCalculatorQuantity(nextValue),
-                                })
-                              }
-                              placeholder="1"
-                              maxDecimals={3}
-                              disabled={isRowSavePending}
-                              aria-label="Cantidad"
-                            />
-                            <button
-                              type="button"
-                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-600 transition hover:bg-zinc-100"
-                              onClick={() =>
-                                nudgeCalculatorQuantity(product.id, 1)
-                              }
-                              disabled={isRowSavePending}
-                              aria-label="Sumar cantidad"
-                            >
-                              <PlusIcon className="size-3.5" />
-                            </button>
-                          </div>
-                          {priceLists.map((priceList) => {
-                            const unitPrice = calculatorPrices[priceList.id];
-                            const finalPrice =
-                              unitPrice !== null && calculatorQuantity !== null
-                                ? normalizePriceNumber(
-                                    unitPrice * calculatorQuantity,
-                                  )
-                                : null;
-
-                            return (
-                              <div
-                                key={`${product.id}-${priceList.id}-calculator`}
-                                className="flex min-w-[154px] items-center justify-between gap-2 rounded-full bg-white px-3 py-1.5 shadow-[inset_0_0_0_1px_rgba(212,212,216,0.95),0_8px_22px_-20px_rgba(39,39,42,0.45)]"
-                              >
-                                <span className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-400">
-                                  {priceList.name}
-                                </span>
+                          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto_auto] md:items-end">
+                            <div className="min-w-0 rounded-xl border border-zinc-200/80 bg-white px-2.5 py-1.5">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                Costo base
+                              </p>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px]">
                                 <span
-                                  className="cursor-help whitespace-nowrap text-sm font-semibold tabular-nums text-zinc-900 outline-none"
+                                  className="cursor-help whitespace-nowrap font-semibold tabular-nums text-zinc-800 outline-none"
                                   onMouseEnter={(event) =>
                                     updateTaxTooltip(
-                                      `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
-                                      finalPrice,
+                                      `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                      `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                      calculatorUnitCost,
                                       event,
                                     )
                                   }
                                   onMouseMove={(event) =>
                                     updateTaxTooltip(
-                                      `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
-                                      finalPrice,
+                                      `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                      `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                      calculatorUnitCost,
                                       event,
                                     )
                                   }
                                   onMouseLeave={() => setTaxTooltip(null)}
                                   onFocus={(event) =>
                                     focusTaxTooltip(
-                                      `${product.id}-${priceList.id}-total`,
-                                      `${priceList.name} total base ${calculatorPriceBasisLabel}`,
-                                      finalPrice,
+                                      `${product.id}-calculator-cost-${calculatorPriceBasis}`,
+                                      `Costo unitario base ${calculatorPriceBasisLabel}`,
+                                      calculatorUnitCost,
                                       event,
                                     )
                                   }
                                   onBlur={() => setTaxTooltip(null)}
                                   tabIndex={0}
                                 >
-                                  {formatPriceWithIva21Preview(finalPrice)}
+                                  {calculatorPriceBasisLabel}{" "}
+                                  {formatPriceWithIva21Preview(calculatorUnitCost)}
                                   <span className="ml-1 text-[10px] font-semibold text-zinc-400">
                                     c/IVA 21
                                   </span>
                                 </span>
+                                {calculatorPriceBasis === "usd" &&
+                                hasCurrentCostUsd ? (
+                                  <>
+                                    <span className="text-zinc-300">/</span>
+                                    <span className="font-semibold tabular-nums text-zinc-600">
+                                      {formatUsdPreview(currentCostUsd)}
+                                    </span>
+                                  </>
+                                ) : null}
                               </div>
-                            );
-                          })}
+                            </div>
+                            {canUseCalculatorArs && canUseCalculatorUsd ? (
+                              <div className="flex items-center self-end rounded-xl border border-zinc-200/90 bg-white p-0.5 text-[11px] font-semibold shadow-[inset_0_0_0_1px_rgba(228,228,231,0.75)]">
+                                {(["ars", "usd"] as const).map((basis) => {
+                                  const isActive = calculatorPriceBasis === basis;
+                                  return (
+                                    <button
+                                      key={`${product.id}-calculator-${basis}`}
+                                      type="button"
+                                      className={`h-8 rounded-lg px-3 transition ${
+                                        isActive
+                                          ? "bg-sky-100 text-sky-900 shadow-[inset_0_0_0_1px_rgba(125,211,252,0.75)]"
+                                          : "text-zinc-500 hover:bg-zinc-100"
+                                      }`}
+                                      onClick={() =>
+                                        setCalculatorPriceBasis(product.id, basis)
+                                      }
+                                      disabled={isRowSavePending}
+                                      aria-pressed={isActive}
+                                    >
+                                      {basis.toUpperCase()}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            ) : null}
+                            <div className="self-end rounded-xl border border-zinc-200/90 bg-white px-2 py-1 shadow-[inset_0_0_0_1px_rgba(228,228,231,0.7)]">
+                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                Cantidad
+                              </p>
+                              <div className="mt-0.5 flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-zinc-100"
+                                  onClick={() =>
+                                    nudgeCalculatorQuantity(product.id, -1)
+                                  }
+                                  disabled={isRowSavePending}
+                                  aria-label="Restar cantidad"
+                                >
+                                  <MinusIcon className="size-3.5" />
+                                </button>
+                                <MoneyInput
+                                  className="h-7 w-16 bg-transparent px-1 text-center text-xs font-semibold tabular-nums text-zinc-900 outline-none"
+                                  value={draft.calculatorQty}
+                                  onValueChange={(nextValue) =>
+                                    updateRow(product.id, {
+                                      calculatorQty:
+                                        normalizeCalculatorQuantity(nextValue),
+                                    })
+                                  }
+                                  placeholder="1"
+                                  maxDecimals={3}
+                                  disabled={isRowSavePending}
+                                  aria-label="Cantidad"
+                                />
+                                <button
+                                  type="button"
+                                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-zinc-100"
+                                  onClick={() =>
+                                    nudgeCalculatorQuantity(product.id, 1)
+                                  }
+                                  disabled={isRowSavePending}
+                                  aria-label="Sumar cantidad"
+                                >
+                                  <PlusIcon className="size-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-2 grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(135px,1fr))]">
+                            {priceLists.map((priceList) => {
+                              const unitPrice = calculatorPrices[priceList.id];
+                              const finalPrice =
+                                unitPrice !== null && calculatorQuantity !== null
+                                  ? normalizePriceNumber(
+                                      unitPrice * calculatorQuantity,
+                                    )
+                                  : null;
+
+                              return (
+                                <div
+                                  key={`${product.id}-${priceList.id}-calculator`}
+                                  className="rounded-xl border border-zinc-200/90 bg-white px-2.5 py-1.5"
+                                >
+                                  <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                    {priceList.name}
+                                  </p>
+                                  <p
+                                    className="mt-0.5 cursor-help whitespace-nowrap text-sm font-semibold tabular-nums text-zinc-900 outline-none"
+                                    onMouseEnter={(event) =>
+                                      updateTaxTooltip(
+                                        `${product.id}-${priceList.id}-total`,
+                                        `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                        finalPrice,
+                                        event,
+                                      )
+                                    }
+                                    onMouseMove={(event) =>
+                                      updateTaxTooltip(
+                                        `${product.id}-${priceList.id}-total`,
+                                        `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                        finalPrice,
+                                        event,
+                                      )
+                                    }
+                                    onMouseLeave={() => setTaxTooltip(null)}
+                                    onFocus={(event) =>
+                                      focusTaxTooltip(
+                                        `${product.id}-${priceList.id}-total`,
+                                        `${priceList.name} total base ${calculatorPriceBasisLabel}`,
+                                        finalPrice,
+                                        event,
+                                      )
+                                    }
+                                    onBlur={() => setTaxTooltip(null)}
+                                    tabIndex={0}
+                                  >
+                                    {formatPriceWithIva21Preview(finalPrice)}
+                                    <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                      c/IVA 21
+                                    </span>
+                                  </p>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </motion.div>
                       </td>
                     ) : (
                       <>
                         <td className="py-3 pr-2 align-top">
-                          <div className="w-24 space-y-1">
+                          <div className="mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                              Costo ARS
+                            </p>
                             <MoneyInput
-                              className="input no-spinner w-full px-2 text-right tabular-nums"
+                              className="input no-spinner w-full px-1.5 text-right tabular-nums"
                               value={draft.cost}
                               onValueChange={(nextValue) =>
                                 updateEditableRow(product.id, {
@@ -2331,6 +2964,7 @@ export default function PricesPage() {
                               placeholder="0,00"
                               maxDecimals={2}
                               prefix="$"
+                              caretToEndOnFocus
                               disabled={isRowSavePending}
                             />
                             <span
@@ -2340,9 +2974,12 @@ export default function PricesPage() {
                           </div>
                         </td>
                         <td className="py-3 pr-2 align-top">
-                          <div className="w-24 space-y-1">
+                          <div className="mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1">
+                            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                              Costo USD
+                            </p>
                             <MoneyInput
-                              className="input no-spinner w-full px-2 text-right tabular-nums"
+                              className="input no-spinner w-full px-1.5 text-right tabular-nums"
                               value={draft.costUsd}
                               onValueChange={(nextValue) =>
                                 updateUsdCost(product.id, nextValue)
@@ -2350,6 +2987,7 @@ export default function PricesPage() {
                               placeholder="0,00"
                               maxDecimals={2}
                               prefix="USD "
+                              caretToEndOnFocus
                               disabled={isRowSavePending}
                             />
                             <span
@@ -2358,165 +2996,337 @@ export default function PricesPage() {
                             />
                           </div>
                         </td>
-                        {priceLists.map((priceList) => {
-                          const priceFromArs =
-                            rowState.computedPricesFromArs[priceList.id];
-                          const priceFromUsd =
-                            rowState.computedPricesFromUsd[priceList.id];
-                          const showDualCostPrices =
-                            rowState.currentCost !== null &&
-                            rowState.currentCostUsdArs !== null &&
-                            priceFromArs !== null &&
-                            priceFromUsd !== null &&
-                            normalizePriceNumber(priceFromArs) !==
-                              normalizePriceNumber(priceFromUsd);
-
-                          return (
-                            <td
-                              key={`${product.id}-${priceList.id}`}
-                              className="py-3 pr-2 align-top"
+                        {shouldWrapPriceLists ? (
+                          <td className="py-3 pr-2 align-top">
+                            <div
+                              className="grid gap-2"
+                              style={{
+                                gridTemplateColumns: `repeat(${priceLists.length}, minmax(0, 1fr))`,
+                              }}
                             >
-                              <div className="w-28 space-y-1">
-                                <MoneyInput
-                                  className="input no-spinner w-full px-2 text-right tabular-nums"
-                                  value={draft.percentages[priceList.id] ?? ""}
-                                  onValueChange={(nextValue) =>
-                                    updateRowPercentage(
-                                      product.id,
-                                      priceList.id,
-                                      normalizePercent(nextValue),
-                                    )
-                                  }
-                                  placeholder="0"
-                                  maxDecimals={4}
-                                  suffix="%"
-                                  disabled={isRowSavePending}
-                                />
-                                {showDualCostPrices ? (
-                                  <div className="min-h-8 space-y-0.5 text-right text-[10px] font-medium tabular-nums leading-tight">
-                                    <p
-                                      className="cursor-help whitespace-nowrap text-zinc-700 outline-none"
-                                      onMouseEnter={(event) =>
-                                        updateTaxTooltip(
-                                          `${product.id}-${priceList.id}-ars-unit`,
-                                          `Precio ${priceList.name} base ARS`,
-                                          priceFromArs,
-                                          event,
-                                        )
-                                      }
-                                      onMouseMove={(event) =>
-                                        updateTaxTooltip(
-                                          `${product.id}-${priceList.id}-ars-unit`,
-                                          `Precio ${priceList.name} base ARS`,
-                                          priceFromArs,
-                                          event,
-                                        )
-                                      }
-                                      onMouseLeave={() => setTaxTooltip(null)}
-                                      onFocus={(event) =>
-                                        focusTaxTooltip(
-                                          `${product.id}-${priceList.id}-ars-unit`,
-                                          `Precio ${priceList.name} base ARS`,
-                                          priceFromArs,
-                                          event,
-                                        )
-                                      }
-                                      onBlur={() => setTaxTooltip(null)}
-                                      tabIndex={0}
-                                    >
-                                      ARS{" "}
-                                      {formatPriceWithIva21Preview(
-                                        priceFromArs,
-                                      )}
-                                      <span className="ml-1 font-semibold text-zinc-400">
-                                        c/IVA
-                                      </span>
+                              {priceLists.map((priceList) => {
+                                const priceFromArs =
+                                  rowState.computedPricesFromArs[priceList.id];
+                                const priceFromUsd =
+                                  rowState.computedPricesFromUsd[priceList.id];
+                                const showDualCostPrices =
+                                  rowState.currentCost !== null &&
+                                  rowState.currentCostUsdArs !== null &&
+                                  priceFromArs !== null &&
+                                  priceFromUsd !== null &&
+                                  normalizePriceNumber(priceFromArs) !==
+                                    normalizePriceNumber(priceFromUsd);
+
+                                return (
+                                  <div key={`${product.id}-${priceList.id}`} className="min-w-0">
+                                    <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                                      {priceList.name}
                                     </p>
-                                    <p
-                                      className="cursor-help whitespace-nowrap text-amber-700 outline-none"
-                                      onMouseEnter={(event) =>
-                                        updateTaxTooltip(
-                                          `${product.id}-${priceList.id}-usd-unit`,
-                                          `Precio ${priceList.name} base USD`,
-                                          priceFromUsd,
-                                          event,
-                                        )
-                                      }
-                                      onMouseMove={(event) =>
-                                        updateTaxTooltip(
-                                          `${product.id}-${priceList.id}-usd-unit`,
-                                          `Precio ${priceList.name} base USD`,
-                                          priceFromUsd,
-                                          event,
-                                        )
-                                      }
-                                      onMouseLeave={() => setTaxTooltip(null)}
-                                      onFocus={(event) =>
-                                        focusTaxTooltip(
-                                          `${product.id}-${priceList.id}-usd-unit`,
-                                          `Precio ${priceList.name} base USD`,
-                                          priceFromUsd,
-                                          event,
-                                        )
-                                      }
-                                      onBlur={() => setTaxTooltip(null)}
-                                      tabIndex={0}
-                                    >
-                                      USD{" "}
-                                      {formatPriceWithIva21Preview(
-                                        priceFromUsd,
-                                      )}
-                                      <span className="ml-1 font-semibold text-amber-600/70">
-                                        c/IVA
+                                    <div className="relative mt-1">
+                                      <MoneyInput
+                                        className="input no-spinner w-full pl-2 pr-9 text-right tabular-nums"
+                                        value={draft.percentages[priceList.id] ?? ""}
+                                        onValueChange={(nextValue) =>
+                                          updateRowPercentage(
+                                            product.id,
+                                            priceList.id,
+                                            normalizePercent(nextValue),
+                                          )
+                                        }
+                                        placeholder="0"
+                                        maxDecimals={4}
+                                        caretToEndOnFocus
+                                        disabled={isRowSavePending}
+                                      />
+                                      <span
+                                        aria-hidden="true"
+                                        className="pointer-events-none absolute inset-y-1 right-1.5 inline-flex min-w-[1.3rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:right-2"
+                                      >
+                                        %
                                       </span>
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <p
-                                    className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
-                                    onMouseEnter={(event) =>
-                                      updateTaxTooltip(
-                                        `${product.id}-${priceList.id}-unit`,
-                                        `Precio ${priceList.name}`,
-                                        computedPrices[priceList.id],
-                                        event,
-                                      )
-                                    }
-                                    onMouseMove={(event) =>
-                                      updateTaxTooltip(
-                                        `${product.id}-${priceList.id}-unit`,
-                                        `Precio ${priceList.name}`,
-                                        computedPrices[priceList.id],
-                                        event,
-                                      )
-                                    }
-                                    onMouseLeave={() => setTaxTooltip(null)}
-                                    onFocus={(event) =>
-                                      focusTaxTooltip(
-                                        `${product.id}-${priceList.id}-unit`,
-                                        `Precio ${priceList.name}`,
-                                        computedPrices[priceList.id],
-                                        event,
-                                      )
-                                    }
-                                    onBlur={() => setTaxTooltip(null)}
-                                    tabIndex={0}
-                                  >
-                                    {formatPriceWithIva21Preview(
-                                      computedPrices[priceList.id],
+                                    </div>
+                                    {showDualCostPrices ? (
+                                      <div className="mt-1 min-h-8 space-y-0.5 text-right text-[10px] font-medium tabular-nums leading-tight">
+                                        <p
+                                          className="cursor-help whitespace-nowrap text-zinc-700 outline-none"
+                                          onMouseEnter={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onMouseMove={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onMouseLeave={() => setTaxTooltip(null)}
+                                          onFocus={(event) =>
+                                            focusTaxTooltip(
+                                              `${product.id}-${priceList.id}-ars-unit`,
+                                              `Precio ${priceList.name} base ARS`,
+                                              priceFromArs,
+                                              event,
+                                            )
+                                          }
+                                          onBlur={() => setTaxTooltip(null)}
+                                          tabIndex={0}
+                                        >
+                                          ARS {formatPriceWithIva21Preview(priceFromArs)}
+                                          <span className="ml-1 font-semibold text-zinc-400">
+                                            c/IVA 21
+                                          </span>
+                                        </p>
+                                        <p
+                                          className="cursor-help whitespace-nowrap text-amber-700 outline-none"
+                                          onMouseEnter={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onMouseMove={(event) =>
+                                            updateTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onMouseLeave={() => setTaxTooltip(null)}
+                                          onFocus={(event) =>
+                                            focusTaxTooltip(
+                                              `${product.id}-${priceList.id}-usd-unit`,
+                                              `Precio ${priceList.name} base USD`,
+                                              priceFromUsd,
+                                              event,
+                                            )
+                                          }
+                                          onBlur={() => setTaxTooltip(null)}
+                                          tabIndex={0}
+                                        >
+                                          USD {formatPriceWithIva21Preview(priceFromUsd)}
+                                          <span className="ml-1 font-semibold text-amber-600/70">
+                                            c/IVA 21
+                                          </span>
+                                        </p>
+                                      </div>
+                                    ) : (
+                                      <p
+                                        className="mt-1 min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
+                                        onMouseEnter={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onMouseMove={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onMouseLeave={() => setTaxTooltip(null)}
+                                        onFocus={(event) =>
+                                          focusTaxTooltip(
+                                            `${product.id}-${priceList.id}-unit`,
+                                            `Precio ${priceList.name}`,
+                                            computedPrices[priceList.id],
+                                            event,
+                                          )
+                                        }
+                                        onBlur={() => setTaxTooltip(null)}
+                                        tabIndex={0}
+                                      >
+                                        {formatPriceWithIva21Preview(
+                                          computedPrices[priceList.id],
+                                        )}
+                                        <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                          c/IVA 21
+                                        </span>
+                                      </p>
                                     )}
-                                    <span className="ml-1 text-[10px] font-semibold text-zinc-400">
-                                      c/IVA 21
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        ) : (
+                          priceLists.map((priceList) => {
+                            const priceFromArs =
+                              rowState.computedPricesFromArs[priceList.id];
+                            const priceFromUsd =
+                              rowState.computedPricesFromUsd[priceList.id];
+                            const showDualCostPrices =
+                              rowState.currentCost !== null &&
+                              rowState.currentCostUsdArs !== null &&
+                              priceFromArs !== null &&
+                              priceFromUsd !== null &&
+                              normalizePriceNumber(priceFromArs) !==
+                                normalizePriceNumber(priceFromUsd);
+
+                            return (
+                              <td
+                                key={`${product.id}-${priceList.id}`}
+                                className="py-3 pr-2 align-top"
+                              >
+                                <div className="w-[5rem] min-w-0 space-y-0.5 sm:w-[5.25rem]">
+                                  <div className="relative">
+                                    <MoneyInput
+                                      className="input no-spinner w-full pl-1.5 pr-7 text-right tabular-nums sm:pl-2 sm:pr-8"
+                                      value={draft.percentages[priceList.id] ?? ""}
+                                      onValueChange={(nextValue) =>
+                                        updateRowPercentage(
+                                          product.id,
+                                          priceList.id,
+                                          normalizePercent(nextValue),
+                                        )
+                                      }
+                                      placeholder="0"
+                                      maxDecimals={4}
+                                      caretToEndOnFocus
+                                      disabled={isRowSavePending}
+                                    />
+                                    <span
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute inset-y-1 right-1 inline-flex min-w-[1.2rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:right-1.5"
+                                    >
+                                      %
                                     </span>
-                                  </p>
-                                )}
-                              </div>
-                            </td>
-                          );
-                        })}
+                                  </div>
+                                  {showDualCostPrices ? (
+                                    <div className="min-h-8 space-y-0.5 text-right text-[10px] font-medium tabular-nums leading-tight">
+                                      <p
+                                        className="cursor-help whitespace-nowrap text-zinc-700 outline-none"
+                                        onMouseEnter={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-ars-unit`,
+                                            `Precio ${priceList.name} base ARS`,
+                                            priceFromArs,
+                                            event,
+                                          )
+                                        }
+                                        onMouseMove={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-ars-unit`,
+                                            `Precio ${priceList.name} base ARS`,
+                                            priceFromArs,
+                                            event,
+                                          )
+                                        }
+                                        onMouseLeave={() => setTaxTooltip(null)}
+                                        onFocus={(event) =>
+                                          focusTaxTooltip(
+                                            `${product.id}-${priceList.id}-ars-unit`,
+                                            `Precio ${priceList.name} base ARS`,
+                                            priceFromArs,
+                                            event,
+                                          )
+                                        }
+                                        onBlur={() => setTaxTooltip(null)}
+                                        tabIndex={0}
+                                      >
+                                        ARS{" "}
+                                        {formatPriceWithIva21Preview(priceFromArs)}
+                                        <span className="ml-1 font-semibold text-zinc-400">
+                                          c/IVA
+                                        </span>
+                                      </p>
+                                      <p
+                                        className="cursor-help whitespace-nowrap text-amber-700 outline-none"
+                                        onMouseEnter={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-usd-unit`,
+                                            `Precio ${priceList.name} base USD`,
+                                            priceFromUsd,
+                                            event,
+                                          )
+                                        }
+                                        onMouseMove={(event) =>
+                                          updateTaxTooltip(
+                                            `${product.id}-${priceList.id}-usd-unit`,
+                                            `Precio ${priceList.name} base USD`,
+                                            priceFromUsd,
+                                            event,
+                                          )
+                                        }
+                                        onMouseLeave={() => setTaxTooltip(null)}
+                                        onFocus={(event) =>
+                                          focusTaxTooltip(
+                                            `${product.id}-${priceList.id}-usd-unit`,
+                                            `Precio ${priceList.name} base USD`,
+                                            priceFromUsd,
+                                            event,
+                                          )
+                                        }
+                                        onBlur={() => setTaxTooltip(null)}
+                                        tabIndex={0}
+                                      >
+                                        USD{" "}
+                                        {formatPriceWithIva21Preview(priceFromUsd)}
+                                        <span className="ml-1 font-semibold text-amber-600/70">
+                                          c/IVA
+                                        </span>
+                                      </p>
+                                    </div>
+                                  ) : (
+                                    <p
+                                      className="min-h-4 cursor-help whitespace-nowrap text-right text-[11px] font-medium tabular-nums text-zinc-600 outline-none"
+                                      onMouseEnter={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-unit`,
+                                          `Precio ${priceList.name}`,
+                                          computedPrices[priceList.id],
+                                          event,
+                                        )
+                                      }
+                                      onMouseMove={(event) =>
+                                        updateTaxTooltip(
+                                          `${product.id}-${priceList.id}-unit`,
+                                          `Precio ${priceList.name}`,
+                                          computedPrices[priceList.id],
+                                          event,
+                                        )
+                                      }
+                                      onMouseLeave={() => setTaxTooltip(null)}
+                                      onFocus={(event) =>
+                                        focusTaxTooltip(
+                                          `${product.id}-${priceList.id}-unit`,
+                                          `Precio ${priceList.name}`,
+                                          computedPrices[priceList.id],
+                                          event,
+                                        )
+                                      }
+                                      onBlur={() => setTaxTooltip(null)}
+                                      tabIndex={0}
+                                    >
+                                      {formatPriceWithIva21Preview(
+                                        computedPrices[priceList.id],
+                                      )}
+                                      <span className="ml-1 text-[10px] font-semibold text-zinc-400">
+                                        c/IVA 21
+                                      </span>
+                                    </p>
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          })
+                        )}
                         {STOCK_ACCOUNTING_ENABLED ? (
                           <td className="py-3 pr-2 align-top">
-                            <div className="flex min-h-10 items-center gap-2 whitespace-nowrap">
+                            <div className="flex min-h-10 flex-wrap items-center gap-2">
                               <span className="font-semibold text-zinc-800">
                                 {formatStock(product.stock)}
                               </span>
@@ -2582,8 +3392,8 @@ export default function PricesPage() {
                         ) : null}
                       </>
                     )}
-                    <td className="sticky right-0 z-10 bg-white/95 py-3 pr-2 text-right align-top hover:z-30 focus-within:z-30">
-                      <div className="flex min-h-10 flex-col items-end gap-1">
+                    <td className="2xl:sticky 2xl:right-0 2xl:z-10 bg-white/95 py-3 pr-2 text-right align-top 2xl:hover:z-30 2xl:focus-within:z-30">
+                      <div className="flex min-h-10 flex-col items-end gap-0.5">
                         <div className="flex items-center justify-end gap-2">
                           <div className="group relative">
                             <button
@@ -2653,7 +3463,9 @@ export default function PricesPage() {
                   <td
                     className="py-4 text-sm text-zinc-500"
                     colSpan={
-                      priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)
+                      shouldWrapPriceLists
+                        ? wrappedTableColumnCount
+                        : priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)
                     }
                   >
                     No hay productos para mostrar.
