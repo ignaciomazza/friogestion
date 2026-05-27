@@ -148,7 +148,7 @@ export default function PurchasePaymentModeModal({
             </label>
 
             {editingPaymentMode === "IMMEDIATE_CASH_OUT" ? (
-              <div className="space-y-3">
+              <div className="mt-2 space-y-3">
                 <div className="rounded-2xl border border-dashed border-zinc-200/70 bg-white/40 p-4 sm:p-5">
                   <div className="space-y-3">
                     {editingCashOutLines.map((line, index) => {

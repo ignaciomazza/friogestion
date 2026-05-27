@@ -8,12 +8,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import {
-  ArrowPathIcon,
   ChevronDownIcon,
   CheckIcon,
-  CurrencyDollarIcon,
+  EyeIcon,
   ExclamationTriangleIcon,
-  PencilSquareIcon,
   PlusIcon,
   TrashIcon,
 } from "@/components/icons";
@@ -62,6 +60,11 @@ const PurchaseQrScannerModal = dynamic(
 
 const PurchaseEditInvoiceModal = dynamic(
   () => import("./components/PurchaseEditInvoiceModal"),
+  { ssr: false },
+);
+
+const PurchaseDetailModal = dynamic(
+  () => import("./components/PurchaseDetailModal"),
   { ssr: false },
 );
 
@@ -1080,6 +1083,9 @@ export default function PurchasesPage() {
   );
   const [query, setQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [purchaseListMode, setPurchaseListMode] = useState<"general" | "finance">(
+    "general",
+  );
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isArcaValidating, setIsArcaValidating] = useState(false);
@@ -1108,6 +1114,12 @@ export default function PurchasesPage() {
     useState<PurchaseRow | null>(null);
   const [supplierGroupedPaymentPurchase, setSupplierGroupedPaymentPurchase] =
     useState<PurchaseRow | null>(null);
+  const [detailPurchase, setDetailPurchase] = useState<PurchaseRow | null>(null);
+  const [detailData, setDetailData] = useState<PurchaseEditResponse | null>(null);
+  const [isLoadingDetailPurchase, setIsLoadingDetailPurchase] = useState(false);
+  const [detailPurchaseError, setDetailPurchaseError] = useState<string | null>(
+    null,
+  );
   const [editingPaymentMode, setEditingPaymentMode] =
     useState<PurchasePaymentMode>("OFF_BOOK");
   const [editingPaidAt, setEditingPaidAt] = useState(() =>
@@ -1144,6 +1156,7 @@ export default function PurchasesPage() {
   const qrStreamRef = useRef<MediaStream | null>(null);
   const qrScannerIntervalRef = useRef<number | null>(null);
   const qrScannerBusyRef = useRef(false);
+  const detailRequestRef = useRef(0);
   const importQrTextHandlerRef = useRef<(qrText: string) => Promise<void>>(
     async () => undefined,
   );
@@ -3446,6 +3459,11 @@ export default function PurchasesPage() {
       if (editingPaymentPurchase?.id === purchase.id) {
         setEditingPaymentPurchase(null);
       }
+      if (detailPurchase?.id === purchase.id) {
+        setDetailPurchase(null);
+        setDetailData(null);
+        setDetailPurchaseError(null);
+      }
 
       setStatus("Compra eliminada");
       toast.success("Compra eliminada.");
@@ -3589,6 +3607,78 @@ export default function PurchasesPage() {
 
   const closeSupplierGroupedPayment = () => {
     setSupplierGroupedPaymentPurchase(null);
+  };
+
+  const closePurchaseDetail = () => {
+    detailRequestRef.current += 1;
+    setDetailPurchase(null);
+    setDetailData(null);
+    setDetailPurchaseError(null);
+    setIsLoadingDetailPurchase(false);
+  };
+
+  const openPurchaseDetail = async (purchase: PurchaseRow) => {
+    const requestId = detailRequestRef.current + 1;
+    detailRequestRef.current = requestId;
+    setDetailPurchase(purchase);
+    setDetailData(null);
+    setDetailPurchaseError(null);
+    setIsLoadingDetailPurchase(true);
+    try {
+      const res = await fetch(`/api/purchases/${purchase.id}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json()) as PurchaseEditResponse | { error?: string };
+      if (!res.ok) {
+        const message =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "No se pudo cargar el detalle de la compra";
+        if (detailRequestRef.current !== requestId) return;
+        setDetailPurchaseError(message);
+        return;
+      }
+
+      if (detailRequestRef.current !== requestId) return;
+      setDetailData(data as PurchaseEditResponse);
+    } catch {
+      if (detailRequestRef.current !== requestId) return;
+      setDetailPurchaseError("No se pudo cargar el detalle de la compra");
+    } finally {
+      if (detailRequestRef.current !== requestId) return;
+      setIsLoadingDetailPurchase(false);
+    }
+  };
+
+  const handleDetailEdit = () => {
+    if (!detailPurchase) return;
+    const purchaseId = detailPurchase.id;
+    closePurchaseDetail();
+    void handleStartPurchaseEdit(purchaseId);
+  };
+
+  const handleDetailPayment = () => {
+    if (!detailPurchase) return;
+    const selectedPurchase = detailPurchase;
+    closePurchaseDetail();
+    openPaymentModeEditor(selectedPurchase);
+  };
+
+  const handleDetailRevalidate = () => {
+    if (!detailPurchase?.hasInvoice) return;
+    const purchaseId = detailPurchase.id;
+    closePurchaseDetail();
+    void handleRevalidatePurchase(purchaseId);
+  };
+
+  const handleDetailDelete = () => {
+    if (!detailPurchase) return;
+    const selectedPurchase = detailPurchase;
+    closePurchaseDetail();
+    void handleDeletePurchase(selectedPurchase);
   };
 
   const handleSupplierGroupedPaymentCreated = async () => {
@@ -3927,6 +4017,15 @@ export default function PurchasesPage() {
     Boolean(revalidationRequestVoucherDate) &&
     normalizeCalendarDateForCompare(revalidationArcaVoucherDate) !==
       normalizeCalendarDateForCompare(revalidationRequestVoucherDate);
+  const detailPaymentStatus = detailPurchase
+    ? getPurchasePaymentStatus(detailPurchase)
+    : { label: "No", tone: "none" as const };
+  const detailArcaStatusLabel = detailPurchase
+    ? detailPurchase.hasInvoice
+      ? `ARCA ${arcaStatusLabel(detailPurchase.arcaValidationStatus)}`
+      : "Registro interno · No computable fiscalmente"
+    : "Registro interno";
+  const purchasesTableColSpan = purchaseListMode === "finance" ? 10 : 7;
 
   return (
     <div className="space-y-6">
@@ -5447,19 +5546,52 @@ export default function PurchasesPage() {
           </div>
 
           <div className="card space-y-4 p-4 sm:p-6">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            <div className="grid gap-3 lg:grid-cols-[minmax(200px,auto)_minmax(0,1fr)] lg:items-center">
+              <h2 className="min-w-0 text-sm font-semibold uppercase tracking-wide text-zinc-500">
                 Compras registradas
               </h2>
-              <div className="grid gap-2 sm:grid-cols-[minmax(340px,1fr)_180px] md:w-[720px]">
+              <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[220px_minmax(0,1fr)_180px]">
+                <div className="relative inline-grid h-[38px] w-full shrink-0 grid-cols-2 rounded-full border border-zinc-200/70 bg-white/55 p-1">
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full border border-sky-200 bg-white shadow-[0_4px_10px_-8px_rgba(14,116,144,0.32)] transition-transform duration-200 ease-out ${
+                      purchaseListMode === "finance" ? "translate-x-full" : ""
+                    }`}
+                  />
+                  <button
+                    type="button"
+                    className={`relative z-10 inline-flex h-full items-center justify-center rounded-full px-2 text-xs font-semibold transition-colors ${
+                      purchaseListMode === "general"
+                        ? "text-sky-900"
+                        : "text-zinc-600"
+                    }`}
+                    onClick={() => setPurchaseListMode("general")}
+                    aria-pressed={purchaseListMode === "general"}
+                  >
+                    General
+                  </button>
+                  <button
+                    type="button"
+                    className={`relative z-10 inline-flex h-full items-center justify-center rounded-full px-2 text-xs font-semibold transition-colors ${
+                      purchaseListMode === "finance"
+                        ? "text-sky-900"
+                        : "text-zinc-600"
+                    }`}
+                    onClick={() => setPurchaseListMode("finance")}
+                    aria-pressed={purchaseListMode === "finance"}
+                  >
+                    Finanzas
+                  </button>
+                </div>
+
                 <input
-                  className="input w-full"
+                  className="input w-full sm:col-span-1 lg:col-span-1"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Buscar proveedor o comprobante"
                 />
                 <select
-                  className="input w-full cursor-pointer text-xs"
+                  className="input w-full cursor-pointer text-xs sm:col-span-2 lg:col-span-1"
                   value={sortOrder}
                   onChange={(event) =>
                     setSortOrder(event.target.value as "newest" | "oldest")
@@ -5494,32 +5626,34 @@ export default function PurchasesPage() {
                         {formatCurrencyARS(purchase.total)}
                       </p>
                     </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-zinc-500">
-                      <div>
-                        <span className="block uppercase tracking-wide">
-                          Productos
-                        </span>
-                        <span className="font-semibold text-zinc-700">
-                          {purchase.itemsCount}
-                        </span>
+                    {purchaseListMode === "finance" ? (
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-zinc-500">
+                        <div>
+                          <span className="block uppercase tracking-wide">
+                            Productos
+                          </span>
+                          <span className="font-semibold text-zinc-700">
+                            {purchase.itemsCount}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block uppercase tracking-wide">
+                            IVA
+                          </span>
+                          <span className="font-semibold text-zinc-700">
+                            {formatCurrencyARS(purchase.taxes ?? 0)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block uppercase tracking-wide">
+                            Perc./otros
+                          </span>
+                          <span className="font-semibold text-zinc-700">
+                            {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <span className="block uppercase tracking-wide">
-                          IVA
-                        </span>
-                        <span className="font-semibold text-zinc-700">
-                          {formatCurrencyARS(purchase.taxes ?? 0)}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="block uppercase tracking-wide">
-                          Perc./otros
-                        </span>
-                        <span className="font-semibold text-zinc-700">
-                          {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
-                        </span>
-                      </div>
-                    </div>
+                    ) : null}
                     <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span
@@ -5539,80 +5673,19 @@ export default function PurchasesPage() {
                             : "Registro interno · No computable fiscalmente"}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          className="btn btn-sky h-8 w-8 p-0 text-[11px]"
-                          onClick={() => handleStartPurchaseEdit(purchase.id)}
-                          disabled={
-                            purchase.status === "CANCELLED" ||
-                            isLoadingPurchaseEdit ||
-                            deletingPurchaseId === purchase.id
-                          }
-                          title="Editar compra"
-                          aria-label="Editar compra"
-                        >
-                          <PencilSquareIcon className="size-4" />
-                          <span className="sr-only">Editar compra</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-emerald text-[11px]"
-                          onClick={() => openPaymentModeEditor(purchase)}
-                          disabled={
-                            purchase.status === "CANCELLED" ||
-                            deletingPurchaseId === purchase.id
-                          }
-                          title="Ajustar pago"
-                          aria-label="Ajustar pago"
-                        >
-                          <CurrencyDollarIcon className="size-4" />
-                          <span>Pago</span>
-                        </button>
-                        {purchase.hasInvoice ? (
-                          <button
-                            type="button"
-                            className="btn btn-sky text-[11px]"
-                            onClick={() => handleRevalidatePurchase(purchase.id)}
-                            disabled={
-                              revalidatingPurchaseId === purchase.id ||
-                              deletingPurchaseId === purchase.id
-                            }
-                            title="Revalidar ARCA"
-                            aria-label="Revalidar ARCA"
-                          >
-                            <ArrowPathIcon
-                              className={`size-4 ${
-                                revalidatingPurchaseId === purchase.id
-                                  ? "animate-spin"
-                                  : ""
-                              }`}
-                            />
-                            <span>
-                              {revalidatingPurchaseId === purchase.id
-                                ? "Procesando ARCA..."
-                                : "ARCA"}
-                            </span>
-                          </button>
-                        ) : null}
-                        <button
-                          type="button"
-                          className="btn btn-rose h-8 w-8 p-0 text-[11px]"
-                          onClick={() => handleDeletePurchase(purchase)}
-                          disabled={deletingPurchaseId === purchase.id}
-                          title="Eliminar compra"
-                          aria-label="Eliminar compra"
-                        >
-                          <TrashIcon
-                            className={`size-4 ${
-                              deletingPurchaseId === purchase.id
-                                ? "animate-pulse"
-                                : ""
-                            }`}
-                          />
-                          <span className="sr-only">Eliminar compra</span>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sky text-[11px]"
+                        onClick={() => {
+                          void openPurchaseDetail(purchase);
+                        }}
+                        disabled={deletingPurchaseId === purchase.id}
+                        title="Ver detalle"
+                        aria-label="Ver detalle"
+                      >
+                        <EyeIcon className="size-4" />
+                        <span>Detalle</span>
+                      </button>
                     </div>
                     </div>
                   );
@@ -5623,19 +5696,29 @@ export default function PurchasesPage() {
             </div>
             <div className="hidden md:block">
               <div className="table-scroll">
-              <table className="w-full min-w-[1240px] text-left text-xs">
+              <table
+                className={`w-full text-left text-xs ${
+                  purchaseListMode === "finance"
+                    ? "min-w-[1180px]"
+                    : "min-w-[940px]"
+                }`}
+              >
                 <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
                   <tr>
                     <th className="py-2 pr-3">Comprobante</th>
                     <th className="py-2 pr-3">Proveedor</th>
                     <th className="py-2 pr-3">Fecha</th>
-                    <th className="py-2 pr-3 text-right">Productos</th>
-                    <th className="py-2 pr-3 text-right">IVA compra</th>
-                    <th className="py-2 pr-3 text-right">Perc./otros</th>
+                    {purchaseListMode === "finance" ? (
+                      <>
+                        <th className="py-2 pr-3 text-right">Productos</th>
+                        <th className="py-2 pr-3 text-right">IVA compra</th>
+                        <th className="py-2 pr-3 text-right">Perc./otros</th>
+                      </>
+                    ) : null}
                     <th className="py-2 pr-3 text-right">Total</th>
                     <th className="py-2 pr-3">Pago</th>
                     <th className="py-2 pr-3">ARCA</th>
-                    <th className="py-2 pr-3 text-right">Acciones</th>
+                    <th className="py-2 pr-3 text-right">Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5657,15 +5740,19 @@ export default function PurchasesPage() {
                         <td className="py-3 pr-3 text-zinc-600">
                           {formatPurchaseDateLabel(purchase)}
                         </td>
-                        <td className="py-3 pr-3 text-right text-zinc-700">
-                          {purchase.itemsCount}
-                        </td>
-                        <td className="py-3 pr-3 text-right text-zinc-700">
-                          {formatCurrencyARS(purchase.taxes ?? 0)}
-                        </td>
-                        <td className="py-3 pr-3 text-right text-zinc-700">
-                          {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
-                        </td>
+                        {purchaseListMode === "finance" ? (
+                          <>
+                            <td className="py-3 pr-3 text-right text-zinc-700">
+                              {purchase.itemsCount}
+                            </td>
+                            <td className="py-3 pr-3 text-right text-zinc-700">
+                              {formatCurrencyARS(purchase.taxes ?? 0)}
+                            </td>
+                            <td className="py-3 pr-3 text-right text-zinc-700">
+                              {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
+                            </td>
+                          </>
+                        ) : null}
                         <td className="py-3 pr-3 text-right text-zinc-900">
                           {formatCurrencyARS(purchase.total)}
                         </td>
@@ -5688,87 +5775,29 @@ export default function PurchasesPage() {
                             : "Registro interno"}
                         </td>
                         <td className="py-3 pr-3 text-right">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              className="btn btn-sky h-8 w-8 p-0 text-[11px]"
-                              onClick={() => handleStartPurchaseEdit(purchase.id)}
-                              disabled={
-                                purchase.status === "CANCELLED" ||
-                                isLoadingPurchaseEdit ||
-                                deletingPurchaseId === purchase.id
-                              }
-                              title="Editar compra"
-                              aria-label="Editar compra"
-                            >
-                              <PencilSquareIcon className="size-4" />
-                              <span className="sr-only">Editar compra</span>
-                            </button>
-                            <button
-                              type="button"
-                              className="btn btn-emerald text-[11px]"
-                              onClick={() => openPaymentModeEditor(purchase)}
-                              disabled={
-                                purchase.status === "CANCELLED" ||
-                                deletingPurchaseId === purchase.id
-                              }
-                              title="Ajustar pago"
-                              aria-label="Ajustar pago"
-                            >
-                              <CurrencyDollarIcon className="size-4" />
-                              <span>Pago</span>
-                            </button>
-                            {purchase.hasInvoice ? (
-                              <button
-                                type="button"
-                                className="btn btn-sky text-[11px]"
-                                onClick={() => handleRevalidatePurchase(purchase.id)}
-                                disabled={
-                                  revalidatingPurchaseId === purchase.id ||
-                                  deletingPurchaseId === purchase.id
-                                }
-                                title="Revalidar ARCA"
-                                aria-label="Revalidar ARCA"
-                              >
-                                <ArrowPathIcon
-                                  className={`size-4 ${
-                                    revalidatingPurchaseId === purchase.id
-                                      ? "animate-spin"
-                                      : ""
-                                  }`}
-                                />
-                                <span>
-                                  {revalidatingPurchaseId === purchase.id
-                                    ? "Procesando ARCA..."
-                                    : "ARCA"}
-                                </span>
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="btn btn-rose h-8 w-8 p-0 text-[11px]"
-                              onClick={() => handleDeletePurchase(purchase)}
-                              disabled={deletingPurchaseId === purchase.id}
-                              title="Eliminar compra"
-                              aria-label="Eliminar compra"
-                            >
-                              <TrashIcon
-                                className={`size-4 ${
-                                  deletingPurchaseId === purchase.id
-                                    ? "animate-pulse"
-                                    : ""
-                                }`}
-                              />
-                              <span className="sr-only">Eliminar compra</span>
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-sky text-[11px]"
+                            onClick={() => {
+                              void openPurchaseDetail(purchase);
+                            }}
+                            disabled={deletingPurchaseId === purchase.id}
+                            title="Ver detalle"
+                            aria-label="Ver detalle"
+                          >
+                            <EyeIcon className="size-4" />
+                            <span>Detalle</span>
+                          </button>
                         </td>
                         </tr>
                       );
                     })
                   ) : (
                     <tr>
-                      <td className="py-4 text-sm text-zinc-500" colSpan={10}>
+                      <td
+                        className="py-4 text-sm text-zinc-500"
+                        colSpan={purchasesTableColSpan}
+                      >
                         Sin compras por ahora.
                       </td>
                     </tr>
@@ -5834,6 +5863,27 @@ export default function PurchasesPage() {
               accounts={accounts}
               onClose={closeSupplierGroupedPayment}
               onSuccess={handleSupplierGroupedPaymentCreated}
+            />,
+          )
+        : null}
+
+      {detailPurchase
+        ? renderModalPortal(
+            <PurchaseDetailModal
+              purchase={detailPurchase}
+              detail={detailData}
+              isLoading={isLoadingDetailPurchase}
+              loadError={detailPurchaseError}
+              paymentStatus={detailPaymentStatus}
+              arcaStatusLabel={detailArcaStatusLabel}
+              isLoadingEdit={isLoadingPurchaseEdit}
+              isRevalidating={revalidatingPurchaseId === detailPurchase.id}
+              isDeleting={deletingPurchaseId === detailPurchase.id}
+              onClose={closePurchaseDetail}
+              onEdit={handleDetailEdit}
+              onPayment={handleDetailPayment}
+              onRevalidate={handleDetailRevalidate}
+              onDelete={handleDetailDelete}
             />,
           )
         : null}
