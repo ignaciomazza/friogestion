@@ -49,6 +49,7 @@ type PurchasePaymentModeModalProps = {
   onAddCashOutLine: () => void;
   onRemoveCashOutLine: (index: number) => void;
   onUpdateCashOutLine: (index: number, updates: Partial<CashOutLineForm>) => void;
+  onOpenSupplierGroupedPayment: () => void;
   onClose: () => void;
   onSave: () => void;
 };
@@ -68,6 +69,7 @@ export default function PurchasePaymentModeModal({
   onAddCashOutLine,
   onRemoveCashOutLine,
   onUpdateCashOutLine,
+  onOpenSupplierGroupedPayment,
   onClose,
   onSave,
 }: PurchasePaymentModeModalProps) {
@@ -280,6 +282,14 @@ export default function PurchasePaymentModeModal({
         </div>
 
         <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button
+            type="button"
+            className="btn w-full sm:mr-auto sm:w-auto"
+            onClick={onOpenSupplierGroupedPayment}
+            disabled={isUpdatingPaymentMode}
+          >
+            Pagar varias compras
+          </button>
           <button type="button" className="btn w-full sm:w-auto" onClick={onClose} disabled={isUpdatingPaymentMode}>
             Cancelar
           </button>

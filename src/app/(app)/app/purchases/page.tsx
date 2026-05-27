@@ -50,6 +50,11 @@ const PurchasePaymentModeModal = dynamic(
   { ssr: false },
 );
 
+const SupplierGroupedPaymentModal = dynamic(
+  () => import("./components/SupplierGroupedPaymentModal"),
+  { ssr: false },
+);
+
 const PurchaseQrScannerModal = dynamic(
   () => import("./components/PurchaseQrScannerModal"),
   { ssr: false },
@@ -1086,6 +1091,8 @@ export default function PurchasesPage() {
   const [revalidateAfterInvoiceEdit, setRevalidateAfterInvoiceEdit] =
     useState(false);
   const [editingPaymentPurchase, setEditingPaymentPurchase] =
+    useState<PurchaseRow | null>(null);
+  const [supplierGroupedPaymentPurchase, setSupplierGroupedPaymentPurchase] =
     useState<PurchaseRow | null>(null);
   const [editingPaymentMode, setEditingPaymentMode] =
     useState<PurchasePaymentMode>("OFF_BOOK");
@@ -3561,6 +3568,22 @@ export default function PurchasesPage() {
     setEditingPaymentPurchase(null);
   };
 
+  const openSupplierGroupedPayment = (purchase: PurchaseRow) => {
+    setEditingPaymentPurchase(null);
+    setSupplierGroupedPaymentPurchase(purchase);
+  };
+
+  const closeSupplierGroupedPayment = () => {
+    setSupplierGroupedPaymentPurchase(null);
+  };
+
+  const handleSupplierGroupedPaymentCreated = async () => {
+    await loadPurchases();
+    const message = "Pago a proveedor registrado";
+    setStatus(message);
+    toast.success(message);
+  };
+
   const closeRevalidationFeedback = () => {
     setRevalidationFeedback(null);
   };
@@ -5779,8 +5802,24 @@ export default function PurchasesPage() {
               onAddCashOutLine={addEditingCashOutLine}
               onRemoveCashOutLine={removeEditingCashOutLine}
               onUpdateCashOutLine={updateEditingCashOutLine}
+              onOpenSupplierGroupedPayment={() =>
+                openSupplierGroupedPayment(editingPaymentPurchase)
+              }
               onClose={closePaymentModeEditor}
               onSave={handleUpdatePurchasePaymentMode}
+            />,
+          )
+        : null}
+
+      {supplierGroupedPaymentPurchase
+        ? renderModalPortal(
+            <SupplierGroupedPaymentModal
+              purchase={supplierGroupedPaymentPurchase}
+              purchases={purchases}
+              paymentMethods={paymentMethods}
+              accounts={accounts}
+              onClose={closeSupplierGroupedPayment}
+              onSuccess={handleSupplierGroupedPaymentCreated}
             />,
           )
         : null}

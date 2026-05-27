@@ -204,6 +204,12 @@ export async function POST(req: NextRequest) {
     const purchaseIds = Array.from(
       new Set(allocationsInput.map((allocation) => allocation.purchaseInvoiceId))
     );
+    if (purchaseIds.length !== allocationsInput.length) {
+      return NextResponse.json(
+        { error: "No se puede repetir la misma compra en un pago" },
+        { status: 400 }
+      );
+    }
     const purchases = purchaseIds.length
       ? await prisma.purchaseInvoice.findMany({
           where: {
