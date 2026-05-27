@@ -74,6 +74,19 @@ type ImmediateCashOutCandidate = {
   amount: number;
 };
 
+type SupplierPaymentAllocationCandidate = {
+  supplierPayment: {
+    id: string;
+    paidAt: Date;
+    createdAt: Date;
+    lines: Array<{
+      paymentMethod: {
+        name: string;
+      };
+    }>;
+  };
+};
+
 const purchaseImmediateCashOutPrefix = (reference: string) =>
   `Compra ${reference} · `;
 
@@ -130,6 +143,62 @@ const resolveImmediatePaymentMethodName = (input: {
   return `Pago mixto (${latestMethods.length})`;
 };
 
+const buildPaymentMethodLabel = (methodNames: string[]) => {
+  const uniqueMethods = Array.from(
+    new Set(methodNames.map((name) => name.trim()).filter(Boolean)),
+  );
+  if (!uniqueMethods.length) return null;
+  if (uniqueMethods.length === 1) return uniqueMethods[0] ?? null;
+  return `Pago mixto (${uniqueMethods.length})`;
+};
+
+const resolveSupplierAllocatedPaymentMethodName = (
+  allocations: SupplierPaymentAllocationCandidate[],
+) => {
+  if (!allocations.length) return null;
+  const latestByPayment = new Map<
+    string,
+    SupplierPaymentAllocationCandidate["supplierPayment"]
+  >();
+
+  for (const allocation of allocations) {
+    const payment = allocation.supplierPayment;
+    const current = latestByPayment.get(payment.id);
+    if (!current) {
+      latestByPayment.set(payment.id, payment);
+      continue;
+    }
+    const currentTimestamp = Math.max(
+      current.paidAt.getTime(),
+      current.createdAt.getTime(),
+    );
+    const candidateTimestamp = Math.max(
+      payment.paidAt.getTime(),
+      payment.createdAt.getTime(),
+    );
+    if (candidateTimestamp >= currentTimestamp) {
+      latestByPayment.set(payment.id, payment);
+    }
+  }
+
+  const latestPayment = Array.from(latestByPayment.values()).sort((left, right) => {
+    const leftTimestamp = Math.max(
+      left.paidAt.getTime(),
+      left.createdAt.getTime(),
+    );
+    const rightTimestamp = Math.max(
+      right.paidAt.getTime(),
+      right.createdAt.getTime(),
+    );
+    return rightTimestamp - leftTimestamp;
+  })[0];
+
+  if (!latestPayment) return null;
+  return buildPaymentMethodLabel(
+    latestPayment.lines.map((line) => line.paymentMethod.name),
+  );
+};
+
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
@@ -142,6 +211,31 @@ export async function GET(req: NextRequest) {
           where: { sourceType: "PURCHASE" },
           select: { id: true },
           take: 1,
+        },
+        allocations: {
+          where: {
+            supplierPayment: {
+              status: "CONFIRMED",
+            },
+          },
+          include: {
+            supplierPayment: {
+              select: {
+                id: true,
+                paidAt: true,
+                createdAt: true,
+                lines: {
+                  select: {
+                    paymentMethod: {
+                      select: {
+                        name: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
         fiscalLines: true,
       },
@@ -218,6 +312,12 @@ export async function GET(req: NextRequest) {
           invoiceNumber: purchase.invoiceNumber ?? null,
           candidatesByPrefix: immediateCashOutCandidatesByPrefix,
         });
+        const supplierAllocatedPaymentMethodName =
+          resolveSupplierAllocatedPaymentMethodName(
+            purchase.allocations as SupplierPaymentAllocationCandidate[],
+          );
+        const paymentMethodName =
+          immediatePaymentMethodName ?? supplierAllocatedPaymentMethodName;
 
         return {
           id: purchase.id,
@@ -260,7 +360,7 @@ export async function GET(req: NextRequest) {
           fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
           impactsAccount: purchase.currentAccountEntries.length > 0,
           cashOutRegistered: Boolean(immediatePaymentMethodName),
-          immediatePaymentMethodName,
+          immediatePaymentMethodName: paymentMethodName,
           arcaValidationStatus: purchase.arcaValidationStatus,
           arcaValidationMessage: purchase.arcaValidationMessage ?? null,
           arcaValidationCheckedAt:

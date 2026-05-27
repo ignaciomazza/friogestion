@@ -441,8 +441,9 @@ const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
   if (purchase.impactsAccount) {
     const normalizedPaymentStatus = purchase.paymentStatus?.toUpperCase();
     if (normalizedPaymentStatus === "PAID") {
+      const paymentMethodLabel = purchase.immediatePaymentMethodName?.trim();
       return {
-        label: "Pagada",
+        label: paymentMethodLabel || "Pagada",
         tone: "immediate" as const,
       };
     }
