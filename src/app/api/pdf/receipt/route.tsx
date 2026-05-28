@@ -144,6 +144,11 @@ export async function GET(req: NextRequest) {
             name: receipt.organization.name,
             legalName: receipt.organization.legalName,
             taxId: receipt.organization.taxId,
+            address: receipt.organization.address,
+            email: receipt.organization.email,
+            phone: receipt.organization.phone,
+            website: receipt.organization.website,
+            socialMedia: receipt.organization.socialMedia,
           },
           customer: {
             name: receipt.customer.displayName,

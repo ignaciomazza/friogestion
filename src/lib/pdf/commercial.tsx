@@ -14,6 +14,11 @@ type CommercialPdfData = {
     name: string;
     legalName?: string | null;
     taxId?: string | null;
+    address?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    website?: string | null;
+    socialMedia?: string | null;
   };
   customer: {
     name: string;
@@ -123,7 +128,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   detailLine: {
-    marginTop: 3,
+    marginTop: 4,
     color: "#344054",
   },
   metaCard: {
@@ -210,6 +215,17 @@ const styles = StyleSheet.create({
   },
 });
 
+function normalizeMultilineDetail(value?: string | null) {
+  if (!value) return null;
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+  return lines.join("\n");
+}
+
 function PartyCard({
   label,
   name,
@@ -217,6 +233,9 @@ function PartyCard({
   taxId,
   email,
   address,
+  phone,
+  website,
+  socialMedia,
 }: {
   label: string;
   name: string;
@@ -224,9 +243,13 @@ function PartyCard({
   taxId?: string | null;
   email?: string | null;
   address?: string | null;
+  phone?: string | null;
+  website?: string | null;
+  socialMedia?: string | null;
 }) {
   const primaryName = legalName?.trim() ? legalName : name;
   const commercialName = legalName && legalName !== name ? name : null;
+  const socialMediaText = normalizeMultilineDetail(socialMedia);
 
   return (
     <View style={styles.partyCard}>
@@ -240,6 +263,11 @@ function PartyCard({
       {taxId ? <Text style={styles.detailLine}>CUIT {taxId}</Text> : null}
       {address ? <Text style={styles.detailLine}>{address}</Text> : null}
       {email ? <Text style={styles.detailLine}>{email}</Text> : null}
+      {phone ? <Text style={styles.detailLine}>{phone}</Text> : null}
+      {website ? <Text style={styles.detailLine}>{website}</Text> : null}
+      {socialMediaText ? (
+        <Text style={styles.detailLine}>{socialMediaText}</Text>
+      ) : null}
     </View>
   );
 }
@@ -282,6 +310,11 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
               name={data.organization.name}
               legalName={data.organization.legalName}
               taxId={data.organization.taxId}
+              address={data.organization.address}
+              email={data.organization.email}
+              phone={data.organization.phone}
+              website={data.organization.website}
+              socialMedia={data.organization.socialMedia}
             />
             <PartyCard
               label="Cliente"

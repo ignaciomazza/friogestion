@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { FiscalPdfDocument } from "@/lib/pdf/fiscal";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
+import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   normalizeCustomerFiscalTaxProfile,
@@ -72,6 +74,18 @@ export async function GET(
           include: {
             customer: true,
             items: { include: { product: true } },
+            receipts: {
+              where: { status: "CONFIRMED" },
+              select: {
+                lines: {
+                  select: {
+                    paymentMethod: {
+                      select: { name: true },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         organization: true,
@@ -95,6 +109,7 @@ export async function GET(
       payloadAfip: Record<string, unknown> | null;
       type: string | null;
       sale?: {
+        paymentStatus: string | null;
         customer: {
           displayName: string;
           legalName: string | null;
@@ -112,11 +127,24 @@ export async function GET(
           taxRate: string | number | null;
           taxAmount: string | number | null;
         }>;
+        receipts: Array<{
+          lines: Array<{
+            paymentMethod: {
+              name: string;
+            };
+          }>;
+        }>;
       } | null;
       organization: {
         name: string;
         legalName: string | null;
         taxId: string | null;
+        activityStart: Date | null;
+        address: string | null;
+        email: string | null;
+        phone: string | null;
+        website: string | null;
+        socialMedia: string | null;
       };
     };
 
@@ -147,6 +175,18 @@ export async function GET(
       : null;
     const iva = Number(voucherData.ImpIVA ?? 0);
     const otherTaxes = Number(voucherData.ImpTrib ?? 0);
+    const issuerTaxId =
+      debitNote.organization.taxId ?? config?.taxIdRepresentado ?? null;
+    const manualIssuerActivityStart =
+      debitNote.organization.activityStart?.toLocaleDateString("es-AR") ?? null;
+    const issuerTaxpayer = await resolveIssuerTaxpayerSummary({
+      organizationId: debitNoteOrganizationId,
+      taxId: issuerTaxId,
+    });
+    const paymentMethod = resolveSalePaymentMethodLabel({
+      paymentStatus: debitNote.sale?.paymentStatus,
+      receipts: debitNote.sale?.receipts,
+    });
 
     const items = debitNote.sale?.items.map((item) => ({
       description: item.product.name,
@@ -164,10 +204,17 @@ export async function GET(
           issuer: {
             name: debitNote.organization.name,
             legalName: debitNote.organization.legalName ?? undefined,
-            taxId:
-              debitNote.organization.taxId ??
-              config?.taxIdRepresentado ??
+            taxId: issuerTaxId ?? undefined,
+            fiscalCondition: issuerTaxpayer.fiscalCondition ?? undefined,
+            activityStart:
+              manualIssuerActivityStart ??
+              issuerTaxpayer.activityStart ??
               undefined,
+            address: debitNote.organization.address ?? undefined,
+            email: debitNote.organization.email ?? undefined,
+            phone: debitNote.organization.phone ?? undefined,
+            website: debitNote.organization.website ?? undefined,
+            socialMedia: debitNote.organization.socialMedia ?? undefined,
           },
           receiver: {
             name: debitNote.sale?.customer.displayName ?? "-",
@@ -211,6 +258,7 @@ export async function GET(
             payload && typeof payload === "object"
               ? (payload.qrBase64 as string | null)
               : null,
+          paymentMethod,
         }}
       />
     );

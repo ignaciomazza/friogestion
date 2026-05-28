@@ -97,6 +97,12 @@ type AdminClientProps = {
   activeOrg: {
     id: string;
     name: string;
+    address?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    activityStart?: string | null;
+    website?: string | null;
+    socialMedia?: string | null;
     adjustStockOnQuoteConfirm: boolean;
   };
   users: UserRow[];
@@ -217,6 +223,11 @@ const ACCOUNT_TYPE_LABELS: Record<AccountRow["type"], string> = {
   BANK: "Banco",
   VIRTUAL: "Virtual",
 };
+
+function normalizeOptionalTextInput(value: string) {
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
+}
 
 const Details = ({
   defaultOpen = false,
@@ -422,6 +433,20 @@ export default function AdminClient({
     null,
   );
   const [isSalesSettingsSaving, setIsSalesSettingsSaving] = useState(false);
+  const [companyAddress, setCompanyAddress] = useState(activeOrg.address ?? "");
+  const [companyPhone, setCompanyPhone] = useState(activeOrg.phone ?? "");
+  const [companyEmail, setCompanyEmail] = useState(activeOrg.email ?? "");
+  const [companyActivityStart, setCompanyActivityStart] = useState(
+    activeOrg.activityStart ? String(activeOrg.activityStart).slice(0, 10) : "",
+  );
+  const [companyWebsite, setCompanyWebsite] = useState(activeOrg.website ?? "");
+  const [companySocialMedia, setCompanySocialMedia] = useState(
+    activeOrg.socialMedia ?? "",
+  );
+  const [companyProfileStatus, setCompanyProfileStatus] = useState<string | null>(
+    null,
+  );
+  const [isCompanyProfileSaving, setIsCompanyProfileSaving] = useState(false);
   const [editingPriceListId, setEditingPriceListId] = useState<string | null>(
     null,
   );
@@ -612,6 +637,49 @@ export default function AdminClient({
       setSalesSettingsStatus("No se pudo guardar configuracion");
     } finally {
       setIsSalesSettingsSaving(false);
+    }
+  };
+
+  const handleCompanyProfileSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (isCompanyProfileSaving) return;
+    setCompanyProfileStatus(null);
+    setIsCompanyProfileSaving(true);
+    try {
+      const res = await fetch("/api/admin/organizations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          address: normalizeOptionalTextInput(companyAddress),
+          phone: normalizeOptionalTextInput(companyPhone),
+          email: normalizeOptionalTextInput(companyEmail),
+          activityStart: companyActivityStart.trim() || null,
+          website: normalizeOptionalTextInput(companyWebsite),
+          socialMedia: normalizeOptionalTextInput(companySocialMedia),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setCompanyProfileStatus(
+          data?.error ?? "No se pudieron guardar los datos de empresa",
+        );
+        return;
+      }
+
+      setCompanyAddress(data?.address ?? "");
+      setCompanyPhone(data?.phone ?? "");
+      setCompanyEmail(data?.email ?? "");
+      setCompanyActivityStart(
+        data?.activityStart ? String(data.activityStart).slice(0, 10) : "",
+      );
+      setCompanyWebsite(data?.website ?? "");
+      setCompanySocialMedia(data?.socialMedia ?? "");
+      setCompanyProfileStatus("Datos de empresa guardados");
+      router.refresh();
+    } catch {
+      setCompanyProfileStatus("No se pudieron guardar los datos de empresa");
+    } finally {
+      setIsCompanyProfileSaving(false);
     }
   };
 
@@ -1400,6 +1468,94 @@ export default function AdminClient({
               <p className="mt-2 text-xs text-zinc-500">{salesSettingsStatus}</p>
             ) : null}
           </div>
+        </Section>
+      ) : null}
+
+      {!isSalesLimitedAdmin ? (
+        <Section
+          title="Empresa y PDF"
+          subtitle="Datos de la empresa para imprimir en comprobantes."
+          icon={<BuildingOffice2Icon className="size-4" />}
+        >
+          <form onSubmit={handleCompanyProfileSubmit} className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-2 text-xs text-zinc-500">
+                Direccion
+                <input
+                  className="input"
+                  value={companyAddress}
+                  onChange={(event) => setCompanyAddress(event.target.value)}
+                  placeholder="Calle, numero, ciudad"
+                  maxLength={200}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-zinc-500">
+                Telefono
+                <input
+                  className="input"
+                  value={companyPhone}
+                  onChange={(event) => setCompanyPhone(event.target.value)}
+                  placeholder="+54 ..."
+                  maxLength={80}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-zinc-500">
+                Email
+                <input
+                  className="input"
+                  type="email"
+                  value={companyEmail}
+                  onChange={(event) => setCompanyEmail(event.target.value)}
+                  placeholder="ventas@empresa.com"
+                  maxLength={160}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-zinc-500">
+                Inicio de actividad
+                <input
+                  className="input"
+                  type="date"
+                  value={companyActivityStart}
+                  onChange={(event) => setCompanyActivityStart(event.target.value)}
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-xs text-zinc-500">
+                Sitio web
+                <input
+                  className="input"
+                  value={companyWebsite}
+                  onChange={(event) => setCompanyWebsite(event.target.value)}
+                  placeholder="https://..."
+                  maxLength={200}
+                />
+              </label>
+            </div>
+            <label className="flex flex-col gap-2 text-xs text-zinc-500">
+              Redes sociales
+              <textarea
+                className="input min-h-[82px] !rounded-xl"
+                value={companySocialMedia}
+                onChange={(event) => setCompanySocialMedia(event.target.value)}
+                placeholder="Instagram: @empresa · Facebook: /empresa · LinkedIn: ..."
+                maxLength={240}
+              />
+            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-zinc-500">
+                Se usa en facturas, notas, ventas, presupuestos, recibos y remitos PDF.
+              </p>
+              <button
+                type="submit"
+                className="btn btn-emerald text-xs"
+                disabled={isCompanyProfileSaving}
+              >
+                {isCompanyProfileSaving ? "Guardando..." : "Guardar datos"}
+              </button>
+            </div>
+            {companyProfileStatus ? (
+              <p className="text-xs text-zinc-500">{companyProfileStatus}</p>
+            ) : null}
+          </form>
         </Section>
       ) : null}
 

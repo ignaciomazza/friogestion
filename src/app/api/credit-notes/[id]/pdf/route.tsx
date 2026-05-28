@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { FiscalPdfDocument } from "@/lib/pdf/fiscal";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
+import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   normalizeCustomerFiscalTaxProfile,
@@ -55,6 +57,18 @@ export async function GET(
           include: {
             customer: true,
             items: { include: { product: true } },
+            receipts: {
+              where: { status: "CONFIRMED" },
+              select: {
+                lines: {
+                  select: {
+                    paymentMethod: {
+                      select: { name: true },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         organization: true,
@@ -95,6 +109,18 @@ export async function GET(
       : null;
     const iva = Number(voucherData.ImpIVA ?? 0);
     const otherTaxes = Number(voucherData.ImpTrib ?? 0);
+    const issuerTaxId =
+      creditNote.organization.taxId ?? config?.taxIdRepresentado ?? null;
+    const manualIssuerActivityStart =
+      creditNote.organization.activityStart?.toLocaleDateString("es-AR") ?? null;
+    const issuerTaxpayer = await resolveIssuerTaxpayerSummary({
+      organizationId: creditNoteOrganizationId,
+      taxId: issuerTaxId,
+    });
+    const paymentMethod = resolveSalePaymentMethodLabel({
+      paymentStatus: creditNote.sale?.paymentStatus,
+      receipts: creditNote.sale?.receipts,
+    });
 
     const items = creditNote.sale?.items.map((item) => ({
       description: item.product.name,
@@ -112,10 +138,17 @@ export async function GET(
           issuer: {
             name: creditNote.organization.name,
             legalName: creditNote.organization.legalName ?? undefined,
-            taxId:
-              creditNote.organization.taxId ??
-              config?.taxIdRepresentado ??
+            taxId: issuerTaxId ?? undefined,
+            fiscalCondition: issuerTaxpayer.fiscalCondition ?? undefined,
+            activityStart:
+              manualIssuerActivityStart ??
+              issuerTaxpayer.activityStart ??
               undefined,
+            address: creditNote.organization.address ?? undefined,
+            email: creditNote.organization.email ?? undefined,
+            phone: creditNote.organization.phone ?? undefined,
+            website: creditNote.organization.website ?? undefined,
+            socialMedia: creditNote.organization.socialMedia ?? undefined,
           },
           receiver: {
             name: creditNote.sale?.customer.displayName ?? "-",
@@ -159,6 +192,7 @@ export async function GET(
             payload && typeof payload === "object"
               ? (payload.qrBase64 as string | null)
               : null,
+          paymentMethod,
         }}
       />
     );

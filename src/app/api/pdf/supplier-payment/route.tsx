@@ -121,6 +121,11 @@ export async function GET(req: NextRequest) {
             name: payment.organization.name,
             legalName: payment.organization.legalName,
             taxId: payment.organization.taxId,
+            address: payment.organization.address,
+            email: payment.organization.email,
+            phone: payment.organization.phone,
+            website: payment.organization.website,
+            socialMedia: payment.organization.socialMedia,
           },
           customer: {
             name: payment.supplier.displayName,

@@ -105,6 +105,9 @@ const toNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const roundToTwo = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
 const resolveImmediatePaymentMethodName = (input: {
   purchaseId: string;
   invoiceNumber: string | null;
@@ -318,6 +321,24 @@ export async function GET(req: NextRequest) {
           );
         const paymentMethodName =
           immediatePaymentMethodName ?? supplierAllocatedPaymentMethodName;
+        const totalAmount = toNumber(purchase.total);
+        const storedPaidTotal = toNumber(purchase.paidTotal);
+        const allocatedPaidTotal = (
+          purchase.allocations as Array<{ amount: unknown }>
+        ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
+        const impactsAccount = purchase.currentAccountEntries.length > 0;
+        const effectivePaidTotal = impactsAccount
+          ? roundToTwo(allocatedPaidTotal)
+          : roundToTwo(storedPaidTotal);
+        const effectiveBalance = roundToTwo(
+          Math.max(totalAmount - effectivePaidTotal, 0),
+        );
+        const effectivePaymentStatus =
+          effectivePaidTotal <= 0
+            ? "UNPAID"
+            : effectiveBalance <= 0.005
+              ? "PAID"
+              : "PARTIAL";
 
         return {
           id: purchase.id,
@@ -350,15 +371,15 @@ export async function GET(req: NextRequest) {
             amount: line.amount.toString(),
             note: line.note,
           })),
-          paidTotal: purchase.paidTotal?.toString() ?? "0",
-          balance: purchase.balance?.toString() ?? "0",
-          paymentStatus: purchase.paymentStatus,
+          paidTotal: effectivePaidTotal.toFixed(2),
+          balance: effectiveBalance.toFixed(2),
+          paymentStatus: effectivePaymentStatus,
           itemsCount: purchase.items.length,
           status: purchase.status,
           hasInvoice: fiscalComputable,
           fiscalComputable,
           fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
-          impactsAccount: purchase.currentAccountEntries.length > 0,
+          impactsAccount,
           cashOutRegistered: Boolean(immediatePaymentMethodName),
           immediatePaymentMethodName: paymentMethodName,
           arcaValidationStatus: purchase.arcaValidationStatus,

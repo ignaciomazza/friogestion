@@ -14,9 +14,12 @@ type FiscalPdfData = {
     name: string;
     legalName?: string | null;
     taxId?: string | null;
+    activityStart?: string | null;
     address?: string | null;
     email?: string | null;
     phone?: string | null;
+    website?: string | null;
+    socialMedia?: string | null;
     fiscalCondition?: string | null;
   };
   receiver: {
@@ -57,6 +60,7 @@ type FiscalPdfData = {
   } | null;
   logoSrc?: string | null;
   qrBase64?: string | null;
+  paymentMethod?: string | null;
 };
 
 const styles = StyleSheet.create({
@@ -140,11 +144,23 @@ const styles = StyleSheet.create({
     padding: 10,
     minHeight: 94,
   },
+  issuerColumn: {
+    width: "50%",
+  },
+  issuerPrimaryCard: {
+    width: "100%",
+    minHeight: 0,
+    marginBottom: 10,
+  },
+  issuerSecondaryCard: {
+    width: "100%",
+    minHeight: 0,
+  },
   partyHeader: {
     marginBottom: 6,
   },
   detailLine: {
-    marginTop: 3,
+    marginTop: 4,
     color: "#344054",
   },
   serviceDates: {
@@ -183,21 +199,44 @@ const styles = StyleSheet.create({
   colUnit: { width: "16%", textAlign: "right" },
   colTax: { width: "14%", textAlign: "right" },
   colTotal: { width: "16%", textAlign: "right" },
+  colTotalNoTax: { width: "30%" },
   subText: {
     fontSize: 7,
     color: "#667085",
     marginTop: 2,
   },
   totals: {
-    marginTop: 12,
-    marginLeft: "auto",
-    width: "44%",
+    marginTop: 8,
+    width: "100%",
     borderWidth: 1,
     borderColor: "#d0d5dd",
     backgroundColor: "#f8fafc",
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 6,
+  },
+  summaryRight: {
+    width: "44%",
+    marginTop: 12,
+  },
+  paymentBox: {
+    borderWidth: 1,
+    borderColor: "#d0d5dd",
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  paymentLabel: {
+    fontSize: 7,
+    color: "#6b7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 3,
+  },
+  paymentValue: {
+    fontSize: 9,
+    color: "#172033",
   },
   totalRow: {
     flexDirection: "row",
@@ -293,24 +332,68 @@ function formatVoucherDisplay(
   return number?.trim() || "-";
 }
 
+function normalizeMultilineDetail(value?: string | null) {
+  if (!value) return null;
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+  return lines.join("\n");
+}
+
+function normalizeComparableText(value?: string | null) {
+  if (!value) return "";
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function isConsumerFinalFiscalCondition(value?: string | null) {
+  const normalized = normalizeComparableText(value);
+  return normalized.includes("consumidor final");
+}
+
 export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
   const currency = data.voucher.currencyCode === "USD" ? "USD" : "ARS";
   const voucherNumber = formatVoucherDisplay(
     data.voucher.pointOfSale,
     data.voucher.number,
   );
-  const totals = [
-    { label: "Neto", value: data.voucher.net },
-    { label: "IVA", value: data.voucher.iva },
-    { label: "Exento", value: data.voucher.exempt },
-    { label: "Otros impuestos", value: data.voucher.otherTaxes },
-    { label: "Total", value: data.voucher.total },
-  ].filter(
-    (item) =>
-      item.value !== null &&
-      item.value !== undefined &&
-      (item.label === "Total" || Number(item.value) !== 0)
+  const receiverIdentity = [
+    data.receiver.fiscalCondition,
+    data.receiver.legalName,
+    data.receiver.name,
+  ]
+    .map((value) => normalizeComparableText(value))
+    .join(" ");
+  const hideVatBreakdown =
+    data.transparency?.enabled === true ||
+    isConsumerFinalFiscalCondition(receiverIdentity);
+  const issuerSocialMedia = normalizeMultilineDetail(data.issuer.socialMedia);
+  const hasIssuerContactDetails = Boolean(
+    data.issuer.address ||
+      data.issuer.email ||
+      data.issuer.phone ||
+      data.issuer.website ||
+      issuerSocialMedia
   );
+  const totals = hideVatBreakdown
+    ? [{ label: "Total", value: data.voucher.total }]
+    : [
+        { label: "Neto", value: data.voucher.net },
+        { label: "IVA", value: data.voucher.iva },
+        { label: "Exento", value: data.voucher.exempt },
+        { label: "Otros impuestos", value: data.voucher.otherTaxes },
+        { label: "Total", value: data.voucher.total },
+      ].filter(
+        (item) =>
+          item.value !== null &&
+          item.value !== undefined &&
+          (item.label === "Total" || Number(item.value) !== 0)
+      );
   const transparency =
     data.transparency?.enabled === true
       ? {
@@ -349,34 +432,53 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
 
         <View style={styles.section}>
           <View style={styles.row}>
-            <View style={styles.partyCard}>
-              <View style={styles.partyHeader}>
-                <Text style={styles.label}>Emisor</Text>
-                <Text style={styles.strong}>
-                  {data.issuer.legalName ?? data.issuer.name}
+            <View style={styles.issuerColumn}>
+              <View style={[styles.partyCard, styles.issuerPrimaryCard]}>
+                <View style={styles.partyHeader}>
+                  <Text style={styles.label}>Emisor</Text>
+                  <Text style={styles.strong}>
+                    {data.issuer.legalName ?? data.issuer.name}
+                  </Text>
+                </View>
+                {data.issuer.legalName &&
+                data.issuer.legalName !== data.issuer.name ? (
+                  <Text style={styles.detailLine}>{data.issuer.name}</Text>
+                ) : null}
+                {data.issuer.taxId ? (
+                  <Text style={styles.detailLine}>CUIT {data.issuer.taxId}</Text>
+                ) : null}
+                <Text style={styles.detailLine}>
+                  Condicion fiscal: {data.issuer.fiscalCondition?.trim() || "No informada"}
+                </Text>
+                <Text style={styles.detailLine}>
+                  Inicio de actividad: {data.issuer.activityStart?.trim() || "No informado"}
                 </Text>
               </View>
-              {data.issuer.legalName &&
-              data.issuer.legalName !== data.issuer.name ? (
-                <Text style={styles.detailLine}>{data.issuer.name}</Text>
-              ) : null}
-              {data.issuer.taxId ? (
-                <Text style={styles.detailLine}>CUIT {data.issuer.taxId}</Text>
-              ) : null}
-              {data.issuer.fiscalCondition ? (
-                <Text style={styles.detailLine}>
-                  {data.issuer.fiscalCondition}
-                </Text>
-              ) : null}
-              {data.issuer.address ? (
-                <Text style={styles.detailLine}>{data.issuer.address}</Text>
-              ) : null}
-              {data.issuer.email ? (
-                <Text style={styles.detailLine}>{data.issuer.email}</Text>
-              ) : null}
-              {data.issuer.phone ? (
-                <Text style={styles.detailLine}>{data.issuer.phone}</Text>
-              ) : null}
+              <View style={[styles.partyCard, styles.issuerSecondaryCard]}>
+                <View style={styles.partyHeader}>
+                  <Text style={styles.label}>Contacto emisor</Text>
+                </View>
+                {data.issuer.address ? (
+                  <Text style={styles.detailLine}>{data.issuer.address}</Text>
+                ) : null}
+                {data.issuer.email ? (
+                  <Text style={styles.detailLine}>{data.issuer.email}</Text>
+                ) : null}
+                {data.issuer.phone ? (
+                  <Text style={styles.detailLine}>{data.issuer.phone}</Text>
+                ) : null}
+                {data.issuer.website ? (
+                  <Text style={styles.detailLine}>{data.issuer.website}</Text>
+                ) : null}
+                {issuerSocialMedia ? (
+                  <Text style={styles.detailLine}>{issuerSocialMedia}</Text>
+                ) : null}
+                {!hasIssuerContactDetails ? (
+                  <Text style={[styles.detailLine, styles.muted]}>
+                    Sin datos de contacto
+                  </Text>
+                ) : null}
+              </View>
             </View>
             <View style={styles.partyCard}>
               <View style={styles.partyHeader}>
@@ -425,8 +527,18 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
               <Text style={[styles.colDesc, styles.tableHeaderText]}>Detalle</Text>
               <Text style={[styles.colQty, styles.tableHeaderText]}>Cant.</Text>
               <Text style={[styles.colUnit, styles.tableHeaderText]}>Unit.</Text>
-              <Text style={[styles.colTax, styles.tableHeaderText]}>IVA</Text>
-              <Text style={[styles.colTotal, styles.tableHeaderText]}>Neto</Text>
+              {!hideVatBreakdown ? (
+                <Text style={[styles.colTax, styles.tableHeaderText]}>IVA</Text>
+              ) : null}
+              <Text
+                style={[
+                  styles.colTotal,
+                  hideVatBreakdown ? styles.colTotalNoTax : undefined,
+                  styles.tableHeaderText,
+                ]}
+              >
+                {hideVatBreakdown ? "Total" : "Neto"}
+              </Text>
             </View>
             {data.items.map((item, index) => {
               const taxRate =
@@ -439,6 +551,12 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
                   : taxRate !== null
                     ? item.total * (taxRate / 100)
                     : null;
+              const lineTotal =
+                taxAmount !== null ? item.total + taxAmount : item.total;
+              const unitTaxAmount =
+                taxRate !== null ? item.unitPrice * (taxRate / 100) : null;
+              const unitTotal =
+                unitTaxAmount !== null ? item.unitPrice + unitTaxAmount : item.unitPrice;
 
               return (
                 <View
@@ -451,21 +569,34 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
                 >
                   <View style={styles.colDesc}>
                     <Text>{item.description}</Text>
-                    {taxRate !== null ? (
+                    {!hideVatBreakdown && taxRate !== null ? (
                       <Text style={styles.subText}>IVA {taxRate.toFixed(2)}%</Text>
                     ) : null}
                   </View>
                   <Text style={styles.colQty}>{item.qty.toFixed(2)}</Text>
                   <Text style={styles.colUnit}>
-                    {formatCurrency(item.unitPrice, currency)}
+                    {formatCurrency(
+                      hideVatBreakdown ? unitTotal : item.unitPrice,
+                      currency
+                    )}
                   </Text>
-                  <Text style={styles.colTax}>
-                    {taxAmount !== null
-                      ? formatCurrency(taxAmount, currency)
-                      : "-"}
-                  </Text>
-                  <Text style={styles.colTotal}>
-                    {formatCurrency(item.total, currency)}
+                  {!hideVatBreakdown ? (
+                    <Text style={styles.colTax}>
+                      {taxAmount !== null
+                        ? formatCurrency(taxAmount, currency)
+                        : "-"}
+                    </Text>
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.colTotal,
+                      hideVatBreakdown ? styles.colTotalNoTax : undefined,
+                    ]}
+                  >
+                    {formatCurrency(
+                      hideVatBreakdown ? lineTotal : item.total,
+                      currency
+                    )}
                   </Text>
                 </View>
               );
@@ -500,25 +631,33 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
           ) : (
             <View style={{ width: "52%" }} />
           )}
-          <View style={styles.totals}>
-            {totals.map((item) => (
-              <View key={item.label} style={styles.totalRow}>
-                <Text
-                  style={
-                    item.label === "Total" ? styles.totalHighlight : undefined
-                  }
-                >
-                  {item.label}
-                </Text>
-                <Text
-                  style={
-                    item.label === "Total" ? styles.totalHighlight : undefined
-                  }
-                >
-                  {formatCurrency(item.value ?? 0, currency)}
-                </Text>
-              </View>
-            ))}
+          <View style={styles.summaryRight}>
+            <View style={styles.paymentBox}>
+              <Text style={styles.paymentLabel}>Metodo de pago</Text>
+              <Text style={styles.paymentValue}>
+                {data.paymentMethod?.trim() || "No informado"}
+              </Text>
+            </View>
+            <View style={styles.totals}>
+              {totals.map((item) => (
+                <View key={item.label} style={styles.totalRow}>
+                  <Text
+                    style={
+                      item.label === "Total" ? styles.totalHighlight : undefined
+                    }
+                  >
+                    {item.label}
+                  </Text>
+                  <Text
+                    style={
+                      item.label === "Total" ? styles.totalHighlight : undefined
+                    }
+                  >
+                    {formatCurrency(item.value ?? 0, currency)}
+                  </Text>
+                </View>
+              ))}
+            </View>
           </View>
         </View>
 

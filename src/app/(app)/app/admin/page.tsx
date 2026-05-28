@@ -56,6 +56,12 @@ export default async function AdminPage() {
   const activeOrg = {
     id: activeMembership.organization.id,
     name: activeMembership.organization.name,
+    address: activeMembership.organization.address,
+    phone: activeMembership.organization.phone,
+    email: activeMembership.organization.email,
+    activityStart: activeMembership.organization.activityStart?.toISOString() ?? null,
+    website: activeMembership.organization.website,
+    socialMedia: activeMembership.organization.socialMedia,
     adjustStockOnQuoteConfirm:
       activeMembership.organization.adjustStockOnQuoteConfirm,
   };

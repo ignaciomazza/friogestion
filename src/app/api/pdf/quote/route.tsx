@@ -83,6 +83,11 @@ export async function GET(req: NextRequest) {
             name: quote.organization.name,
             legalName: quote.organization.legalName,
             taxId: quote.organization.taxId,
+            address: quote.organization.address,
+            email: quote.organization.email,
+            phone: quote.organization.phone,
+            website: quote.organization.website,
+            socialMedia: quote.organization.socialMedia,
           },
           customer: {
             name: quote.customer.displayName,

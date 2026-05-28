@@ -147,6 +147,24 @@ export default function SupplierGroupedPaymentModal({
   );
 
   const remaining = lineTotal - allocationTotal;
+  const canSubmitPayment =
+    !isSubmitting &&
+    lineTotal > 0.005 &&
+    allocationTotal > 0 &&
+    Math.abs(remaining) <= 0.01;
+
+  useEffect(() => {
+    if (lines.length !== 1) return;
+    if (allocationTotal <= 0.005) return;
+    const currentAmount = Number(lines[0]?.amount || 0);
+    if (currentAmount > 0.005) return;
+    setLines((prev) => {
+      if (prev.length !== 1) return prev;
+      const current = Number(prev[0]?.amount || 0);
+      if (current > 0.005) return prev;
+      return [{ ...prev[0], amount: toMoneyValue(allocationTotal) }];
+    });
+  }, [allocationTotal, lines]);
 
   useEffect(() => {
     if (!purchase) return;
@@ -244,6 +262,11 @@ export default function SupplierGroupedPaymentModal({
       currencyCode: "ARS",
       amount: Number(line.amount || 0),
     }));
+
+    if (lineTotal <= 0.005) {
+      setStatus("Carga el monto en las lineas de pago antes de imputar compras");
+      return;
+    }
 
     const hasInvalidLine = normalizedLines.some((line) => {
       if (!line.paymentMethodId) return true;
@@ -508,7 +531,7 @@ export default function SupplierGroupedPaymentModal({
                 </span>
               </p>
               <p>
-                Imputado:{" "}
+                Asignado a compras:{" "}
                 <span className="font-semibold text-zinc-900">
                   {formatCurrencyARS(allocationTotal)}
                 </span>
@@ -525,6 +548,24 @@ export default function SupplierGroupedPaymentModal({
                   {formatCurrencyARS(remaining)}
                 </span>
               </p>
+              <p className="mt-1 text-[11px] text-zinc-500">
+                El pago se registra recien al presionar &quot;Registrar pago&quot;.
+              </p>
+              {lineTotal <= 0.005 ? (
+                <p className="mt-1 text-[11px] text-rose-600">
+                  Falta cargar el monto de pago.
+                </p>
+              ) : null}
+              {allocationTotal <= 0 ? (
+                <p className="mt-1 text-[11px] text-rose-600">
+                  Falta asignar el pago a al menos una compra.
+                </p>
+              ) : null}
+              {lineTotal > 0.005 && allocationTotal > 0 && Math.abs(remaining) > 0.01 ? (
+                <p className="mt-1 text-[11px] text-rose-600">
+                  El monto de pago y el monto asignado deben coincidir.
+                </p>
+              ) : null}
             </div>
 
             {status ? <p className="text-xs text-zinc-600">{status}</p> : null}
@@ -545,7 +586,7 @@ export default function SupplierGroupedPaymentModal({
               type="button"
               className="btn btn-emerald w-full sm:w-auto"
               onClick={handleSubmit}
-              disabled={isSubmitting}
+              disabled={!canSubmitPayment}
             >
               {isSubmitting ? "Registrando..." : "Registrar pago"}
             </button>

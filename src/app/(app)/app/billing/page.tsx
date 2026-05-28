@@ -101,6 +101,8 @@ export default async function BillingPage() {
         saleNumber: invoice.sale.saleNumber,
         customerName: invoice.sale.customer.displayName,
         customerPhone: invoice.sale.customer.phone,
+        customerType: invoice.sale.customer.type,
+        customerFiscalTaxProfile: invoice.sale.customer.fiscalTaxProfile,
         type: invoice.type,
         pointOfSale: invoice.pointOfSale,
         number: invoice.number,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { recalcPurchaseTotals } from "@/lib/purchases";
@@ -9,6 +10,10 @@ const cancelSchema = z.object({
   id: z.string().min(1),
   note: z.string().max(280).optional(),
 });
+const SUPPLIER_PAYMENT_CANCEL_TX_OPTIONS = {
+  maxWait: 15_000,
+  timeout: 30_000,
+} as const;
 
 export async function POST(req: NextRequest) {
   try {
@@ -83,12 +88,21 @@ export async function POST(req: NextRequest) {
       for (const purchaseId of purchaseIds) {
         await recalcPurchaseTotals(tx, purchaseId);
       }
-    });
+    }, SUPPLIER_PAYMENT_CANCEL_TX_OPTIONS);
 
     return NextResponse.json({ ok: true });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2028"
+    ) {
+      return NextResponse.json(
+        { error: "La operación tardó demasiado. Reintenta anular el pago." },
+        { status: 503 }
+      );
     }
     return NextResponse.json(
       { error: "No se pudo anular" },

@@ -14,6 +14,10 @@ type DeliveryNotePdfData = {
     legalName?: string | null;
     taxId?: string | null;
     address?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    website?: string | null;
+    socialMedia?: string | null;
   };
   receiver: {
     name: string;
@@ -30,6 +34,17 @@ type DeliveryNotePdfData = {
   observations?: string | null;
   logoSrc?: string | null;
 };
+
+function normalizeMultilineDetail(value?: string | null) {
+  if (!value) return null;
+  const lines = value
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return null;
+  return lines.join("\n");
+}
 
 const styles = StyleSheet.create({
   page: {
@@ -78,6 +93,10 @@ const styles = StyleSheet.create({
   },
   block: {
     width: "50%",
+  },
+  detailLine: {
+    marginTop: 3,
+    color: "#374151",
   },
   label: {
     fontSize: 7,
@@ -137,6 +156,10 @@ const styles = StyleSheet.create({
 });
 
 export function DeliveryNotePdfDocument({ data }: { data: DeliveryNotePdfData }) {
+  const organizationSocialMedia = normalizeMultilineDetail(
+    data.organization.socialMedia,
+  );
+
   return (
     <Document>
       <Page size="A4" style={styles.page}>
@@ -157,14 +180,34 @@ export function DeliveryNotePdfDocument({ data }: { data: DeliveryNotePdfData })
             <View style={styles.block}>
               <Text style={styles.label}>Emisor</Text>
               <Text>{data.organization.legalName ?? data.organization.name}</Text>
-              {data.organization.taxId ? <Text>{data.organization.taxId}</Text> : null}
-              {data.organization.address ? <Text>{data.organization.address}</Text> : null}
+              {data.organization.taxId ? (
+                <Text style={styles.detailLine}>{data.organization.taxId}</Text>
+              ) : null}
+              {data.organization.address ? (
+                <Text style={styles.detailLine}>{data.organization.address}</Text>
+              ) : null}
+              {data.organization.phone ? (
+                <Text style={styles.detailLine}>{data.organization.phone}</Text>
+              ) : null}
+              {data.organization.email ? (
+                <Text style={styles.detailLine}>{data.organization.email}</Text>
+              ) : null}
+              {data.organization.website ? (
+                <Text style={styles.detailLine}>{data.organization.website}</Text>
+              ) : null}
+              {organizationSocialMedia ? (
+                <Text style={styles.detailLine}>{organizationSocialMedia}</Text>
+              ) : null}
             </View>
             <View style={styles.block}>
               <Text style={styles.label}>Receptor</Text>
               <Text>{data.receiver.name}</Text>
-              {data.receiver.taxId ? <Text>{data.receiver.taxId}</Text> : null}
-              {data.receiver.address ? <Text>{data.receiver.address}</Text> : null}
+              {data.receiver.taxId ? (
+                <Text style={styles.detailLine}>{data.receiver.taxId}</Text>
+              ) : null}
+              {data.receiver.address ? (
+                <Text style={styles.detailLine}>{data.receiver.address}</Text>
+              ) : null}
             </View>
           </View>
         </View>

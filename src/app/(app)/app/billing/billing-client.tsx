@@ -63,6 +63,8 @@ type IssuedInvoiceRow = {
   saleNumber: string | null;
   customerName: string;
   customerPhone?: string | null;
+  customerType?: string | null;
+  customerFiscalTaxProfile?: string | null;
   type: string | null;
   pointOfSale: string | null;
   number: string | null;
@@ -809,6 +811,8 @@ export default function BillingClient({
         saleNumber: saleSnapshot.saleNumber,
         customerName: saleSnapshot.customerName,
         customerPhone: saleSnapshot.customerPhone,
+        customerType: saleSnapshot.customerType,
+        customerFiscalTaxProfile: saleSnapshot.customerFiscalTaxProfile,
         type: invoice.type,
         pointOfSale: invoice.pointOfSale,
         number: invoice.number,
@@ -1861,6 +1865,13 @@ export default function BillingClient({
                     <tbody>
                       {filteredIssuedInvoices.length ? (
                         filteredIssuedInvoices.map((invoice) => {
+                          const invoiceFiscalTaxProfile = normalizeCustomerFiscalTaxProfile(
+                            invoice.customerFiscalTaxProfile ?? null
+                          );
+                          const isConsumerFinalInvoice =
+                            invoiceFiscalTaxProfile === "CONSUMIDOR_FINAL" ||
+                            (!invoiceFiscalTaxProfile &&
+                              (invoice.customerType ?? "CONSUMER_FINAL") === "CONSUMER_FINAL");
                           const linkedCreditNote = creditNoteByInvoiceId.get(invoice.id);
                           const creditNoteLabel = linkedCreditNote
                             ? formatVoucherLabel(
@@ -1902,7 +1913,11 @@ export default function BillingClient({
                                 {invoice.subtotal ? formatCurrencyARS(invoice.subtotal) : "-"}
                               </td>
                               <td className="py-2 pr-3 text-right text-zinc-700">
-                                {invoice.iva ? formatCurrencyARS(invoice.iva) : "-"}
+                                {isConsumerFinalInvoice
+                                  ? "-"
+                                  : invoice.iva
+                                    ? formatCurrencyARS(invoice.iva)
+                                    : "-"}
                               </td>
                               <td className="py-2 pr-3 text-right text-zinc-900">
                                 {invoice.total ? formatCurrencyARS(invoice.total) : "-"}

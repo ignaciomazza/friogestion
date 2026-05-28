@@ -443,8 +443,8 @@ const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode =>
 const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
   if (purchase.impactsAccount) {
     const normalizedPaymentStatus = purchase.paymentStatus?.toUpperCase();
+    const paymentMethodLabel = purchase.immediatePaymentMethodName?.trim();
     if (normalizedPaymentStatus === "PAID") {
-      const paymentMethodLabel = purchase.immediatePaymentMethodName?.trim();
       return {
         label: paymentMethodLabel || "Pagada",
         tone: "immediate" as const,
@@ -452,7 +452,15 @@ const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
     }
     if (normalizedPaymentStatus === "PARTIAL") {
       return {
-        label: "Cta. Cte (Parcial)",
+        label: paymentMethodLabel
+          ? `${paymentMethodLabel} (Parcial)`
+          : "Cta. Cte (Parcial)",
+        tone: "current-account" as const,
+      };
+    }
+    if (paymentMethodLabel) {
+      return {
+        label: `${paymentMethodLabel} (Parcial)`,
         tone: "current-account" as const,
       };
     }
@@ -4025,7 +4033,7 @@ export default function PurchasesPage() {
       ? `ARCA ${arcaStatusLabel(detailPurchase.arcaValidationStatus)}`
       : "Registro interno · No computable fiscalmente"
     : "Registro interno";
-  const purchasesTableColSpan = purchaseListMode === "finance" ? 10 : 7;
+  const purchasesTableColSpan = purchaseListMode === "finance" ? 11 : 7;
 
   return (
     <div className="space-y-6">
@@ -5606,6 +5614,7 @@ export default function PurchasesPage() {
               {filteredPurchases.length ? (
                 filteredPurchases.map((purchase) => {
                   const paymentStatus = getPurchasePaymentStatus(purchase);
+                  const pendingBalance = Number(purchase.balance ?? 0);
 
                   return (
                     <div
@@ -5627,7 +5636,7 @@ export default function PurchasesPage() {
                       </p>
                     </div>
                     {purchaseListMode === "finance" ? (
-                      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px] text-zinc-500">
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-zinc-500 sm:grid-cols-4">
                         <div>
                           <span className="block uppercase tracking-wide">
                             Productos
@@ -5650,6 +5659,14 @@ export default function PurchasesPage() {
                           </span>
                           <span className="font-semibold text-zinc-700">
                             {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block uppercase tracking-wide">
+                            Pendiente
+                          </span>
+                          <span className="font-semibold text-zinc-700">
+                            {formatCurrencyARS(pendingBalance)}
                           </span>
                         </div>
                       </div>
@@ -5699,7 +5716,7 @@ export default function PurchasesPage() {
               <table
                 className={`w-full text-left text-xs ${
                   purchaseListMode === "finance"
-                    ? "min-w-[1180px]"
+                    ? "min-w-[1300px]"
                     : "min-w-[940px]"
                 }`}
               >
@@ -5713,6 +5730,7 @@ export default function PurchasesPage() {
                         <th className="py-2 pr-3 text-right">Productos</th>
                         <th className="py-2 pr-3 text-right">IVA compra</th>
                         <th className="py-2 pr-3 text-right">Perc./otros</th>
+                        <th className="py-2 pr-3 text-right">Pendiente</th>
                       </>
                     ) : null}
                     <th className="py-2 pr-3 text-right">Total</th>
@@ -5725,6 +5743,7 @@ export default function PurchasesPage() {
                   {filteredPurchases.length ? (
                     filteredPurchases.map((purchase) => {
                       const paymentStatus = getPurchasePaymentStatus(purchase);
+                      const pendingBalance = Number(purchase.balance ?? 0);
 
                       return (
                         <tr
@@ -5750,6 +5769,9 @@ export default function PurchasesPage() {
                             </td>
                             <td className="py-3 pr-3 text-right text-zinc-700">
                               {formatCurrencyARS(purchase.otherTaxesTotal ?? 0)}
+                            </td>
+                            <td className="py-3 pr-3 text-right text-zinc-700">
+                              {formatCurrencyARS(pendingBalance)}
                             </td>
                           </>
                         ) : null}

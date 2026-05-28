@@ -242,6 +242,12 @@ model Organization {
   name      String
   legalName String?
   taxId     String?
+  address   String?
+  phone     String?
+  email     String?
+  activityStart DateTime?
+  website   String?
+  socialMedia String?
   receiptApprovalRoles String[] @default([])
   receiptDoubleCheckRoles String[] @default([])
   adjustStockOnQuoteConfirm Boolean @default(true)

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { parseOptionalDate } from "@/lib/validation";
@@ -36,6 +37,10 @@ const paymentSchema = z.object({
 });
 
 const ALLOWED_ROLES = ["OWNER", "ADMIN", "CASHIER"];
+const SUPPLIER_PAYMENT_TX_OPTIONS = {
+  maxWait: 15_000,
+  timeout: 30_000,
+} as const;
 
 export async function GET(req: NextRequest) {
   try {
@@ -324,19 +329,22 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      for (const line of created.lines) {
-        if (!line.accountId) continue;
-        await tx.accountMovement.create({
-          data: {
-            organizationId: membership.organizationId,
-            accountId: line.accountId,
-            occurredAt: paidAt,
-            direction: "OUT",
-            amount: line.amount,
-            currencyCode: line.currencyCode,
-            note: `Pago proveedor ${supplier.displayName}`,
-            supplierPaymentLineId: line.id,
-          },
+      const accountMovements = created.lines
+        .filter((line) => Boolean(line.accountId))
+        .map((line) => ({
+          organizationId: membership.organizationId,
+          accountId: line.accountId as string,
+          occurredAt: paidAt,
+          direction: "OUT" as const,
+          amount: line.amount,
+          currencyCode: line.currencyCode,
+          note: `Pago proveedor ${supplier.displayName}`,
+          supplierPaymentLineId: line.id,
+        }));
+
+      if (accountMovements.length) {
+        await tx.accountMovement.createMany({
+          data: accountMovements,
         });
       }
 
@@ -355,7 +363,7 @@ export async function POST(req: NextRequest) {
       });
 
       return created;
-    });
+    }, SUPPLIER_PAYMENT_TX_OPTIONS);
 
     return NextResponse.json({
       id: payment.id,
@@ -389,6 +397,15 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2028"
+    ) {
+      return NextResponse.json(
+        { error: "La operación tardó demasiado. Reintenta registrar el pago." },
+        { status: 503 }
+      );
     }
     if (error instanceof Error) {
       if (error.message === "ACCOUNT_REQUIRED") {

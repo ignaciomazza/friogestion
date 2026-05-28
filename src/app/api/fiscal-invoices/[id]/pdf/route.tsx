@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { requireRole } from "@/lib/auth/tenant";
 import { FiscalPdfDocument } from "@/lib/pdf/fiscal";
 import { resolveLogoSource } from "@/lib/pdf/assets";
+import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
+import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
   normalizeCustomerFiscalTaxProfile,
@@ -55,6 +57,18 @@ export async function GET(
           include: {
             customer: true,
             items: { include: { product: true } },
+            receipts: {
+              where: { status: "CONFIRMED" },
+              select: {
+                lines: {
+                  select: {
+                    paymentMethod: {
+                      select: { name: true },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         organization: true,
@@ -91,6 +105,18 @@ export async function GET(
       : null;
     const iva = Number(voucherData.ImpIVA ?? 0);
     const otherTaxes = Number(voucherData.ImpTrib ?? 0);
+    const issuerTaxId =
+      invoice.organization.taxId ?? config?.taxIdRepresentado ?? null;
+    const manualIssuerActivityStart =
+      invoice.organization.activityStart?.toLocaleDateString("es-AR") ?? null;
+    const issuerTaxpayer = await resolveIssuerTaxpayerSummary({
+      organizationId: invoiceOrganizationId,
+      taxId: issuerTaxId,
+    });
+    const paymentMethod = resolveSalePaymentMethodLabel({
+      paymentStatus: invoice.sale.paymentStatus,
+      receipts: invoice.sale.receipts,
+    });
 
     const items = invoice.sale.items.map((item) => ({
       description: item.product.name,
@@ -108,10 +134,17 @@ export async function GET(
           issuer: {
             name: invoice.organization.name,
             legalName: invoice.organization.legalName ?? undefined,
-            taxId:
-              invoice.organization.taxId ??
-              config?.taxIdRepresentado ??
+            taxId: issuerTaxId ?? undefined,
+            fiscalCondition: issuerTaxpayer.fiscalCondition ?? undefined,
+            activityStart:
+              manualIssuerActivityStart ??
+              issuerTaxpayer.activityStart ??
               undefined,
+            address: invoice.organization.address ?? undefined,
+            email: invoice.organization.email ?? undefined,
+            phone: invoice.organization.phone ?? undefined,
+            website: invoice.organization.website ?? undefined,
+            socialMedia: invoice.organization.socialMedia ?? undefined,
           },
           receiver: {
             name: invoice.sale.customer.displayName,
@@ -154,6 +187,7 @@ export async function GET(
             payload && typeof payload === "object"
               ? (payload.qrBase64 as string | null)
               : null,
+          paymentMethod,
         }}
       />
     );

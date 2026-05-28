@@ -106,6 +106,11 @@ export async function GET(req: NextRequest) {
             name: sale.organization.name,
             legalName: sale.organization.legalName,
             taxId: sale.organization.taxId,
+            address: sale.organization.address,
+            email: sale.organization.email,
+            phone: sale.organization.phone,
+            website: sale.organization.website,
+            socialMedia: sale.organization.socialMedia,
           },
           customer: {
             name: sale.customer.displayName,
