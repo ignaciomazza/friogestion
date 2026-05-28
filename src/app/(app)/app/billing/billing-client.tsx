@@ -208,6 +208,13 @@ function formatDateInput(value: string) {
   return parsed.toLocaleDateString("es-AR");
 }
 
+function toDateInputValue(value: Date) {
+  const year = value.getFullYear();
+  const month = `${value.getMonth() + 1}`.padStart(2, "0");
+  const day = `${value.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function isInvoiceResolution(value: unknown): value is InvoiceResolution {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
@@ -272,6 +279,13 @@ export default function BillingClient({
   const [isAfipHelpOpen, setIsAfipHelpOpen] = useState(false);
   const [isToBillOpen, setIsToBillOpen] = useState(true);
   const [isIssuedOpen, setIsIssuedOpen] = useState(false);
+  const now = new Date();
+  const [reportFrom, setReportFrom] = useState(() =>
+    toDateInputValue(new Date(now.getFullYear(), now.getMonth(), 1)),
+  );
+  const [reportTo, setReportTo] = useState(() =>
+    toDateInputValue(new Date(now.getFullYear(), now.getMonth() + 1, 0)),
+  );
   const [saleToInvoice, setSaleToInvoice] = useState<SaleRow | null>(null);
   const [invoiceStep, setInvoiceStep] = useState<"FORM" | "CONFIRM">("FORM");
   const [isIssuing, setIsIssuing] = useState(false);
@@ -1391,6 +1405,14 @@ export default function BillingClient({
     }
   };
 
+  const handleDownloadBillingReport = (format: "csv" | "pdf") => {
+    const params = new URLSearchParams();
+    params.set("format", format);
+    if (reportFrom) params.set("from", reportFrom);
+    if (reportTo) params.set("to", reportTo);
+    window.location.href = `/api/billing/report?${params.toString()}`;
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -1578,6 +1600,52 @@ export default function BillingClient({
           ) : null}
         </div>
       ) : null}
+
+      <div className="card space-y-4 p-4 sm:p-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+              Reporte mensual para contador
+            </h2>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-[auto_auto_auto_auto] sm:items-end">
+            <label className="field-stack min-w-0">
+              <span className="input-label">Desde</span>
+              <input
+                type="date"
+                className="input w-full min-w-0 cursor-pointer text-xs"
+                value={reportFrom}
+                onChange={(event) => setReportFrom(event.target.value)}
+              />
+            </label>
+            <label className="field-stack min-w-0">
+              <span className="input-label">Hasta</span>
+              <input
+                type="date"
+                className="input w-full min-w-0 cursor-pointer text-xs"
+                value={reportTo}
+                onChange={(event) => setReportTo(event.target.value)}
+              />
+            </label>
+            <div className="grid grid-cols-2 gap-2 sm:contents">
+              <button
+                type="button"
+                className="btn w-full text-xs sm:w-auto"
+                onClick={() => handleDownloadBillingReport("csv")}
+              >
+                Descargar CSV
+              </button>
+              <button
+                type="button"
+                className="btn btn-sky w-full text-xs sm:w-auto"
+                onClick={() => handleDownloadBillingReport("pdf")}
+              >
+                Descargar PDF
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="card p-0 border-dashed border-sky-200">
         <button
