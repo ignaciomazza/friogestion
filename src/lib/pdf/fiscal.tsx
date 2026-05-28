@@ -533,7 +533,7 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
               <Text
                 style={[
                   styles.colTotal,
-                  hideVatBreakdown ? styles.colTotalNoTax : undefined,
+                  ...(hideVatBreakdown ? [styles.colTotalNoTax] : []),
                   styles.tableHeaderText,
                 ]}
               >
@@ -590,7 +590,7 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
                   <Text
                     style={[
                       styles.colTotal,
-                      hideVatBreakdown ? styles.colTotalNoTax : undefined,
+                      ...(hideVatBreakdown ? [styles.colTotalNoTax] : []),
                     ]}
                   >
                     {formatCurrency(
@@ -641,20 +641,19 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
             <View style={styles.totals}>
               {totals.map((item) => (
                 <View key={item.label} style={styles.totalRow}>
-                  <Text
-                    style={
-                      item.label === "Total" ? styles.totalHighlight : undefined
-                    }
-                  >
-                    {item.label}
-                  </Text>
-                  <Text
-                    style={
-                      item.label === "Total" ? styles.totalHighlight : undefined
-                    }
-                  >
-                    {formatCurrency(item.value ?? 0, currency)}
-                  </Text>
+                  {item.label === "Total" ? (
+                    <>
+                      <Text style={styles.totalHighlight}>{item.label}</Text>
+                      <Text style={styles.totalHighlight}>
+                        {formatCurrency(item.value ?? 0, currency)}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text>{item.label}</Text>
+                      <Text>{formatCurrency(item.value ?? 0, currency)}</Text>
+                    </>
+                  )}
                 </View>
               ))}
             </View>

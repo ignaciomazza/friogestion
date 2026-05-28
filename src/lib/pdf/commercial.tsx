@@ -413,16 +413,19 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
           <Text style={styles.totalsLabel}>Totales ({currency})</Text>
           {data.totals.map((item) => (
             <View key={item.label} style={styles.totalsRow}>
-              <Text
-                style={item.label === "Total" ? styles.totalHighlight : undefined}
-              >
-                {item.label}
-              </Text>
-              <Text
-                style={item.label === "Total" ? styles.totalHighlight : undefined}
-              >
-                {formatCurrency(item.value, currency)}
-              </Text>
+              {item.label === "Total" ? (
+                <>
+                  <Text style={styles.totalHighlight}>{item.label}</Text>
+                  <Text style={styles.totalHighlight}>
+                    {formatCurrency(item.value, currency)}
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text>{item.label}</Text>
+                  <Text>{formatCurrency(item.value, currency)}</Text>
+                </>
+              )}
             </View>
           ))}
         </View>
