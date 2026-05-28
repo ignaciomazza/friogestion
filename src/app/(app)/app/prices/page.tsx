@@ -742,6 +742,7 @@ export default function PricesPage() {
   });
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const stickyHeaderRef = useRef<HTMLDivElement | null>(null);
   const stockRequestIdRef = useRef(0);
   const saveQueueRef = useRef<StockSaveJob[]>([]);
   const saveProductIdsRef = useRef<Set<string>>(new Set());
@@ -760,6 +761,31 @@ export default function PricesPage() {
   const hasSaveQueueActivityRef = useRef(false);
   const productsRef = useRef<StockProduct[]>([]);
   const rowsRef = useRef<Record<string, RowDraft>>({});
+  const [stickyTableHeadTop, setStickyTableHeadTop] = useState(120);
+
+  useEffect(() => {
+    const header = stickyHeaderRef.current;
+    if (!header) return;
+
+    const updateOffset = () => {
+      const nextTop = Math.ceil(header.getBoundingClientRect().height) + 8;
+      setStickyTableHeadTop(nextTop);
+    };
+
+    updateOffset();
+    window.addEventListener("resize", updateOffset);
+
+    let observer: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => updateOffset());
+      observer.observe(header);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateOffset);
+      observer?.disconnect();
+    };
+  }, []);
 
   const updateProductTooltip = (
     product: StockProduct,
@@ -1963,74 +1989,85 @@ export default function PricesPage() {
         ) : null}
       </div>
 
-      <div className="card space-y-4 p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            <span>Costos y listas de precios</span>
-            <span className="text-xs font-medium normal-case tracking-normal text-zinc-400">
-              • {products.length} de {totalProducts}
-            </span>
-          </h2>
-          <div className="flex w-full flex-wrap items-center justify-start gap-3">
-            <label className="inline-flex items-center gap-2">
-              <span className="text-xs font-medium text-zinc-500">Ordenar</span>
-              <select
-                className="input cursor-pointer border-sky-200 text-xs text-sky-950 focus:border-sky-300"
-                value={sortOrder}
-                onChange={(event) => handleSortOrderChange(event.target.value)}
-                aria-label="Ordenar precios"
-              >
-                {STOCK_SORT_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <input
-              className="input min-w-[220px] flex-1 basis-[20rem]"
-              ref={productSearchInputRef}
-              value={query}
-              onChange={(event) => handleSearchQueryChange(event.target.value)}
-              placeholder="Buscar por nombre, codigo interno o codigo compra"
-            />
+      <div className="card p-0">
+        <div
+          ref={stickyHeaderRef}
+          className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/95 px-6 pb-4 pt-5 shadow-[0_8px_18px_-16px_rgba(24,24,27,0.35)] backdrop-blur supports-[backdrop-filter]:bg-white/85"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+              <span>Costos y listas de precios</span>
+              <span className="text-xs font-medium normal-case tracking-normal text-zinc-400">
+                • {products.length} de {totalProducts}
+              </span>
+            </h2>
+            <div className="flex w-full flex-wrap items-center justify-start gap-3">
+              <label className="inline-flex items-center gap-2">
+                <span className="text-xs font-medium text-zinc-500">Ordenar</span>
+                <select
+                  className="input cursor-pointer border-sky-200 text-xs text-sky-950 focus:border-sky-300"
+                  value={sortOrder}
+                  onChange={(event) => handleSortOrderChange(event.target.value)}
+                  aria-label="Ordenar precios"
+                >
+                  {STOCK_SORT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <input
+                className="input min-w-[220px] flex-1 basis-[20rem]"
+                ref={productSearchInputRef}
+                value={query}
+                onChange={(event) => handleSearchQueryChange(event.target.value)}
+                placeholder="Buscar por nombre, codigo interno o codigo compra"
+              />
+            </div>
           </div>
         </div>
-        <div className="pb-1">
+        <div className="px-6 pb-1 pt-3">
           <table className="w-full text-left text-xs">
-            <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
+            <thead
+              className="sticky z-30 text-[11px] uppercase tracking-wide text-zinc-500"
+              style={{ top: stickyTableHeadTop }}
+            >
               <tr>
                 <th
                   className={
                     shouldWrapPriceLists
-                      ? "w-[30%] py-2 pr-2"
-                      : "w-[30%] min-w-[18rem] py-2 pr-2"
+                      ? "w-[30%] bg-white/95 py-2 pr-2"
+                      : "w-[30%] min-w-[18rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  <span className="sr-only">Producto</span>
+                  Producto
                 </th>
                 <th
                   className={
                     shouldWrapPriceLists
-                      ? "w-[14%] py-2 pr-2"
-                      : "w-[14%] min-w-[10rem] py-2 pr-2"
+                      ? "w-[14%] bg-white/95 py-2 pr-2"
+                      : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  <span className="sr-only">Costo ARS</span>
+                  Costo ARS
                 </th>
                 <th
                   className={
                     shouldWrapPriceLists
-                      ? "w-[14%] py-2 pr-2"
-                      : "w-[14%] min-w-[10rem] py-2 pr-2"
+                      ? "w-[14%] bg-white/95 py-2 pr-2"
+                      : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  <span className="sr-only">Costo USD</span>
+                  Costo USD
                 </th>
                 {!shouldWrapPriceLists
                   ? (
                   priceLists.map((priceList) => (
-                    <th key={priceList.id} className="w-[94px] py-2 pr-2">
+                    <th
+                      key={priceList.id}
+                      className="w-[94px] bg-white/95 py-2 pr-2"
+                    >
                       {priceList.name}
                     </th>
                   ))
@@ -2040,8 +2077,8 @@ export default function PricesPage() {
                   <th
                     className={
                       shouldWrapPriceLists
-                        ? "w-[18%] py-2 pr-2"
-                        : "w-[18%] min-w-[11rem] py-2 pr-2"
+                        ? "w-[18%] bg-white/95 py-2 pr-2"
+                        : "w-[18%] min-w-[11rem] bg-white/95 py-2 pr-2"
                     }
                   >
                     Stock
