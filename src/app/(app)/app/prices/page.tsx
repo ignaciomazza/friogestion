@@ -761,28 +761,37 @@ export default function PricesPage() {
   const hasSaveQueueActivityRef = useRef(false);
   const productsRef = useRef<StockProduct[]>([]);
   const rowsRef = useRef<Record<string, RowDraft>>({});
-  const [stickyTableHeadTop, setStickyTableHeadTop] = useState(120);
+  const [isStickyHeaderActive, setIsStickyHeaderActive] = useState(false);
 
   useEffect(() => {
     const header = stickyHeaderRef.current;
     if (!header) return;
 
-    const updateOffset = () => {
-      const nextTop = Math.ceil(header.getBoundingClientRect().height) + 8;
-      setStickyTableHeadTop(nextTop);
+    const updateStickyState = () => {
+      const topOffset = Number.parseFloat(
+        window.getComputedStyle(header).top || "0",
+      );
+      const nextSticky =
+        header.getBoundingClientRect().top <=
+        (Number.isFinite(topOffset) ? topOffset : 0) + 0.5;
+      setIsStickyHeaderActive((previous) =>
+        previous === nextSticky ? previous : nextSticky,
+      );
     };
 
-    updateOffset();
-    window.addEventListener("resize", updateOffset);
+    updateStickyState();
+    window.addEventListener("scroll", updateStickyState, { passive: true });
+    window.addEventListener("resize", updateStickyState);
 
     let observer: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(() => updateOffset());
+      observer = new ResizeObserver(() => updateStickyState());
       observer.observe(header);
     }
 
     return () => {
-      window.removeEventListener("resize", updateOffset);
+      window.removeEventListener("scroll", updateStickyState);
+      window.removeEventListener("resize", updateStickyState);
       observer?.disconnect();
     };
   }, []);
@@ -1992,7 +2001,11 @@ export default function PricesPage() {
       <div className="card p-0">
         <div
           ref={stickyHeaderRef}
-          className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/95 px-6 pb-4 pt-5 shadow-[0_8px_18px_-16px_rgba(24,24,27,0.35)] backdrop-blur supports-[backdrop-filter]:bg-white/85"
+          className={`sticky top-4 z-40 mx-3 mt-3 rounded-2xl border bg-white/95 px-6 pb-4 pt-5 backdrop-blur supports-[backdrop-filter]:bg-white/85 ${
+            isStickyHeaderActive
+              ? "border-zinc-200/80 shadow-[0_8px_18px_-16px_rgba(24,24,27,0.35)]"
+              : "border-transparent shadow-none"
+          }`}
         >
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-semibold uppercase tracking-wide text-zinc-500">
@@ -2030,8 +2043,9 @@ export default function PricesPage() {
         <div className="px-6 pb-1 pt-3">
           <table className="w-full text-left text-xs">
             <thead
-              className="sticky z-30 text-[11px] uppercase tracking-wide text-zinc-500"
-              style={{ top: stickyTableHeadTop }}
+              className={`text-[11px] uppercase tracking-wide text-zinc-500 ${
+                shouldWrapPriceLists ? "hidden" : ""
+              }`}
             >
               <tr>
                 <th
@@ -2041,7 +2055,7 @@ export default function PricesPage() {
                       : "w-[30%] min-w-[18rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  Producto
+                  <span className="sr-only">Producto</span>
                 </th>
                 <th
                   className={
@@ -2050,7 +2064,7 @@ export default function PricesPage() {
                       : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  Costo ARS
+                  <span className="sr-only">Costo ARS</span>
                 </th>
                 <th
                   className={
@@ -2059,7 +2073,7 @@ export default function PricesPage() {
                       : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
                   }
                 >
-                  Costo USD
+                  <span className="sr-only">Costo USD</span>
                 </th>
                 {!shouldWrapPriceLists
                   ? (
