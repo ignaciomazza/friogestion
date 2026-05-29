@@ -541,6 +541,7 @@ model PurchaseInvoice {
   otherTaxesTotal       Decimal                      @default(0) @db.Decimal(12, 2)
   paidTotal             Decimal                      @default(0) @db.Decimal(12, 2)
   balance               Decimal                      @default(0) @db.Decimal(12, 2)
+  immediatePaymentLabel String?
   arcaValidationStatus  PurchaseArcaValidationStatus @default(PENDING)
   arcaValidationCheckedAt DateTime?
   arcaValidationMessage String?

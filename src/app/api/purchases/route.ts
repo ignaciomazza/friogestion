@@ -41,7 +41,7 @@ const purchaseItemSchema = z.object({
 
 const cashOutLineSchema = z.object({
   paymentMethodId: z.string().min(1),
-  accountId: z.string().min(1).optional(),
+  accountId: z.string().optional(),
   amount: z.coerce.number().positive(),
 });
 
@@ -315,18 +315,21 @@ export async function GET(req: NextRequest) {
           invoiceNumber: purchase.invoiceNumber ?? null,
           candidatesByPrefix: immediateCashOutCandidatesByPrefix,
         });
+        const persistedImmediatePaymentLabel =
+          purchase.immediatePaymentLabel?.trim() || null;
         const supplierAllocatedPaymentMethodName =
           resolveSupplierAllocatedPaymentMethodName(
             purchase.allocations as SupplierPaymentAllocationCandidate[],
           );
-        const paymentMethodName =
-          immediatePaymentMethodName ?? supplierAllocatedPaymentMethodName;
+        const impactsAccount = purchase.currentAccountEntries.length > 0;
+        const paymentMethodName = impactsAccount
+          ? supplierAllocatedPaymentMethodName ?? immediatePaymentMethodName
+          : immediatePaymentMethodName ?? persistedImmediatePaymentLabel;
         const totalAmount = toNumber(purchase.total);
         const storedPaidTotal = toNumber(purchase.paidTotal);
         const allocatedPaidTotal = (
           purchase.allocations as Array<{ amount: unknown }>
         ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
-        const impactsAccount = purchase.currentAccountEntries.length > 0;
         const effectivePaidTotal = impactsAccount
           ? roundToTwo(allocatedPaidTotal)
           : roundToTwo(storedPaidTotal);
@@ -380,7 +383,7 @@ export async function GET(req: NextRequest) {
           fiscalComputable,
           fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
           impactsAccount,
-          cashOutRegistered: Boolean(immediatePaymentMethodName),
+          cashOutRegistered: Boolean(paymentMethodName),
           immediatePaymentMethodName: paymentMethodName,
           arcaValidationStatus: purchase.arcaValidationStatus,
           arcaValidationMessage: purchase.arcaValidationMessage ?? null,
@@ -621,6 +624,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const immediatePaymentLabel = registerCashOut
+      ? buildPaymentMethodLabel(
+          normalizedCashOutLines.map((line) => line.paymentMethodName),
+        )
+      : null;
+
     const productIds = Array.from(
       new Set([
         ...purchaseItems.map((item) => item.productId),
@@ -710,6 +719,7 @@ export async function POST(req: NextRequest) {
             : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
           paidTotal: impactCurrentAccount ? "0.00" : totalAmount.toFixed(2),
           balance: impactCurrentAccount ? totalAmount.toFixed(2) : "0.00",
+          immediatePaymentLabel: impactCurrentAccount ? null : immediatePaymentLabel,
           items: purchaseItems.length
             ? {
                 create: purchaseItems.map((item) => {
@@ -887,12 +897,7 @@ export async function POST(req: NextRequest) {
       impactsAccount: impactCurrentAccount,
       adjustedStock: adjustStock,
       cashOutRegistered: Boolean(registerCashOut && normalizedCashOutLines.length),
-      immediatePaymentMethodName:
-        registerCashOut && normalizedCashOutLines.length
-          ? normalizedCashOutLines.length > 1
-            ? `Pago mixto (${normalizedCashOutLines.length})`
-            : normalizedCashOutLines[0]?.paymentMethodName ?? null
-          : null,
+      immediatePaymentMethodName: immediatePaymentLabel,
       arcaValidationStatus:
         arcaValidation?.status ?? purchase.arcaValidationStatus,
       arcaValidationMessage:

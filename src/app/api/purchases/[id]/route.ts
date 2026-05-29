@@ -22,7 +22,7 @@ const updatePaymentModeSchema = z.object({
     .array(
       z.object({
         paymentMethodId: z.string().min(1),
-        accountId: z.string().min(1).optional(),
+        accountId: z.string().optional(),
         amount: z.coerce.number().positive(),
       }),
     )
@@ -36,6 +36,15 @@ const updatePaymentModeSchema = z.object({
 const toAmount = (value: unknown) => {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const buildPaymentMethodLabel = (methodNames: string[]) => {
+  const uniqueMethods = Array.from(
+    new Set(methodNames.map((name) => name.trim()).filter(Boolean)),
+  );
+  if (!uniqueMethods.length) return null;
+  if (uniqueMethods.length === 1) return uniqueMethods[0] ?? null;
+  return `Pago mixto (${uniqueMethods.length})`;
 };
 
 export async function GET(
@@ -461,6 +470,12 @@ export async function PATCH(
       }
     }
 
+    const immediatePaymentLabel = switchingToImmediateCashOut
+      ? buildPaymentMethodLabel(
+          normalizedCashOutLines.map((line) => line.paymentMethodName),
+        )
+      : null;
+
     const occurredAt = paidAtResult.date ?? purchase.invoiceDate ?? new Date();
     const purchaseLabel = purchase.invoiceNumber ?? purchase.id;
     const purchaseMovementNotePrefixes = Array.from(
@@ -503,6 +518,12 @@ export async function PATCH(
         }
 
         if (hasConfirmedAllocations) {
+          await tx.purchaseInvoice.update({
+            where: { id: purchase.id },
+            data: {
+              immediatePaymentLabel: null,
+            },
+          });
           await recalcPurchaseTotals(tx, purchase.id);
         } else {
           await tx.purchaseInvoice.update({
@@ -511,6 +532,7 @@ export async function PATCH(
               paidTotal: "0.00",
               balance: total.toFixed(2),
               paymentStatus: "UNPAID",
+              immediatePaymentLabel: null,
             },
           });
         }
@@ -531,6 +553,7 @@ export async function PATCH(
             paidTotal: total.toFixed(2),
             balance: "0.00",
             paymentStatus: "PAID",
+            immediatePaymentLabel: immediatePaymentLabel,
           },
         });
 
@@ -559,6 +582,7 @@ export async function PATCH(
           paidTotal: true,
           balance: true,
           paymentStatus: true,
+          immediatePaymentLabel: true,
           currentAccountEntries: {
             where: {
               sourceType: "PURCHASE",
@@ -586,6 +610,8 @@ export async function PATCH(
       paymentStatus: updatedPurchase.paymentStatus,
       impactsAccount: updatedPurchase.currentAccountEntries.length > 0,
       mode: body.paymentMode,
+      immediatePaymentMethodName:
+        updatedPurchase.immediatePaymentLabel?.trim() || null,
       message:
         body.paymentMode === "CURRENT_ACCOUNT"
           ? "Compra configurada en cuenta corriente."

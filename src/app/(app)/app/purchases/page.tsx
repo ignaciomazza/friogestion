@@ -478,6 +478,23 @@ const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
     };
   }
 
+  const normalizedPaymentStatus = purchase.paymentStatus?.toUpperCase();
+  const paidTotal = Number(purchase.paidTotal ?? 0);
+  const pendingBalance = Number(purchase.balance ?? 0);
+  const hasNoPendingBalance = Number.isFinite(pendingBalance)
+    ? pendingBalance <= 0.005
+    : false;
+  const hasPaidAmount = Number.isFinite(paidTotal) ? paidTotal > 0.005 : false;
+  if (
+    normalizedPaymentStatus === "PAID" ||
+    (hasNoPendingBalance && hasPaidAmount)
+  ) {
+    return {
+      label: "Sin impacto",
+      tone: "none" as const,
+    };
+  }
+
   return {
     label: "No",
     tone: "none" as const,
@@ -2965,7 +2982,7 @@ export default function PurchasesPage() {
               paymentMethods,
             )
               ? line.accountId
-              : "",
+              : undefined,
             amount: Number(line.amount || 0),
           }))
           .filter((line) => line.amount > 0)
@@ -3786,7 +3803,7 @@ export default function PurchasesPage() {
               paymentMethods,
             )
               ? line.accountId
-              : "",
+              : undefined,
             amount: Number(line.amount || 0),
           }))
           .filter((line) => line.amount > 0);
