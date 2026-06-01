@@ -55,10 +55,7 @@ export default async function BillingPage() {
     take: 120,
   });
   const creditNotes = await prisma.fiscalCreditNote.findMany({
-    where: {
-      organizationId: membership.organizationId,
-      fiscalInvoiceId: { not: null },
-    },
+    where: { organizationId: membership.organizationId },
     orderBy: { createdAt: "desc" },
     take: 200,
   });
@@ -113,18 +110,17 @@ export default async function BillingPage() {
         iva: invoice.sale.taxes?.toString() ?? null,
         total: invoice.sale.total?.toString() ?? null,
       }))}
-      initialCreditNotes={creditNotes
-        .filter((note) => Boolean(note.fiscalInvoiceId))
-        .map((note) => ({
-          id: note.id,
-          fiscalInvoiceId: note.fiscalInvoiceId ?? "",
-          number: note.creditNumber ?? null,
-          pointOfSale: note.pointOfSale ?? null,
-          type: note.type ?? null,
-          cae: note.cae ?? null,
-          issuedAt: note.issuedAt?.toISOString() ?? null,
-          createdAt: note.createdAt.toISOString(),
-        }))}
+      initialCreditNotes={creditNotes.map((note) => ({
+        id: note.id,
+        fiscalInvoiceId: note.fiscalInvoiceId ?? null,
+        saleId: note.saleId ?? null,
+        number: note.creditNumber ?? null,
+        pointOfSale: note.pointOfSale ?? null,
+        type: note.type ?? null,
+        cae: note.cae ?? null,
+        issuedAt: note.issuedAt?.toISOString() ?? null,
+        createdAt: note.createdAt.toISOString(),
+      }))}
       initialDebitNotes={debitNotes
         .map((rawNote) => {
           const note = rawNote as {

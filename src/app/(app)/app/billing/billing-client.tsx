@@ -88,7 +88,8 @@ type IssuedInvoicePayload = {
 
 type IssuedCreditNoteRow = {
   id: string;
-  fiscalInvoiceId: string;
+  fiscalInvoiceId: string | null;
+  saleId: string | null;
   number: string | null;
   pointOfSale: string | null;
   type: string | null;
@@ -295,6 +296,7 @@ export default function BillingClient({
     useState<InvoiceResolution | null>(null);
   const [invoiceIssueDateOverride, setInvoiceIssueDateOverride] =
     useState<string | null>(null);
+  const [selectedInvoiceType, setSelectedInvoiceType] = useState<"A" | "B">("B");
   const [invoiceForm, setInvoiceForm] = useState({
     requiresIncomeTaxDeduction: false,
   });
@@ -387,6 +389,15 @@ export default function BillingClient({
     return map;
   }, [issuedCreditNotes]);
 
+  const creditNoteBySaleId = useMemo(() => {
+    const map = new Map<string, IssuedCreditNoteRow>();
+    for (const note of issuedCreditNotes) {
+      if (!note.saleId || map.has(note.saleId)) continue;
+      map.set(note.saleId, note);
+    }
+    return map;
+  }, [issuedCreditNotes]);
+
   const debitNoteByCreditNoteId = useMemo(() => {
     const map = new Map<string, IssuedDebitNoteRow>();
     for (const note of issuedDebitNotes) {
@@ -432,7 +443,13 @@ export default function BillingClient({
   };
 
   const openInvoiceModal = (sale: SaleRow) => {
+    const customerFiscalProfile = normalizeCustomerFiscalTaxProfile(
+      sale.customerFiscalTaxProfile ?? null
+    );
     setSaleToInvoice(sale);
+    setSelectedInvoiceType(
+      resolveInvoiceTypeFromFiscalTaxProfile(customerFiscalProfile)
+    );
     setInvoiceStep("FORM");
     setInvoiceWarnings([]);
     setInvoiceStatus(null);
@@ -609,9 +626,10 @@ export default function BillingClient({
   const customerFiscalTaxProfile = normalizeCustomerFiscalTaxProfile(
     saleToInvoice?.customerFiscalTaxProfile ?? null
   );
-  const resolvedInvoiceType = resolveInvoiceTypeFromFiscalTaxProfile(
+  const recommendedInvoiceType = resolveInvoiceTypeFromFiscalTaxProfile(
     customerFiscalTaxProfile
   );
+  const resolvedInvoiceType = selectedInvoiceType;
   const isConsumerFinal =
     customerFiscalTaxProfile === "CONSUMIDOR_FINAL" ||
     (!customerFiscalTaxProfile &&
@@ -842,6 +860,13 @@ export default function BillingClient({
       );
       return [entry, ...deduped];
     });
+    setIssuedCreditNotes((prev) =>
+      prev.map((note) =>
+        note.fiscalInvoiceId === invoice.id && !debitNoteByCreditNoteId.has(note.id)
+          ? { ...note, fiscalInvoiceId: null }
+          : note
+      )
+    );
     window.open(
       `/api/fiscal-invoices/${invoice.id}/pdf`,
       "_blank",
@@ -936,11 +961,14 @@ export default function BillingClient({
     if (!saleToInvoice) return;
     const customerTaxId = normalizeTaxId(saleToInvoice.customerTaxId);
     if (!customerTaxId) {
-      const canIssueAsConsumerFinal = isConsumerFinal && !requiresIdentification;
+      const canIssueAsConsumerFinal =
+        resolvedInvoiceType === "B" && isConsumerFinal && !requiresIdentification;
       setArcaValidation({
         status: canIssueAsConsumerFinal ? "ok" : "warning",
         message: canIssueAsConsumerFinal
           ? "No hace falta validar CUIT para este comprobante. Se emitira como consumidor final."
+          : resolvedInvoiceType === "A"
+            ? "Factura A requiere CUIT valido del cliente."
           : requiresIdentification
             ? "Por el importe o la deduccion solicitada, este comprobante necesita CUIT del receptor."
             : "Para validar el receptor con ARCA, carga un CUIT en el cliente.",
@@ -1055,17 +1083,20 @@ export default function BillingClient({
     return () => {
       cancelled = true;
     };
-  }, [isConsumerFinal, requiresIdentification, saleToInvoice]);
+  }, [isConsumerFinal, requiresIdentification, resolvedInvoiceType, saleToInvoice]);
 
   const refreshArcaValidation = async () => {
     if (!saleToInvoice) return;
     const customerTaxId = normalizeTaxId(saleToInvoice.customerTaxId);
     if (!customerTaxId) {
-      const canIssueAsConsumerFinal = isConsumerFinal && !requiresIdentification;
+      const canIssueAsConsumerFinal =
+        resolvedInvoiceType === "B" && isConsumerFinal && !requiresIdentification;
       setArcaValidation({
         status: canIssueAsConsumerFinal ? "ok" : "warning",
         message: canIssueAsConsumerFinal
           ? "No hace falta validar CUIT para este comprobante. Se emitira como consumidor final."
+          : resolvedInvoiceType === "A"
+            ? "Factura A requiere CUIT valido del cliente."
           : "Para revalidar con ARCA, primero carga un CUIT en el cliente.",
         source: null,
         checkedAt: null,
@@ -1297,7 +1328,11 @@ export default function BillingClient({
         fiscalInvoiceId:
           typeof data?.fiscalInvoiceId === "string"
             ? data.fiscalInvoiceId
-            : invoiceToCancel.id,
+            : null,
+        saleId:
+          typeof data?.saleId === "string"
+            ? data.saleId
+            : invoiceToCancel.saleId,
         number: typeof data?.number === "string" ? data.number : null,
         pointOfSale:
           typeof data?.pointOfSale === "string" ? data.pointOfSale : null,
@@ -1311,6 +1346,13 @@ export default function BillingClient({
         noteEntry,
         ...prev.filter((item) => item.id !== noteEntry.id),
       ]);
+      setSales((prev) =>
+        prev.map((sale) =>
+          sale.id === invoiceToCancel.saleId
+            ? { ...sale, billingStatus: "TO_BILL" }
+            : sale
+        )
+      );
       setInvoiceStatus(
         `Factura ${formatVoucherLabel(invoiceToCancel.pointOfSale, invoiceToCancel.number)} anulada con nota de credito.`
       );
@@ -1383,6 +1425,13 @@ export default function BillingClient({
         noteEntry,
         ...prev.filter((item) => item.id !== noteEntry.id),
       ]);
+      setSales((prev) =>
+        prev.map((sale) =>
+          sale.id === creditNoteToRevert.invoice.saleId
+            ? { ...sale, billingStatus: "BILLED" }
+            : sale
+        )
+      );
       setInvoiceStatus(
         `NC ${formatVoucherLabel(
           creditNoteToRevert.creditNote.pointOfSale,
@@ -1940,7 +1989,10 @@ export default function BillingClient({
                             invoiceFiscalTaxProfile === "CONSUMIDOR_FINAL" ||
                             (!invoiceFiscalTaxProfile &&
                               (invoice.customerType ?? "CONSUMER_FINAL") === "CONSUMER_FINAL");
-                          const linkedCreditNote = creditNoteByInvoiceId.get(invoice.id);
+                          const linkedCreditNote =
+                            creditNoteByInvoiceId.get(invoice.id) ??
+                            creditNoteBySaleId.get(invoice.saleId) ??
+                            null;
                           const creditNoteLabel = linkedCreditNote
                             ? formatVoucherLabel(
                                 linkedCreditNote.pointOfSale,
@@ -2022,6 +2074,15 @@ export default function BillingClient({
                                       >
                                         <ArrowDownTrayIcon className="size-4" />
                                         PDF NC
+                                      </a>
+                                      <a
+                                        className="btn text-xs"
+                                        href={`/api/credit-notes/${linkedCreditNote.id}/source-invoice-pdf`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                      >
+                                        <ArrowDownTrayIcon className="size-4" />
+                                        PDF factura origen
                                       </a>
                                       <WhatsappPdfButton
                                         documentType="creditNote"
@@ -2516,8 +2577,29 @@ export default function BillingClient({
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600">
-                    <span className="font-medium text-zinc-900">Tipo de factura:</span>{" "}
-                    Factura {resolvedInvoiceType}
+                    <p className="font-medium text-zinc-900">Tipo de factura</p>
+                    <div className="mt-2 inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
+                      {(["A", "B"] as const).map((invoiceType) => (
+                        <button
+                          key={invoiceType}
+                          type="button"
+                          className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
+                            resolvedInvoiceType === invoiceType
+                              ? "bg-white text-zinc-900 shadow-sm"
+                              : "text-zinc-600"
+                          }`}
+                          onClick={() => setSelectedInvoiceType(invoiceType)}
+                          disabled={isIssuing}
+                        >
+                          Factura {invoiceType}
+                        </button>
+                      ))}
+                    </div>
+                    {resolvedInvoiceType !== recommendedInvoiceType ? (
+                      <p className="mt-2 text-[11px] text-amber-700">
+                        Sugerida por condicion fiscal: Factura {recommendedInvoiceType}.
+                      </p>
+                    ) : null}
                   </div>
                   <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600">
                     <span className="font-medium text-zinc-900">Condicion fiscal:</span>{" "}

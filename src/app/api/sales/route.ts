@@ -45,6 +45,8 @@ const saleUpdateSchema = z.object({
   note: z.string().max(280).optional(),
 });
 
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
   extraType?: ExtraChargeTypeValue,
@@ -67,6 +69,15 @@ const calculateTotals = (
   const total = subtotal + taxes + extraAmount;
 
   return { subtotal, taxes, extraAmount, total };
+};
+
+const normalizeBalanceForDisplay = (
+  value: Prisma.Decimal | string | number | null | undefined
+) => {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return "0";
+  if (Math.abs(parsed) <= PAYMENT_SETTLEMENT_TOLERANCE) return "0.00";
+  return parsed.toFixed(2);
 };
 
 const parseSequenceNumber = (value?: string | null) => {
@@ -174,7 +185,7 @@ export async function GET(req: NextRequest) {
         extraAmount: sale.extraAmount?.toString() ?? null,
         total: sale.total?.toString() ?? null,
         paidTotal: sale.paidTotal?.toString() ?? "0",
-        balance: sale.balance?.toString() ?? "0",
+        balance: normalizeBalanceForDisplay(sale.balance),
         paymentStatus: sale.paymentStatus,
         status: sale.status,
         billingStatus: sale.billingStatus,
@@ -370,7 +381,7 @@ export async function POST(req: NextRequest) {
       extraAmount: sale.extraAmount?.toString() ?? null,
       total: sale.total?.toString() ?? null,
       paidTotal: sale.paidTotal?.toString() ?? "0",
-      balance: sale.balance?.toString() ?? "0",
+      balance: normalizeBalanceForDisplay(sale.balance),
       paymentStatus: sale.paymentStatus,
       status: sale.status,
       billingStatus: sale.billingStatus,

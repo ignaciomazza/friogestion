@@ -67,6 +67,7 @@ const CURRENCY_MAP: Record<string, string> = {
   ARS: "PES",
   USD: "DOL",
 };
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
 
 function getDebitNoteDelegate() {
   return (
@@ -314,6 +315,15 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
       items: true,
       organization: true,
       saleCharges: true,
+      quote: {
+        select: {
+          id: true,
+          subtotal: true,
+          taxes: true,
+          extraAmount: true,
+          total: true,
+        },
+      },
     },
   });
 
@@ -337,16 +347,18 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     throw new Error("SERVICE_DATES_NOT_SUPPORTED");
   }
 
-  const resolvedType = resolveInvoiceTypeFromFiscalTaxProfile(
+  const profileDefaultType = resolveInvoiceTypeFromFiscalTaxProfile(
     sale.customer.fiscalTaxProfile
   );
-  if (input.type && input.type !== resolvedType) {
+  const resolvedType = input.type ?? profileDefaultType;
+  if (input.type && input.type !== profileDefaultType) {
     logServerWarn(
       "fiscal.issue.type-overridden",
-      "Requested invoice type differs from customer fiscal profile; using resolved type",
+      "Requested invoice type differs from customer fiscal profile; using requested type",
       {
         saleId: sale.id,
         requestedType: input.type,
+        profileDefaultType,
         resolvedType,
         fiscalTaxProfile: sale.customer.fiscalTaxProfile,
       }
@@ -393,15 +405,18 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   }
 
   const baseTotals = buildTotalsFromRates(items);
-  const saleSubtotal = Number(sale.subtotal ?? baseTotals.net + baseTotals.exempt);
-  const saleTaxes = Number(sale.taxes ?? baseTotals.iva);
+  const saleSubtotal = Number(
+    sale.quote?.subtotal ?? sale.subtotal ?? baseTotals.net + baseTotals.exempt
+  );
+  const saleTaxes = Number(sale.quote?.taxes ?? sale.taxes ?? baseTotals.iva);
+  const saleExtraAmount = Number(sale.quote?.extraAmount ?? sale.extraAmount ?? 0);
   const saleChargesTotal = sale.saleCharges.reduce(
     (total, charge) => total + Number(charge.amount ?? 0),
     0
   );
   const fallbackSaleTotal =
-    saleSubtotal + saleTaxes + Number(sale.extraAmount ?? 0) + saleChargesTotal;
-  const saleTotal = Number(sale.total ?? fallbackSaleTotal);
+    saleSubtotal + saleTaxes + saleExtraAmount + saleChargesTotal;
+  const saleTotal = Number(sale.quote?.total ?? sale.total ?? fallbackSaleTotal);
   const adjustmentTotal = round2(saleTotal - baseTotals.total);
   const totals = resolveTotals(items, adjustmentTotal);
 
@@ -496,21 +511,59 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   if (totals.ivaItems.length) {
     voucherData.Iva = totals.ivaItems;
   }
+
+  const existingInvoice = await prisma.fiscalInvoice.findFirst({
+    where: {
+      organizationId: sale.organizationId,
+      saleId: sale.id,
+    },
+    select: {
+      id: true,
+      creditNotes: {
+        select: {
+          id: true,
+          debitNotes: {
+            select: { id: true },
+          },
+        },
+      },
+    },
+  });
+
+  const hasActiveCreditNote = existingInvoice
+    ? existingInvoice.creditNotes.some((note) => note.debitNotes.length === 0)
+    : false;
+
+  if (existingInvoice && !hasActiveCreditNote) {
+    throw new Error("SALE_ALREADY_BILLED");
+  }
+
   let reservedInvoiceId: string | null = null;
+  let createdReservedInvoice = false;
+  let reusingCreditedInvoice = false;
   let voucherAuthorized = false;
   try {
-    const reserved = await prisma.fiscalInvoice.create({
-      data: {
-        organizationId: sale.organizationId,
-        saleId: sale.id,
-        type: resolvedType,
-        issuedAt: issueDate,
-        currencyCode,
-      },
-      select: { id: true },
-    });
-    reservedInvoiceId = reserved.id;
-    const reservedId = reserved.id;
+    if (existingInvoice) {
+      reservedInvoiceId = existingInvoice.id;
+      reusingCreditedInvoice = true;
+    } else {
+      const reserved = await prisma.fiscalInvoice.create({
+        data: {
+          organizationId: sale.organizationId,
+          saleId: sale.id,
+          type: resolvedType,
+          issuedAt: issueDate,
+          currencyCode,
+        },
+        select: { id: true },
+      });
+      reservedInvoiceId = reserved.id;
+      createdReservedInvoice = true;
+    }
+    const reservedId = reservedInvoiceId;
+    if (!reservedId) {
+      throw new Error("FISCAL_INVOICE_RESERVATION_FAILED");
+    }
 
     const invoice = await prisma.$transaction(
       async (tx) => {
@@ -565,6 +618,17 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
           requiresIncomeTaxDeduction: Boolean(input.requiresIncomeTaxDeduction),
         };
 
+        if (reusingCreditedInvoice) {
+          await tx.fiscalCreditNote.updateMany({
+            where: {
+              organizationId: sale.organizationId,
+              fiscalInvoiceId: reservedId,
+              debitNotes: { none: {} },
+            },
+            data: { fiscalInvoiceId: null },
+          });
+        }
+
         const updated = await tx.fiscalInvoice.update({
           where: { id: reservedId },
           data: {
@@ -579,10 +643,53 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
           },
         });
 
+        const paidTotal = round2(Number(sale.paidTotal ?? 0));
+        const rawBalance = round2(Math.max(saleTotal - paidTotal, 0));
+        const balance =
+          rawBalance <= PAYMENT_SETTLEMENT_TOLERANCE ? 0 : rawBalance;
+        const paymentStatus =
+          paidTotal <= 0
+            ? "UNPAID"
+            : balance === 0
+              ? "PAID"
+              : "PARTIAL";
+
         await tx.sale.update({
           where: { id: sale.id },
-          data: { billingStatus: "BILLED" },
+          data: {
+            billingStatus: "BILLED",
+            subtotal: saleSubtotal.toFixed(2),
+            taxes: saleTaxes.toFixed(2),
+            extraAmount: saleExtraAmount ? saleExtraAmount.toFixed(2) : null,
+            total: saleTotal.toFixed(2),
+            paidTotal: paidTotal.toFixed(2),
+            balance: balance.toFixed(2),
+            paymentStatus,
+          },
         });
+
+        await tx.currentAccountEntry.updateMany({
+          where: {
+            organizationId: sale.organizationId,
+            saleId: sale.id,
+            sourceType: "SALE",
+          },
+          data: {
+            amount: saleTotal.toFixed(2),
+          },
+        });
+
+        if (sale.quote?.id) {
+          await tx.quote.update({
+            where: { id: sale.quote.id },
+            data: {
+              subtotal: saleSubtotal.toFixed(2),
+              taxes: saleTaxes.toFixed(2),
+              extraAmount: saleExtraAmount ? saleExtraAmount.toFixed(2) : null,
+              total: saleTotal.toFixed(2),
+            },
+          });
+        }
 
         return updated;
       },
@@ -607,7 +714,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
     ) {
       throw new Error("SALE_ALREADY_BILLED");
     }
-    if (reservedInvoiceId && !voucherAuthorized) {
+    if (createdReservedInvoice && reservedInvoiceId && !voucherAuthorized) {
       await prisma.fiscalInvoice.deleteMany({
         where: {
           id: reservedInvoiceId,
@@ -822,21 +929,44 @@ export async function issueCreditNote(input: IssueCreditNoteInput) {
     voucherData: voucherBase,
     qrBase64,
     serviceDates: null,
+    sourceInvoiceSnapshot: {
+      id: invoice.id,
+      type: invoice.type,
+      pointOfSale: invoice.pointOfSale,
+      number: invoice.number,
+      cae: invoice.cae,
+      caeDueDate: invoice.caeDueDate?.toISOString() ?? null,
+      issuedAt: invoice.issuedAt?.toISOString() ?? null,
+      currencyCode: invoice.currencyCode ?? null,
+      payloadAfip: invoice.payloadAfip ?? null,
+    },
   };
 
-  return prisma.fiscalCreditNote.create({
-    data: {
-      organizationId: invoice.organizationId,
-      saleId: invoice.saleId,
-      fiscalInvoiceId: invoice.id,
-      creditNumber: voucherNumber.toString(),
-      pointOfSale: pointOfSale.toString(),
-      type: invoice.type,
-      cae,
-      caeDueDate: caeDue ? new Date(caeDue) : null,
-      issuedAt: issueDate,
-      payloadAfip: payloadAfip as Prisma.JsonObject,
-    },
+  return prisma.$transaction(async (tx) => {
+    const created = await tx.fiscalCreditNote.create({
+      data: {
+        organizationId: invoice.organizationId,
+        saleId: invoice.saleId,
+        fiscalInvoiceId: invoice.id,
+        creditNumber: voucherNumber.toString(),
+        pointOfSale: pointOfSale.toString(),
+        type: invoice.type,
+        cae,
+        caeDueDate: caeDue ? new Date(caeDue) : null,
+        issuedAt: issueDate,
+        payloadAfip: payloadAfip as Prisma.JsonObject,
+      },
+    });
+
+    await tx.sale.updateMany({
+      where: {
+        id: invoice.saleId,
+        organizationId: invoice.organizationId,
+      },
+      data: { billingStatus: "TO_BILL" },
+    });
+
+    return created;
   });
 }
 
@@ -1043,6 +1173,17 @@ export async function issueDebitNote(input: IssueDebitNoteInput) {
       payloadAfip: payloadAfip as Prisma.JsonObject,
     },
   });
+
+  if (creditNote.saleId) {
+    await prisma.sale.updateMany({
+      where: {
+        id: creditNote.saleId,
+        organizationId: creditNote.organizationId,
+      },
+      data: { billingStatus: "BILLED" },
+    });
+  }
+
   return created as {
     id: string;
     fiscalCreditNoteId: string | null;

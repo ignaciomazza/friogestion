@@ -5,6 +5,9 @@ import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
 import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import QuotesClient from "./quotes-client";
 
+const toMoneyString = (value: { toString(): string } | null | undefined) =>
+  value ? value.toString() : null;
+
 export default async function QuotesPage() {
   const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
   if (!token) {
@@ -60,21 +63,27 @@ export default async function QuotesPage() {
       <QuotesClient
       initialCustomers={[]}
       initialProducts={[]}
-      initialQuotes={quotes.map((quote) => ({
-        id: quote.id,
-        customerName: quote.customer.displayName,
-        customerPhone: quote.customer.phone,
-        quoteNumber: quote.quoteNumber,
-        validUntil: quote.validUntil?.toISOString() ?? null,
-        createdAt: quote.createdAt.toISOString(),
-        subtotal: quote.subtotal?.toString() ?? null,
-        taxes: quote.taxes?.toString() ?? null,
-        total: quote.total?.toString() ?? null,
-        status: quote.status,
-        saleId: quote.sale?.id ?? null,
-        priceListId: quote.priceListId ?? null,
-        priceListName: quote.priceList?.name ?? null,
-      }))}
+      initialQuotes={quotes.map((quote) => {
+        const source = quote.sale ?? quote;
+        return {
+          id: quote.id,
+          customerName: quote.customer.displayName,
+          customerPhone: quote.customer.phone,
+          quoteNumber: quote.quoteNumber,
+          validUntil: quote.validUntil?.toISOString() ?? null,
+          createdAt: quote.createdAt.toISOString(),
+          subtotal: toMoneyString(source.subtotal),
+          taxes: toMoneyString(source.taxes),
+          extraType: source.extraType ?? null,
+          extraValue: toMoneyString(source.extraValue),
+          extraAmount: toMoneyString(source.extraAmount),
+          total: toMoneyString(source.total),
+          status: quote.status,
+          saleId: quote.sale?.id ?? null,
+          priceListId: quote.priceListId ?? null,
+          priceListName: quote.priceList?.name ?? null,
+        };
+      })}
       initialPriceLists={priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,

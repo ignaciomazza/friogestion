@@ -371,6 +371,38 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
   organizationId: string;
   request: FiscalIssueRequest;
 }) {
+  const canRequeueCompletedJob = async () => {
+    const sale = await prisma.sale.findFirst({
+      where: {
+        id: input.request.saleId,
+        organizationId: input.organizationId,
+      },
+      select: {
+        billingStatus: true,
+        fiscalInvoice: {
+          select: {
+            creditNotes: {
+              select: {
+                id: true,
+                debitNotes: {
+                  select: { id: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!sale || sale.billingStatus !== "TO_BILL" || !sale.fiscalInvoice) {
+      return false;
+    }
+
+    return sale.fiscalInvoice.creditNotes.some(
+      (creditNote) => creditNote.debitNotes.length === 0
+    );
+  };
+
   const payload = serializeRequestPayload(input.request);
   const existing = await prisma.fiscalInvoiceIssueJob.findUnique({
     where: { saleId: input.request.saleId },
@@ -379,7 +411,9 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
     if (existing.organizationId !== input.organizationId) {
       throw new Error("FISCAL_ISSUE_JOB_ORG_CONFLICT");
     }
-    if (existing.status === "ERROR") {
+    const shouldRequeueCompleted =
+      existing.status === "COMPLETED" && (await canRequeueCompletedJob());
+    if (existing.status === "ERROR" || shouldRequeueCompleted) {
       const requeued = await prisma.fiscalInvoiceIssueJob.update({
         where: { id: existing.id },
         data: {
@@ -394,7 +428,9 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
       });
       logServerInfo(
         "fiscal.issue-queue.enqueue.requeued",
-        "Requeued previous failed fiscal issue job",
+        shouldRequeueCompleted
+          ? "Requeued completed fiscal issue job after credit note"
+          : "Requeued previous failed fiscal issue job",
         {
           jobId: requeued.id,
           saleId: requeued.saleId,
@@ -442,7 +478,9 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
       if (existing.organizationId !== input.organizationId) {
         throw new Error("FISCAL_ISSUE_JOB_ORG_CONFLICT");
       }
-      if (existing.status === "ERROR") {
+      const shouldRequeueCompleted =
+        existing.status === "COMPLETED" && (await canRequeueCompletedJob());
+      if (existing.status === "ERROR" || shouldRequeueCompleted) {
         const requeued = await prisma.fiscalInvoiceIssueJob.update({
           where: { id: existing.id },
           data: {
@@ -457,7 +495,9 @@ export async function enqueueFiscalInvoiceIssueJob(input: {
         });
         logServerInfo(
           "fiscal.issue-queue.enqueue.requeued-race",
-          "Requeued failed fiscal issue job after create race",
+          shouldRequeueCompleted
+            ? "Requeued completed fiscal issue job after credit note race"
+            : "Requeued failed fiscal issue job after create race",
           {
             jobId: requeued.id,
             saleId: requeued.saleId,

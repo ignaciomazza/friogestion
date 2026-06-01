@@ -9,6 +9,7 @@ import { SalesStats } from "./components/SalesStats";
 import type { SaleEventRow, SaleRow } from "./types";
 
 const normalizeQuery = (value: string) => value.trim().toLowerCase();
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
 
 const parseDateInput = (value: string) => {
   if (!value) return null;
@@ -92,7 +93,7 @@ export default function SalesClient({
 
   const totalSales = sales.length;
   const openBalanceSales = sales.filter(
-    (sale) => Number(sale.balance ?? 0) > 0.005
+    (sale) => Number(sale.balance ?? 0) > PAYMENT_SETTLEMENT_TOLERANCE
   ).length;
   const totalRevenue = sales.reduce((totalValue, sale) => {
     if (!sale.total) return totalValue;

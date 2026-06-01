@@ -112,6 +112,44 @@ const calculateTotals = (
   return { subtotal, taxes, extraAmount, total };
 };
 
+const toMoneyString = (
+  value: Prisma.Decimal | string | number | null | undefined
+) => {
+  if (value === null || value === undefined) return null;
+  return value.toString();
+};
+
+const resolveQuoteAmounts = <
+  T extends {
+    subtotal: Prisma.Decimal | null;
+    taxes: Prisma.Decimal | null;
+    extraType: string | null;
+    extraValue: Prisma.Decimal | null;
+    extraAmount: Prisma.Decimal | null;
+    total: Prisma.Decimal | null;
+    sale?: {
+      subtotal: Prisma.Decimal | null;
+      taxes: Prisma.Decimal | null;
+      extraType: string | null;
+      extraValue: Prisma.Decimal | null;
+      extraAmount: Prisma.Decimal | null;
+      total: Prisma.Decimal | null;
+    } | null;
+  },
+>(
+  quote: T
+) => {
+  const source = quote.sale ?? quote;
+  return {
+    subtotal: toMoneyString(source.subtotal),
+    taxes: toMoneyString(source.taxes),
+    extraType: source.extraType,
+    extraValue: toMoneyString(source.extraValue),
+    extraAmount: toMoneyString(source.extraAmount),
+    total: toMoneyString(source.total),
+  };
+};
+
 const parseSequenceNumber = (value?: string | null) => {
   if (!value) return null;
   const match = value.match(/(\d+)(?!.*\d)/);
@@ -200,6 +238,8 @@ export async function GET(req: NextRequest) {
         );
       }
 
+      const amounts = resolveQuoteAmounts(quote);
+
       return NextResponse.json({
         id: quote.id,
         customerName: quote.customer.displayName,
@@ -207,12 +247,12 @@ export async function GET(req: NextRequest) {
         quoteNumber: quote.quoteNumber,
         validUntil: quote.validUntil?.toISOString() ?? null,
         createdAt: quote.createdAt.toISOString(),
-        subtotal: quote.subtotal?.toString() ?? null,
-        taxes: quote.taxes?.toString() ?? null,
-        extraType: quote.extraType ?? null,
-        extraValue: quote.extraValue?.toString() ?? null,
-        extraAmount: quote.extraAmount?.toString() ?? null,
-        total: quote.total?.toString() ?? null,
+        subtotal: amounts.subtotal,
+        taxes: amounts.taxes,
+        extraType: amounts.extraType,
+        extraValue: amounts.extraValue,
+        extraAmount: amounts.extraAmount,
+        total: amounts.total,
         status: quote.status,
         saleId: quote.sale?.id ?? null,
         priceListId: quote.priceListId ?? null,
@@ -271,21 +311,27 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json(
-      quotes.map((quote) => ({
-        id: quote.id,
-        customerName: quote.customer.displayName,
-        customerPhone: quote.customer.phone,
-        quoteNumber: quote.quoteNumber,
-        validUntil: quote.validUntil?.toISOString() ?? null,
-        createdAt: quote.createdAt.toISOString(),
-        subtotal: quote.subtotal?.toString() ?? null,
-        taxes: quote.taxes?.toString() ?? null,
-        total: quote.total?.toString() ?? null,
-        status: quote.status,
-        saleId: quote.sale?.id ?? null,
-        priceListId: quote.priceListId ?? null,
-        priceListName: quote.priceList?.name ?? null,
-      }))
+      quotes.map((quote) => {
+        const amounts = resolveQuoteAmounts(quote);
+        return {
+          id: quote.id,
+          customerName: quote.customer.displayName,
+          customerPhone: quote.customer.phone,
+          quoteNumber: quote.quoteNumber,
+          validUntil: quote.validUntil?.toISOString() ?? null,
+          createdAt: quote.createdAt.toISOString(),
+          subtotal: amounts.subtotal,
+          taxes: amounts.taxes,
+          extraType: amounts.extraType,
+          extraValue: amounts.extraValue,
+          extraAmount: amounts.extraAmount,
+          total: amounts.total,
+          status: quote.status,
+          saleId: quote.sale?.id ?? null,
+          priceListId: quote.priceListId ?? null,
+          priceListName: quote.priceList?.name ?? null,
+        };
+      })
     );
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });

@@ -15,6 +15,9 @@ const confirmSchema = z.object({
   billingStatus: z.enum(["NOT_BILLED", "TO_BILL"]).optional(),
 });
 
+const round2 = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
 const parseSequenceNumber = (value?: string | null) => {
   if (!value) return null;
   const match = value.match(/(\d+)(?!.*\d)/);
@@ -80,7 +83,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const subtotal = quote.items.reduce(
+    const subtotalFromItems = quote.items.reduce(
       (total, item) => total + Number(item.qty) * Number(item.unitPrice),
       0
     );
@@ -89,10 +92,13 @@ export async function POST(req: NextRequest) {
       const rate = Number(item.taxRate ?? 0);
       return total + Number(item.qty) * Number(item.unitPrice) * (rate / 100);
     }, 0);
-    const taxes =
-      taxesFromItems > 0 ? taxesFromItems : Number(quote.taxes ?? 0);
-    const extraAmount = Number(quote.extraAmount ?? 0);
-    const total = subtotal + taxes + extraAmount;
+    const subtotal = round2(Number(quote.subtotal ?? subtotalFromItems));
+    const taxesFallback = taxesFromItems > 0 ? taxesFromItems : 0;
+    const taxes = round2(Number(quote.taxes ?? taxesFallback));
+    const extraAmount = round2(Number(quote.extraAmount ?? 0));
+    const total = round2(
+      Number(quote.total ?? subtotal + taxes + extraAmount)
+    );
 
     const sale = await prisma.$transaction(async (tx) => {
       const nextSaleNumber = await reserveNextCounter(

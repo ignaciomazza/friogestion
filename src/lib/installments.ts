@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 const roundMoney = (value: number) => Number(value.toFixed(2));
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
 
 export async function applyReceiptToInstallments(
   tx: Prisma.TransactionClient,
@@ -43,7 +44,7 @@ export async function applyReceiptToInstallments(
     });
 
     const newPaid = roundMoney(paidAmount + allocation);
-    const fullyPaid = newPaid >= totalAmount - 0.005;
+    const fullyPaid = newPaid >= totalAmount - PAYMENT_SETTLEMENT_TOLERANCE;
     await tx.installment.update({
       where: { id: installment.id },
       data: {

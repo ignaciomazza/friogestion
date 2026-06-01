@@ -28,6 +28,11 @@ const addMonths = (value: Date, months: number) => {
   return date;
 };
 
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+
+const round2 = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
 const recalcSaleTotals = async (
   tx: Prisma.TransactionClient,
   saleId: string
@@ -43,14 +48,16 @@ const recalcSaleTotals = async (
   });
   const paidTotal = Number(summary._sum.amountBase ?? 0);
   const total = Number(sale.total ?? 0);
-  const balance = Math.max(total - paidTotal, 0);
+  const rawBalance = round2(Math.max(total - paidTotal, 0));
+  const balance =
+    rawBalance <= PAYMENT_SETTLEMENT_TOLERANCE ? 0 : rawBalance;
   const paymentStatus =
-    paidTotal <= 0 ? "UNPAID" : balance <= 0.005 ? "PAID" : "PARTIAL";
+    paidTotal <= 0 ? "UNPAID" : balance === 0 ? "PAID" : "PARTIAL";
 
   await tx.sale.update({
     where: { id: saleId },
     data: {
-      paidTotal: paidTotal.toFixed(2),
+      paidTotal: round2(paidTotal).toFixed(2),
       balance: balance.toFixed(2),
       paymentStatus,
     },

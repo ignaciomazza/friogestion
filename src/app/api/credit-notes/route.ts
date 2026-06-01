@@ -99,6 +99,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       id: note.id,
       fiscalInvoiceId: note.fiscalInvoiceId,
+      saleId: note.saleId,
       number: note.creditNumber,
       pointOfSale: note.pointOfSale,
       type: note.type,

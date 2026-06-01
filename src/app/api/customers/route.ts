@@ -64,6 +64,11 @@ const inferFiscalTaxProfileFromCustomerType = (
 ): CustomerFiscalTaxProfile =>
   type === "CONSUMER_FINAL" ? "CONSUMIDOR_FINAL" : "MONOTRIBUTISTA";
 
+const resolveCustomerTypeFromFiscalTaxProfile = (
+  fiscalTaxProfile: CustomerFiscalTaxProfile
+): "CONSUMER_FINAL" | "BUSINESS" =>
+  fiscalTaxProfile === "CONSUMIDOR_FINAL" ? "CONSUMER_FINAL" : "BUSINESS";
+
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 200;
 
@@ -159,18 +164,19 @@ export async function POST(req: NextRequest) {
       organizationId,
       normalizeDefaultPriceListId(body.defaultPriceListId),
     );
-    const inferredType = defaultPriceList?.isConsumerFinal
-      ? "CONSUMER_FINAL"
-      : "BUSINESS";
     const fiscalTaxProfile =
       body.fiscalTaxProfile ??
-      inferFiscalTaxProfileFromCustomerType(inferredType);
+      inferFiscalTaxProfileFromCustomerType(
+        defaultPriceList?.isConsumerFinal ? "CONSUMER_FINAL" : "BUSINESS"
+      );
+    const customerType =
+      resolveCustomerTypeFromFiscalTaxProfile(fiscalTaxProfile);
 
     const customer = await prisma.customer.create({
       data: {
         organizationId,
         displayName: body.displayName.trim(),
-        type: inferredType,
+        type: customerType,
         fiscalTaxProfile,
         defaultPriceListId: defaultPriceList?.id ?? undefined,
         email: body.email?.trim() || undefined,
@@ -219,7 +225,6 @@ export async function PATCH(req: NextRequest) {
     const { membership } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = customerUpdateSchema.parse(await req.json());
-    let nextType: "CONSUMER_FINAL" | "BUSINESS" | undefined = undefined;
     let nextFiscalTaxProfile: CustomerFiscalTaxProfile | undefined = undefined;
     let defaultPriceListId: string | null | undefined = undefined;
     if (body.defaultPriceListId !== undefined) {
@@ -228,12 +233,6 @@ export async function PATCH(req: NextRequest) {
         normalizeDefaultPriceListId(body.defaultPriceListId),
       );
       defaultPriceListId = defaultPriceList?.id ?? null;
-      if (defaultPriceList) {
-        nextType = defaultPriceList.isConsumerFinal
-          ? "CONSUMER_FINAL"
-          : "BUSINESS";
-        nextFiscalTaxProfile = inferFiscalTaxProfileFromCustomerType(nextType);
-      }
     }
     if (body.fiscalTaxProfile !== undefined) {
       nextFiscalTaxProfile = body.fiscalTaxProfile;
@@ -243,7 +242,6 @@ export async function PATCH(req: NextRequest) {
       where: { id: body.id, organizationId },
       select: {
         id: true,
-        type: true,
         fiscalTaxProfile: true,
       },
     });
@@ -255,12 +253,18 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    const fiscalTaxProfileToSave =
+      nextFiscalTaxProfile ?? existing.fiscalTaxProfile;
+    const customerTypeToSave = resolveCustomerTypeFromFiscalTaxProfile(
+      fiscalTaxProfileToSave
+    );
+
     const customer = await prisma.customer.update({
       where: { id: body.id },
       data: {
         displayName: body.displayName.trim(),
-        type: nextType ?? existing.type,
-        fiscalTaxProfile: nextFiscalTaxProfile ?? existing.fiscalTaxProfile,
+        type: customerTypeToSave,
+        fiscalTaxProfile: fiscalTaxProfileToSave,
         ...(defaultPriceListId !== undefined
           ? { defaultPriceListId }
           : {}),

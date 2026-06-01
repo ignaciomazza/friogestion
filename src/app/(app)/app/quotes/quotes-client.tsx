@@ -1936,13 +1936,8 @@ export default function QuotesClient({
   };
 
   const handleSaveSelectedCustomerPriceList = async () => {
-    const nextFiscalTaxProfile = selectedPriceList?.isConsumerFinal
-      ? "CONSUMIDOR_FINAL"
-      : normalizeCustomerFiscalTaxProfile(selectedCustomer?.fiscalTaxProfile) ??
-        selectedCustomerFiscalTaxProfile;
     await updateSelectedCustomer({
       defaultPriceListId: selectedPriceListId || null,
-      fiscalTaxProfile: nextFiscalTaxProfile,
     });
   };
 
@@ -2471,13 +2466,9 @@ export default function QuotesClient({
         };
       }
       if (field === "defaultPriceListId") {
-        const selectedList = priceLists.find((priceList) => priceList.id === value);
         return {
           ...prev,
           defaultPriceListId: value,
-          fiscalTaxProfile: selectedList?.isConsumerFinal
-            ? "CONSUMIDOR_FINAL"
-            : prev.fiscalTaxProfile,
         };
       }
       if (field === "fiscalTaxProfile") {

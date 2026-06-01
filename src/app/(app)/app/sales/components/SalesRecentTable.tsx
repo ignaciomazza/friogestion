@@ -83,6 +83,8 @@ const formatItemTaxRate = (value: string | null | undefined) => {
   return `${rate.toString().replace(".", ",")}%`;
 };
 
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+
 export function SalesRecentTable({
   sales,
   sortOrder,
@@ -306,7 +308,15 @@ export function SalesRecentTable({
             {sales.length ? (
               sales.map((sale) => {
                 const paidTotal = sale.paidTotal ?? "0";
-                const balance = sale.balance ?? sale.total ?? "0";
+                const rawBalance = Number(sale.balance ?? sale.total ?? 0);
+                const normalizedBalance =
+                  Number.isFinite(rawBalance) &&
+                  Math.abs(rawBalance) <= PAYMENT_SETTLEMENT_TOLERANCE
+                    ? 0
+                    : rawBalance;
+                const balance = Number.isFinite(normalizedBalance)
+                  ? normalizedBalance.toFixed(2)
+                  : sale.balance ?? sale.total ?? "0";
                 const adjustmentAmount =
                   Number(sale.total ?? 0) -
                   Number(sale.subtotal ?? 0) -

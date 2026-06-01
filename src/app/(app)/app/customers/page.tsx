@@ -523,19 +523,10 @@ export default function CustomersPage() {
                       className="input cursor-pointer"
                       value={form.defaultPriceListId}
                       onChange={(event) =>
-                        setForm((prev) => {
-                          const nextDefaultPriceListId = event.target.value;
-                          const selectedList = priceLists.find(
-                            (priceList) => priceList.id === nextDefaultPriceListId,
-                          );
-                          return {
-                            ...prev,
-                            defaultPriceListId: nextDefaultPriceListId,
-                            fiscalTaxProfile: selectedList?.isConsumerFinal
-                              ? "CONSUMIDOR_FINAL"
-                              : prev.fiscalTaxProfile,
-                          };
-                        })
+                        setForm((prev) => ({
+                          ...prev,
+                          defaultPriceListId: event.target.value,
+                        }))
                       }
                     >
                       <option value="">Sin lista por defecto</option>
@@ -815,20 +806,10 @@ export default function CustomersPage() {
                                   className="input cursor-pointer"
                                   value={editForm.defaultPriceListId}
                                   onChange={(event) =>
-                                    setEditForm((prev) => {
-                                      const nextDefaultPriceListId = event.target.value;
-                                      const selectedList = priceLists.find(
-                                        (priceList) =>
-                                          priceList.id === nextDefaultPriceListId,
-                                      );
-                                      return {
-                                        ...prev,
-                                        defaultPriceListId: nextDefaultPriceListId,
-                                        fiscalTaxProfile: selectedList?.isConsumerFinal
-                                          ? "CONSUMIDOR_FINAL"
-                                        : prev.fiscalTaxProfile,
-                                      };
-                                    })
+                                    setEditForm((prev) => ({
+                                      ...prev,
+                                      defaultPriceListId: event.target.value,
+                                    }))
                                   }
                                 >
                                   <option value="">Sin lista por defecto</option>

@@ -13,6 +13,24 @@ const parseNumber = (value?: string | null) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+
+const normalizeBalance = (value: number) =>
+  Math.abs(value) <= PAYMENT_SETTLEMENT_TOLERANCE ? 0 : value;
+
+const resolveOpenBalance = (
+  storedBalance: Prisma.Decimal | number | null,
+  total: Prisma.Decimal | number | null,
+  paidTotal: Prisma.Decimal | number | null
+) => {
+  const stored = Number(storedBalance ?? 0);
+  if (Number.isFinite(stored) && Math.abs(stored) > PAYMENT_SETTLEMENT_TOLERANCE) {
+    return stored;
+  }
+  const computed = Math.max(Number(total ?? 0) - Number(paidTotal ?? 0), 0);
+  return normalizeBalance(computed);
+};
+
 const bucketForAge = (days: number) => {
   if (days <= 30) return "bucket0";
   if (days <= 60) return "bucket30";
@@ -112,12 +130,7 @@ export async function GET(req: NextRequest) {
           (now.getTime() - date.getTime()) / 86_400_000
         );
         const bucket = bucketForAge(ageDays);
-        const balance =
-          Number(sale.balance ?? 0) ||
-          Math.max(
-            Number(sale.total ?? 0) - Number(sale.paidTotal ?? 0),
-            0
-          );
+        const balance = resolveOpenBalance(sale.balance, sale.total, sale.paidTotal);
         if (!sale.customerId || balance <= 0) continue;
         const current = aging.get(sale.customerId) ?? {
           bucket0: 0,
@@ -160,8 +173,15 @@ export async function GET(req: NextRequest) {
         const balance = Number(row.balance || 0);
         if (balanceFilter === "positive" && balance <= 0) return false;
         if (balanceFilter === "negative" && balance >= 0) return false;
-        if (balanceFilter === "zero" && Math.abs(balance) > 0.005) return false;
-        if (balanceFilter === "nonzero" && Math.abs(balance) <= 0.005)
+        if (
+          balanceFilter === "zero" &&
+          Math.abs(balance) > PAYMENT_SETTLEMENT_TOLERANCE
+        )
+          return false;
+        if (
+          balanceFilter === "nonzero" &&
+          Math.abs(balance) <= PAYMENT_SETTLEMENT_TOLERANCE
+        )
           return false;
         if (minBalance !== null && balance < minBalance) return false;
         if (maxBalance !== null && balance > maxBalance) return false;
@@ -249,12 +269,11 @@ export async function GET(req: NextRequest) {
         (now.getTime() - date.getTime()) / 86_400_000
       );
       const bucket = bucketForAge(ageDays);
-      const balance =
-        Number(purchase.balance ?? 0) ||
-        Math.max(
-          Number(purchase.total ?? 0) - Number(purchase.paidTotal ?? 0),
-          0
-        );
+      const balance = resolveOpenBalance(
+        purchase.balance,
+        purchase.total,
+        purchase.paidTotal
+      );
       if (!purchase.supplierId || balance <= 0) continue;
       const current = aging.get(purchase.supplierId) ?? {
         bucket0: 0,
@@ -297,8 +316,15 @@ export async function GET(req: NextRequest) {
       const balance = Number(row.balance || 0);
       if (balanceFilter === "positive" && balance <= 0) return false;
       if (balanceFilter === "negative" && balance >= 0) return false;
-      if (balanceFilter === "zero" && Math.abs(balance) > 0.005) return false;
-      if (balanceFilter === "nonzero" && Math.abs(balance) <= 0.005)
+      if (
+        balanceFilter === "zero" &&
+        Math.abs(balance) > PAYMENT_SETTLEMENT_TOLERANCE
+      )
+        return false;
+      if (
+        balanceFilter === "nonzero" &&
+        Math.abs(balance) <= PAYMENT_SETTLEMENT_TOLERANCE
+      )
         return false;
       if (minBalance !== null && balance < minBalance) return false;
       if (maxBalance !== null && balance > maxBalance) return false;
