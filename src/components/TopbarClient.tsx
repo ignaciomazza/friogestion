@@ -100,6 +100,7 @@ const NAV_SECTIONS: NavSection[] = [
         Icon: ArrowDownTrayIcon,
         roles: [...ADMIN_ROLES],
       },
+      { href: "/app/storefront", label: "Tienda Online", Icon: CubeIcon },
     ],
   },
   {

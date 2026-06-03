@@ -13,6 +13,7 @@ export type SaleRow = {
   extraType?: string | null;
   extraValue?: string | null;
   extraAmount?: string | null;
+  chargesTotal?: string | null;
   total: string | null;
   paidTotal?: string | null;
   balance?: string | null;

@@ -26,6 +26,11 @@ const saleItemSchema = z.object({
   taxRate: z.coerce.number().min(0).max(100),
 });
 
+const saleItemUpdateSchema = z.object({
+  id: z.string().min(1),
+  unitPrice: z.coerce.number().positive(),
+});
+
 const saleSchema = z.object({
   customerId: z.string().min(1),
   saleNumber: z.string().min(1).optional(),
@@ -43,9 +48,13 @@ const saleUpdateSchema = z.object({
   saleNumber: z.string().min(1).optional(),
   saleDate: z.string().min(1).optional(),
   note: z.string().max(280).optional(),
+  items: z.array(saleItemUpdateSchema).min(1).optional(),
 });
 
 const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+
+const round2 = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
 
 const calculateTotals = (
   items: Array<{ qty: number; unitPrice: number; taxRate: number }>,
@@ -79,6 +88,91 @@ const normalizeBalanceForDisplay = (
   if (Math.abs(parsed) <= PAYMENT_SETTLEMENT_TOLERANCE) return "0.00";
   return parsed.toFixed(2);
 };
+
+const serializeSale = (
+  sale: {
+    id: string;
+    customer: {
+      displayName: string;
+      phone: string | null;
+      taxId: string | null;
+      type: string;
+      fiscalTaxProfile: string;
+    };
+    saleNumber: string | null;
+    saleDate: Date | null;
+    createdAt: Date;
+    subtotal: Prisma.Decimal | null;
+    taxes: Prisma.Decimal | null;
+    extraType: string | null;
+    extraValue: Prisma.Decimal | null;
+    extraAmount: Prisma.Decimal | null;
+    total: Prisma.Decimal | null;
+    paidTotal: Prisma.Decimal | null;
+    balance: Prisma.Decimal | null;
+    paymentStatus: string;
+    status: string;
+    billingStatus: string;
+    items: Array<{
+      id: string;
+      product: { name: string };
+      qty: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+      total: Prisma.Decimal;
+      taxRate: Prisma.Decimal | null;
+      taxAmount: Prisma.Decimal | null;
+    }>;
+    receipts?: Array<{
+      lines: Array<{
+        accountMovement: { verifiedAt: Date | null } | null;
+      }>;
+    }>;
+    saleCharges?: Array<{ amount: Prisma.Decimal }>;
+  }
+) => ({
+  hasPendingDoubleCheck: sale.receipts?.some((receipt) =>
+    receipt.lines.some((line) =>
+      line.accountMovement ? !line.accountMovement.verifiedAt : false
+    )
+  ) ?? false,
+  id: sale.id,
+  customerName: sale.customer.displayName,
+  customerPhone: sale.customer.phone,
+  customerTaxId: sale.customer.taxId,
+  customerType: sale.customer.type,
+  customerFiscalTaxProfile: sale.customer.fiscalTaxProfile,
+  saleNumber: sale.saleNumber,
+  saleDate: sale.saleDate?.toISOString() ?? null,
+  createdAt: sale.createdAt.toISOString(),
+  subtotal: sale.subtotal?.toString() ?? null,
+  taxes: sale.taxes?.toString() ?? null,
+  extraType: sale.extraType ?? null,
+  extraValue: sale.extraValue?.toString() ?? null,
+  extraAmount: sale.extraAmount?.toString() ?? null,
+  chargesTotal: sale.saleCharges
+    ? round2(
+        sale.saleCharges.reduce(
+          (total, charge) => total + Number(charge.amount ?? 0),
+          0
+        )
+      ).toFixed(2)
+    : "0.00",
+  total: sale.total?.toString() ?? null,
+  paidTotal: sale.paidTotal?.toString() ?? "0",
+  balance: normalizeBalanceForDisplay(sale.balance),
+  paymentStatus: sale.paymentStatus,
+  status: sale.status,
+  billingStatus: sale.billingStatus,
+  items: sale.items.map((item) => ({
+    id: item.id,
+    productName: item.product.name,
+    qty: item.qty.toString(),
+    unitPrice: item.unitPrice.toString(),
+    total: item.total.toString(),
+    taxRate: item.taxRate?.toString() ?? null,
+    taxAmount: item.taxAmount?.toString() ?? null,
+  })),
+});
 
 const parseSequenceNumber = (value?: string | null) => {
   if (!value) return null;
@@ -147,6 +241,7 @@ export async function GET(req: NextRequest) {
       include: {
         customer: true,
         items: { include: { product: true } },
+        saleCharges: { select: { amount: true } },
         receipts: {
           where: { status: "CONFIRMED" },
           select: {
@@ -164,42 +259,7 @@ export async function GET(req: NextRequest) {
       take: 50,
     });
 
-    return NextResponse.json(
-      sales.map((sale) => ({
-        hasPendingDoubleCheck: sale.receipts.some((receipt) =>
-          receipt.lines.some(
-            (line) =>
-              line.accountMovement ? !line.accountMovement.verifiedAt : false
-          )
-        ),
-        id: sale.id,
-        customerName: sale.customer.displayName,
-        customerPhone: sale.customer.phone,
-        saleNumber: sale.saleNumber,
-        saleDate: sale.saleDate?.toISOString() ?? null,
-        createdAt: sale.createdAt.toISOString(),
-        subtotal: sale.subtotal?.toString() ?? null,
-        taxes: sale.taxes?.toString() ?? null,
-        extraType: sale.extraType ?? null,
-        extraValue: sale.extraValue?.toString() ?? null,
-        extraAmount: sale.extraAmount?.toString() ?? null,
-        total: sale.total?.toString() ?? null,
-        paidTotal: sale.paidTotal?.toString() ?? "0",
-        balance: normalizeBalanceForDisplay(sale.balance),
-        paymentStatus: sale.paymentStatus,
-        status: sale.status,
-        billingStatus: sale.billingStatus,
-        items: sale.items.map((item) => ({
-          id: item.id,
-          productName: item.product.name,
-          qty: item.qty.toString(),
-          unitPrice: item.unitPrice.toString(),
-          total: item.total.toString(),
-          taxRate: item.taxRate?.toString() ?? null,
-          taxAmount: item.taxAmount?.toString() ?? null,
-        })),
-      }))
-    );
+    return NextResponse.json(sales.map((sale) => serializeSale(sale)));
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -408,9 +468,23 @@ export async function PATCH(req: NextRequest) {
 
     const existing = await prisma.sale.findFirst({
       where: { id: body.id, organizationId: membership.organizationId },
-      select: {
-        id: true,
-        billingStatus: true,
+      include: {
+        customer: true,
+        items: { include: { product: true } },
+        saleCharges: { select: { amount: true } },
+        receipts: {
+          where: { status: "CONFIRMED" },
+          select: {
+            lines: {
+              select: {
+                accountMovement: {
+                  select: { verifiedAt: true },
+                },
+              },
+            },
+          },
+        },
+        fiscalInvoice: { select: { id: true } },
       },
     });
 
@@ -418,6 +492,20 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json(
         { error: "Venta no encontrada" },
         { status: 404 }
+      );
+    }
+
+    if (body.items?.length && existing.billingStatus === "BILLED") {
+      return NextResponse.json(
+        { error: "No se pueden editar importes de una venta ya facturada" },
+        { status: 409 }
+      );
+    }
+
+    if (body.items?.length && existing.status === "CANCELLED") {
+      return NextResponse.json(
+        { error: "No se pueden editar importes de una venta cancelada" },
+        { status: 409 }
       );
     }
 
@@ -445,6 +533,81 @@ export async function PATCH(req: NextRequest) {
     }
 
     const sale = await prisma.$transaction(async (tx) => {
+      let pricingUpdate:
+        | {
+            subtotal: number;
+            taxes: number;
+            extraAmount: number;
+            total: number;
+            paidTotal: number;
+            balance: number;
+            paymentStatus: "UNPAID" | "PARTIAL" | "PAID";
+          }
+        | null = null;
+
+      if (body.items?.length) {
+        const updatesByItemId = new Map(
+          body.items.map((item) => [item.id, item.unitPrice])
+        );
+        const invalidItem = body.items.find(
+          (item) => !existing.items.some((saleItem) => saleItem.id === item.id)
+        );
+        if (invalidItem) {
+          throw new Error("INVALID_SALE_ITEM");
+        }
+
+        const recalculatedItems = existing.items.map((item) => ({
+          id: item.id,
+          qty: Number(item.qty),
+          unitPrice: updatesByItemId.get(item.id) ?? Number(item.unitPrice),
+          taxRate: Number(item.taxRate ?? 0),
+        }));
+
+        const { subtotal, taxes, extraAmount, total } = calculateTotals(
+          recalculatedItems,
+          existing.extraType ?? undefined,
+          existing.extraValue ? Number(existing.extraValue) : undefined
+        );
+        const chargesTotal = existing.saleCharges.reduce(
+          (sum, charge) => sum + Number(charge.amount ?? 0),
+          0
+        );
+        const nextTotal = round2(total + chargesTotal);
+        const paidTotal = round2(Number(existing.paidTotal ?? 0));
+        const rawBalance = round2(Math.max(nextTotal - paidTotal, 0));
+        const balance =
+          rawBalance <= PAYMENT_SETTLEMENT_TOLERANCE ? 0 : rawBalance;
+        const paymentStatus =
+          paidTotal <= 0
+            ? "UNPAID"
+            : balance === 0
+              ? "PAID"
+              : "PARTIAL";
+
+        pricingUpdate = {
+          subtotal: round2(subtotal),
+          taxes: round2(taxes),
+          extraAmount: round2(extraAmount),
+          total: nextTotal,
+          paidTotal,
+          balance,
+          paymentStatus,
+        };
+
+        for (const item of recalculatedItems) {
+          await tx.saleItem.update({
+            where: { id: item.id },
+            data: {
+              unitPrice: item.unitPrice.toFixed(2),
+              total: round2(item.qty * item.unitPrice).toFixed(2),
+              taxAmount: round2(
+                item.qty * item.unitPrice * (item.taxRate / 100)
+              ).toFixed(2),
+            },
+          });
+        }
+      }
+
       if (saleNumberInput) {
         const manualValue = parseSequenceNumber(saleNumberInput);
         if (manualValue !== null) {
@@ -463,8 +626,44 @@ export async function PATCH(req: NextRequest) {
           billingStatus: body.billingStatus ?? existing.billingStatus,
           saleDate,
           saleNumber: saleNumberInput ?? undefined,
+          ...(pricingUpdate
+            ? {
+                subtotal: pricingUpdate.subtotal.toFixed(2),
+                taxes: pricingUpdate.taxes.toFixed(2),
+                extraAmount: pricingUpdate.extraAmount.toFixed(2),
+                total: pricingUpdate.total.toFixed(2),
+                paidTotal: pricingUpdate.paidTotal.toFixed(2),
+                balance: pricingUpdate.balance.toFixed(2),
+                paymentStatus: pricingUpdate.paymentStatus,
+              }
+            : {}),
         },
       });
+
+      if (pricingUpdate) {
+        await tx.currentAccountEntry.updateMany({
+          where: {
+            organizationId: membership.organizationId,
+            saleId: updated.id,
+            sourceType: "SALE",
+          },
+          data: {
+            amount: pricingUpdate.total.toFixed(2),
+          },
+        });
+
+        if (existing.quoteId) {
+          await tx.quote.update({
+            where: { id: existing.quoteId },
+            data: {
+              subtotal: pricingUpdate.subtotal.toFixed(2),
+              taxes: pricingUpdate.taxes.toFixed(2),
+              extraAmount: pricingUpdate.extraAmount.toFixed(2),
+              total: pricingUpdate.total.toFixed(2),
+            },
+          });
+        }
+      }
 
       await tx.saleEvent.create({
         data: {
@@ -472,21 +671,50 @@ export async function PATCH(req: NextRequest) {
           saleId: updated.id,
           actorUserId: payload.userId,
           action: "UPDATED",
-          note: body.note || undefined,
+          note:
+            body.note ||
+            (pricingUpdate ? "Importes actualizados antes de facturar" : undefined),
         },
       });
 
-      return updated;
+      const hydrated = await tx.sale.findUnique({
+        where: { id: updated.id },
+        include: {
+          customer: true,
+          items: { include: { product: true } },
+          saleCharges: { select: { amount: true } },
+          receipts: {
+            where: { status: "CONFIRMED" },
+            select: {
+              lines: {
+                select: {
+                  accountMovement: {
+                    select: { verifiedAt: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!hydrated) {
+        throw new Error("SALE_NOT_FOUND");
+      }
+
+      return hydrated;
     });
 
-    return NextResponse.json({
-      id: sale.id,
-      status: sale.status,
-      billingStatus: sale.billingStatus,
-    });
+    return NextResponse.json(serializeSale(sale));
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
+    }
+    if (error instanceof Error && error.message === "INVALID_SALE_ITEM") {
+      return NextResponse.json(
+        { error: "Item de venta invalido" },
+        { status: 400 }
+      );
     }
     if (isAuthError(error)) {
       return NextResponse.json(

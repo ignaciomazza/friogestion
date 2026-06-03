@@ -30,6 +30,7 @@ import {
   buildTotalsFromRates,
 } from "@/lib/afip/totals";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
+import { MoneyInput } from "@/components/inputs/MoneyInput";
 
 type AfipStatus = {
   ok: boolean;
@@ -159,6 +160,14 @@ type InvoiceApiErrorPayload = {
   code?: string;
   error?: string;
   resolution?: unknown;
+};
+
+type EditableInvoiceItem = {
+  id: string;
+  productName: string;
+  qty: string;
+  unitPrice: string;
+  taxRate: string;
 };
 
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
@@ -300,6 +309,10 @@ export default function BillingClient({
   const [invoiceForm, setInvoiceForm] = useState({
     requiresIncomeTaxDeduction: false,
   });
+  const [editableInvoiceItems, setEditableInvoiceItems] = useState<
+    EditableInvoiceItem[]
+  >([]);
+  const [isSavingInvoiceSale, setIsSavingInvoiceSale] = useState(false);
   const [invoiceToCancel, setInvoiceToCancel] = useState<IssuedInvoiceRow | null>(null);
   const [creditNoteStep, setCreditNoteStep] = useState<"FORM" | "CONFIRM">("FORM");
   const [creditPreview, setCreditPreview] = useState<CreditNotePreview | null>(null);
@@ -458,6 +471,19 @@ export default function BillingClient({
     setInvoiceForm({
       requiresIncomeTaxDeduction: false,
     });
+    setEditableInvoiceItems(
+      (sale.items ?? [])
+        .filter((item): item is NonNullable<SaleRow["items"]>[number] & { id: string } =>
+          Boolean(item.id)
+        )
+        .map((item) => ({
+          id: item.id,
+          productName: item.productName,
+          qty: item.qty,
+          unitPrice: Number(item.unitPrice ?? 0).toFixed(2),
+          taxRate: Number(item.taxRate ?? 0).toFixed(2),
+        }))
+    );
     setArcaValidation({
       status: "idle",
       message: null,
@@ -469,11 +495,12 @@ export default function BillingClient({
   };
 
   const closeInvoiceModal = () => {
-    if (isIssuing) return;
+    if (isIssuing || isSavingInvoiceSale) return;
     setInvoiceStep("FORM");
     setSaleToInvoice(null);
     setInvoiceResolution(null);
     setInvoiceIssueDateOverride(null);
+    setEditableInvoiceItems([]);
   };
 
   const openCreditNoteModal = (invoice: IssuedInvoiceRow) => {
@@ -622,7 +649,36 @@ export default function BillingClient({
     };
   }, [invoiceToCancel]);
 
-  const invoiceTotal = Number(saleToInvoice?.total ?? 0);
+  const invoicePreviewItems = editableInvoiceItems.map((item) => {
+    const qty = Number(item.qty ?? 0);
+    const unitPrice = Number(item.unitPrice ?? 0);
+    const base = round2(qty * unitPrice);
+    const taxRate = Number(item.taxRate ?? 0);
+    const iva = round2(base * (taxRate / 100));
+    const lineTotal = round2(base + iva);
+    return {
+      id: item.id,
+      productName: item.productName,
+      qty,
+      unitPrice,
+      taxRate,
+      base,
+      iva,
+      lineTotal,
+    };
+  });
+  const previewSubtotal = round2(
+    invoicePreviewItems.reduce((total, item) => total + item.base, 0)
+  );
+  const previewIva = round2(
+    invoicePreviewItems.reduce((total, item) => total + item.iva, 0)
+  );
+  const previewExtraAmount = round2(Number(saleToInvoice?.extraAmount ?? 0));
+  const previewChargesTotal = round2(Number(saleToInvoice?.chargesTotal ?? 0));
+  const previewTotal = round2(
+    previewSubtotal + previewIva + previewExtraAmount + previewChargesTotal
+  );
+  const invoiceTotal = previewTotal;
   const customerFiscalTaxProfile = normalizeCustomerFiscalTaxProfile(
     saleToInvoice?.customerFiscalTaxProfile ?? null
   );
@@ -650,27 +706,7 @@ export default function BillingClient({
     ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[customerFiscalTaxProfile]
     : "Sin definir";
   const shouldShowDeductionToggle = !(isConsumerFinal && !hasRecipientDoc);
-  const previewItems = (saleToInvoice?.items ?? []).map((item) => {
-    const qty = Number(item.qty ?? 0);
-    const unitPrice = Number(item.unitPrice ?? 0);
-    const base = Number(item.total ?? qty * unitPrice);
-    const taxRate = Number(item.taxRate ?? 0);
-    const iva = round2(base * (taxRate / 100));
-    const lineTotal = round2(base + iva);
-    return {
-      id: item.id ?? `${item.productName}-${item.qty}-${item.unitPrice}`,
-      productName: item.productName,
-      qty,
-      unitPrice,
-      taxRate,
-      base,
-      iva,
-      lineTotal,
-    };
-  });
-  const previewSubtotal = round2(Number(saleToInvoice?.subtotal ?? 0));
-  const previewIva = round2(Number(saleToInvoice?.taxes ?? 0));
-  const previewTotal = round2(Number(saleToInvoice?.total ?? previewSubtotal + previewIva));
+  const previewItems = invoicePreviewItems;
   const invoiceIssueDateLabel = invoiceIssueDateOverride
     ? formatDateInput(invoiceIssueDateOverride)
     : saleToInvoice?.saleDate
@@ -709,11 +745,25 @@ export default function BillingClient({
     setDebitNoteStep("CONFIRM");
   };
 
+  const hasEditableInvoiceChanges = useMemo(() => {
+    if (!saleToInvoice) return false;
+    const originalItems = (saleToInvoice.items ?? []).filter(
+      (item): item is NonNullable<SaleRow["items"]>[number] & { id: string } =>
+        Boolean(item.id)
+    );
+    if (originalItems.length !== editableInvoiceItems.length) return false;
+    return editableInvoiceItems.some((item) => {
+      const original = originalItems.find((candidate) => candidate.id === item.id);
+      if (!original) return false;
+      return round2(Number(original.unitPrice ?? 0)) !== round2(Number(item.unitPrice ?? 0));
+    });
+  }, [editableInvoiceItems, saleToInvoice]);
+
   const buildInvoiceDraft = (): InvoiceDraftResult => {
     if (!saleToInvoice) {
       return { ok: false, error: "No hay venta seleccionada para facturar." };
     }
-    const total = Number(saleToInvoice.total ?? 0);
+    const total = previewTotal;
     if (!Number.isFinite(total) || total <= 0) {
       return { ok: false, error: "No se pudo calcular totales de la venta." };
     }
@@ -741,15 +791,14 @@ export default function BillingClient({
 
     let hasInvalidTaxRate = false;
     const fiscalEntries: Array<{ base: number; rate: number }> = [];
-    const itemsTaxRates = (saleToInvoice.items ?? [])
+    const itemsTaxRates = previewItems
       .map((item) => {
-        if (!item.id) return null;
         const rate = Number(item.taxRate ?? 0);
         if (!Number.isFinite(rate) || !ALLOWED_IVA_RATES.has(rate)) {
           hasInvalidTaxRate = true;
           return null;
         }
-        const base = Number(item.total ?? 0);
+        const base = Number(item.base ?? 0);
         if (!Number.isFinite(base) || base < 0) {
           hasInvalidTaxRate = true;
           return null;
@@ -812,7 +861,55 @@ export default function BillingClient({
     );
   };
 
-  const goToConfirmStep = () => {
+  const saveInvoiceSaleEdits = async () => {
+    if (!saleToInvoice || !hasEditableInvoiceChanges) {
+      return saleToInvoice;
+    }
+
+    setIsSavingInvoiceSale(true);
+    try {
+      const payload = {
+        id: saleToInvoice.id,
+        note: "Importes ajustados antes de emitir factura",
+        items: editableInvoiceItems.map((item) => ({
+          id: item.id,
+          unitPrice: Number(item.unitPrice ?? 0),
+        })),
+      };
+      const res = await fetch("/api/sales", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setInvoiceStatus(data?.error ?? "No se pudieron guardar los cambios de la venta.");
+        return null;
+      }
+
+      const updatedSale = data as SaleRow;
+      setSales((prev) =>
+        prev.map((sale) => (sale.id === updatedSale.id ? updatedSale : sale))
+      );
+      setSaleToInvoice(updatedSale);
+      setInvoiceStatus("Importes actualizados. Revisa y confirma la factura.");
+      return updatedSale;
+    } catch {
+      setInvoiceStatus("No se pudieron guardar los cambios de la venta.");
+      return null;
+    } finally {
+      setIsSavingInvoiceSale(false);
+    }
+  };
+
+  const goToConfirmStep = async () => {
+    if (hasEditableInvoiceChanges) {
+      const savedSale = await saveInvoiceSaleEdits();
+      if (!savedSale) {
+        setInvoiceResolution(null);
+        return;
+      }
+    }
     const draft = buildInvoiceDraft();
     if (!draft.ok) {
       setInvoiceStatus(draft.error);
@@ -2491,7 +2588,7 @@ export default function BillingClient({
                 type="button"
                 className="btn text-xs"
                 onClick={closeInvoiceModal}
-                disabled={isIssuing}
+                disabled={isIssuing || isSavingInvoiceSale}
               >
                 Cerrar
               </button>
@@ -2505,7 +2602,7 @@ export default function BillingClient({
                   type="button"
                   className="btn text-xs"
                   onClick={() => setInvoiceStep("FORM")}
-                  disabled={isIssuing}
+                  disabled={isIssuing || isSavingInvoiceSale}
                 >
                   Volver
                 </button>
@@ -2589,7 +2686,7 @@ export default function BillingClient({
                               : "text-zinc-600"
                           }`}
                           onClick={() => setSelectedInvoiceType(invoiceType)}
-                          disabled={isIssuing}
+                          disabled={isIssuing || isSavingInvoiceSale}
                         >
                           Factura {invoiceType}
                         </button>
@@ -2629,7 +2726,9 @@ export default function BillingClient({
                           onClick={() => {
                             void refreshArcaValidation();
                           }}
-                          disabled={arcaValidation.status === "loading"}
+                          disabled={
+                            arcaValidation.status === "loading" || isSavingInvoiceSale
+                          }
                         >
                           {arcaValidation.status === "loading"
                             ? "Validando..."
@@ -2670,6 +2769,7 @@ export default function BillingClient({
                           requiresIncomeTaxDeduction: event.target.checked,
                         }))
                       }
+                      disabled={isSavingInvoiceSale}
                     />
                     El receptor solicita deduccion en Ganancias
                   </label>
@@ -2708,6 +2808,96 @@ export default function BillingClient({
                     </p>
                   </div>
                 ) : null}
+                {previewItems.length ? (
+                  <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="section-title">Editar importes antes de facturar</p>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          Puedes corregir los precios unitarios. La venta se recalcula y queda lista
+                          para reemitir con el monto exacto.
+                        </p>
+                      </div>
+                      {hasEditableInvoiceChanges ? (
+                        <span className="rounded-full border border-amber-200 bg-white px-2 py-1 text-[11px] font-medium text-amber-800">
+                          Cambios sin guardar
+                        </span>
+                      ) : (
+                        <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium text-emerald-800">
+                          Sin cambios
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-3 space-y-3">
+                      {editableInvoiceItems.map((item, index) => {
+                        const previewItem = previewItems[index] ?? {
+                          lineTotal: 0,
+                        };
+                        return (
+                          <div
+                            key={item.id}
+                            className="grid gap-3 rounded-xl border border-zinc-200/70 bg-zinc-50 p-3 sm:grid-cols-[minmax(0,1.5fr)_120px_160px_120px]"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-semibold text-zinc-900">
+                                {item.productName}
+                              </p>
+                              <p className="mt-1 text-[11px] text-zinc-500">
+                                Cantidad: {Number(item.qty).toLocaleString("es-AR")} · IVA{" "}
+                                {Number(item.taxRate).toLocaleString("es-AR")}%
+                              </p>
+                            </div>
+                            <div>
+                              <p className="input-label">Cantidad</p>
+                              <div className="mt-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600">
+                                {Number(item.qty).toLocaleString("es-AR")}
+                              </div>
+                            </div>
+                            <label className="field-stack">
+                              <span className="input-label">Precio unitario</span>
+                              <MoneyInput
+                                className="input w-full"
+                                value={item.unitPrice}
+                                onValueChange={(value) =>
+                                  setEditableInvoiceItems((prev) =>
+                                    prev.map((candidate) =>
+                                      candidate.id === item.id
+                                        ? {
+                                            ...candidate,
+                                            unitPrice: value || "0",
+                                          }
+                                        : candidate
+                                    )
+                                  )
+                                }
+                                disabled={isIssuing || isSavingInvoiceSale}
+                                placeholder="0,00"
+                              />
+                            </label>
+                            <div>
+                              <p className="input-label">Total item</p>
+                              <div className="mt-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-900">
+                                {formatCurrencyARS(previewItem.lineTotal.toFixed(2))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-3 grid gap-3 rounded-xl border border-dashed border-sky-200 bg-sky-50/40 p-3 sm:grid-cols-4">
+                      <FiscalAmountItem label="Subtotal" value={previewSubtotal} />
+                      <FiscalAmountItem label="IVA" value={previewIva} />
+                      <FiscalAmountItem
+                        label={getAdjustmentLabel(
+                          saleToInvoice.extraType,
+                          previewExtraAmount + previewChargesTotal
+                        )}
+                        value={round2(previewExtraAmount + previewChargesTotal)}
+                      />
+                      <FiscalAmountItem label="Total" value={previewTotal} />
+                    </div>
+                  </div>
+                ) : null}
                 {fiscalPreview ? (
                   <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
                     <p className="section-title">Totales fiscales</p>
@@ -2726,16 +2916,20 @@ export default function BillingClient({
                   <p className="text-sm text-zinc-600">
                     Total:{" "}
                     <span className="font-semibold text-zinc-900">
-                      {formatCurrencyARS(saleToInvoice.total ?? "0")}
+                      {formatCurrencyARS(previewTotal.toFixed(2))}
                     </span>
                   </p>
                   <button
                     type="button"
                     className="btn btn-emerald text-xs"
-                    onClick={goToConfirmStep}
-                    disabled={isIssuing}
+                    onClick={() => {
+                      void goToConfirmStep();
+                    }}
+                    disabled={isIssuing || isSavingInvoiceSale}
                   >
-                    Continuar a confirmar
+                    {isSavingInvoiceSale
+                      ? "Guardando cambios..."
+                      : "Continuar a confirmar"}
                   </button>
                 </div>
               </>
@@ -2818,7 +3012,7 @@ export default function BillingClient({
                   <p className="text-sm text-zinc-600">
                     Total:{" "}
                     <span className="font-semibold text-zinc-900">
-                      {formatCurrencyARS(saleToInvoice.total ?? "0")}
+                      {formatCurrencyARS(previewTotal.toFixed(2))}
                     </span>
                   </p>
                   <button
@@ -2827,7 +3021,7 @@ export default function BillingClient({
                     onClick={() => {
                       void submitInvoice();
                     }}
-                    disabled={isIssuing}
+                    disabled={isIssuing || isSavingInvoiceSale}
                   >
                     {isIssuing ? "Confirmando..." : "Confirmar factura"}
                   </button>

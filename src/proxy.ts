@@ -5,6 +5,9 @@ import { PRICE_PAGE_ENABLED } from "@/lib/features";
 
 export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  const isPublicStorefrontApi =
+    pathname.startsWith("/api/storefront/") &&
+    !pathname.startsWith("/api/storefront/admin/");
 
   if (pathname.startsWith("/api/auth")) {
     return NextResponse.next();
@@ -15,6 +18,16 @@ export function proxy(req: NextRequest) {
     /^\/api\/.+\/pdf$/.test(pathname);
 
   if (isPdfEndpointRequest) {
+    return NextResponse.next();
+  }
+
+  if (isPublicStorefrontApi) {
+    console.info("[storefront][proxy] allowing public API route", {
+      pathname,
+      hasAuthCookie: Boolean(req.cookies.get(AUTH_COOKIE_NAME)?.value),
+      hasBearerHeader: Boolean(req.headers.get("authorization")?.trim()),
+      hasApiKeyHeader: Boolean(req.headers.get("x-friogestion-api-key")?.trim()),
+    });
     return NextResponse.next();
   }
 
@@ -31,6 +44,13 @@ export function proxy(req: NextRequest) {
   const token = req.cookies.get(AUTH_COOKIE_NAME)?.value;
   if (!token) {
     if (pathname.startsWith("/api")) {
+      if (pathname.startsWith("/api/storefront")) {
+        console.warn("[storefront][proxy] blocked request without auth cookie", {
+          pathname,
+          hasBearerHeader: Boolean(req.headers.get("authorization")?.trim()),
+          hasApiKeyHeader: Boolean(req.headers.get("x-friogestion-api-key")?.trim()),
+        });
+      }
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     const loginUrl = req.nextUrl.clone();
