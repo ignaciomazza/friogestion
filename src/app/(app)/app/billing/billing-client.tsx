@@ -31,6 +31,7 @@ import {
 } from "@/lib/afip/totals";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
+import { cn } from "@/lib/cn";
 
 type AfipStatus = {
   ok: boolean;
@@ -853,6 +854,55 @@ export default function BillingClient({
     Boolean(saleToInvoice) &&
     fiscalAdjustmentTotal > 0 &&
     (saleToInvoice?.extraType === "PERCENT" || saleToInvoice?.extraType === "FIXED");
+  const invoiceRecipientRequirementMessage = !hasRecipientDoc
+    ? resolvedInvoiceType === "A"
+      ? "Factura A requiere CUIT valido del cliente."
+      : requiresIdentification
+        ? "Por monto o deduccion, este comprobante necesita CUIT del receptor."
+        : requiresProfileTaxId
+          ? "Esta condicion fiscal requiere CUIT valido para informar correctamente el receptor en ARCA."
+          : null
+    : null;
+  const invoiceRecipientMessageClass = invoiceRecipientRequirementMessage
+    ? "text-amber-800"
+    : arcaValidation.status === "ok"
+      ? "text-emerald-700"
+      : arcaValidation.status === "warning"
+        ? "text-amber-700"
+        : arcaValidation.status === "error"
+          ? "text-rose-700"
+          : "text-zinc-600";
+  const invoiceRecipientCheckedLabel = arcaValidation.checkedAt
+    ? `Validado ${new Date(arcaValidation.checkedAt).toLocaleString("es-AR")}${
+        arcaValidation.source ? ` · ${arcaValidation.source}` : ""
+      }`
+    : null;
+  const invoiceRecipientMessageNormalized = invoiceRecipientRequirementMessage
+    ? invoiceRecipientRequirementMessage
+    : arcaValidation.message?.startsWith("CUIT validado con ARCA.")
+      ? arcaValidation.message.replace("CUIT validado con ARCA.", "").trim() || null
+      : arcaValidation.message;
+  const shouldShowArcaCondition =
+    Boolean(arcaValidation.arcaTaxStatus) &&
+    (!customerFiscalTaxProfile ||
+      arcaValidation.suggestedFiscalTaxProfile !== customerFiscalTaxProfile);
+  const showInvoiceFooterNote = invoiceStep === "FORM" && hasEditableInvoiceChanges;
+  const invoiceStepLabel =
+    invoiceStep === "FORM" ? "Paso 1 de 2" : "Paso 2 de 2";
+  const invoiceStepHeading =
+    invoiceStep === "FORM" ? "Emitir factura" : "Confirmar factura";
+  const invoiceStepSubtitle =
+    invoiceStep === "FORM"
+      ? `Venta ${saleToInvoice?.saleNumber ?? saleToInvoice?.id} · ${saleToInvoice?.customerName ?? ""}`
+      : `${saleToInvoice?.customerName ?? ""} · Venta ${saleToInvoice?.saleNumber ?? saleToInvoice?.id ?? ""}`;
+  const invoicePrimaryActionLabel =
+    invoiceStep === "FORM"
+      ? isSavingInvoiceSale
+        ? "Guardando cambios..."
+        : "Continuar a confirmar"
+      : isIssuing
+        ? "Confirmando..."
+        : "Confirmar factura";
 
   const handleInvoiceIssueError = (data: InvoiceApiErrorPayload | null) => {
     setInvoiceStatus(cleanInvoiceErrorMessage(data?.error));
@@ -2264,8 +2314,8 @@ export default function BillingClient({
       </div>
 
       {invoiceToCancel ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
-          <div className="card w-full max-w-xl space-y-4 p-5">
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/35 p-3 sm:items-center sm:p-4">
+          <div className="card max-h-[calc(100dvh-1.5rem)] w-full max-w-xl space-y-4 overflow-y-auto p-5 sm:max-h-[calc(100dvh-2rem)]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-zinc-900">
@@ -2430,8 +2480,8 @@ export default function BillingClient({
       ) : null}
 
       {creditNoteToRevert ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
-          <div className="card w-full max-w-xl space-y-4 p-5">
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/35 p-3 sm:items-center sm:p-4">
+          <div className="card max-h-[calc(100dvh-1.5rem)] w-full max-w-xl space-y-4 overflow-y-auto p-5 sm:max-h-[calc(100dvh-2rem)]">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-zinc-900">
@@ -2572,462 +2622,455 @@ export default function BillingClient({
       ) : null}
 
       {saleToInvoice ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
-          <div className="card w-full max-w-xl space-y-4 p-5">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-zinc-900">
-                  Emitir factura
-                </h3>
-                <p className="text-xs text-zinc-500">
-                  Venta {saleToInvoice.saleNumber ?? saleToInvoice.id} ·{" "}
-                  {saleToInvoice.customerName}
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn text-xs"
-                onClick={closeInvoiceModal}
-                disabled={isIssuing || isSavingInvoiceSale}
-              >
-                Cerrar
-              </button>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                {invoiceStep === "FORM" ? "Paso 1 de 2 · Emitir factura" : "Paso 2 de 2 · Confirmar factura"}
-              </span>
-              {invoiceStep === "CONFIRM" ? (
-                <button
-                  type="button"
-                  className="btn text-xs"
-                  onClick={() => setInvoiceStep("FORM")}
-                  disabled={isIssuing || isSavingInvoiceSale}
-                >
-                  Volver
-                </button>
-              ) : null}
-            </div>
-
-	            {invoiceStatus || invoiceWarnings.length ? (
-	              <div
-	                className={`rounded-xl border bg-white p-3 ${
-	                  invoiceStatus === "Factura emitida correctamente."
-	                    ? "border-emerald-200"
-	                    : "border-zinc-200"
-	                }`}
-	              >
-                {invoiceStatus ? (
-                  <p className="text-sm font-medium text-zinc-800">
-                    {invoiceStatus}
+        <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-zinc-950/35 p-3 backdrop-blur-sm sm:items-center sm:p-6">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invoice-modal-title"
+            className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[54rem] flex-col overflow-hidden rounded-[26px] border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.45)] sm:max-h-[calc(100dvh-3rem)]"
+          >
+            <div className="border-b border-zinc-200/70 px-5 py-4 sm:px-6 sm:py-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <span className="inline-flex rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-zinc-500">
+                    {invoiceStepLabel}
+                  </span>
+                  <h3
+                    id="invoice-modal-title"
+                    className="mt-2.5 text-lg font-semibold tracking-[-0.02em] text-zinc-950 sm:text-[1.35rem]"
+                  >
+                    {invoiceStepHeading}
+                  </h3>
+                  <p className="mt-1 truncate text-xs text-zinc-500 sm:text-sm">
+                    {invoiceStepSubtitle}
                   </p>
-                ) : null}
-                {invoiceWarnings.length ? (
-                  <ul className="mt-2 space-y-1 text-xs text-amber-700">
-                    {invoiceWarnings.map((warning) => (
-                      <li key={warning}>• {warning}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </div>
-            ) : null}
-
-            {invoiceResolution ? (
-              <div className="rounded-xl border border-amber-200 bg-white p-3">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
-                  Solucion sugerida
-                </p>
-                <p className="mt-1 text-sm font-semibold text-zinc-900">
-                  {invoiceResolution.title}
-                </p>
-                <p className="mt-1 text-xs leading-5 text-zinc-600">
-                  {invoiceResolution.description}
-                </p>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {invoiceStep === "CONFIRM" ? (
+                    <button
+                      type="button"
+                      className="btn h-9 px-3.5 text-sm"
+                      onClick={() => setInvoiceStep("FORM")}
+                      disabled={isIssuing || isSavingInvoiceSale}
+                    >
+                      Volver
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="btn btn-emerald text-xs"
-                    onClick={() => {
-                      void applyInvoiceResolution();
-                    }}
-                    disabled={isIssuing}
+                    className="btn h-9 px-3.5 text-sm"
+                    onClick={closeInvoiceModal}
+                    disabled={isIssuing || isSavingInvoiceSale}
                   >
-                    {isIssuing ? "Emitiendo..." : invoiceResolution.primaryActionLabel}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn text-xs"
-                    onClick={() => {
-                      setInvoiceResolution(null);
-                      setInvoiceStatus(null);
-                      setInvoiceStep("FORM");
-                    }}
-                    disabled={isIssuing}
-                  >
-                    Revisar factura
+                    Cerrar
                   </button>
                 </div>
               </div>
-            ) : null}
+            </div>
 
-            {invoiceStep === "FORM" ? (
-              <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600">
-                    <p className="font-medium text-zinc-900">Tipo de factura</p>
-                    <div className="mt-2 inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-1">
-                      {(["A", "B"] as const).map((invoiceType) => (
-                        <button
-                          key={invoiceType}
-                          type="button"
-                          className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
-                            resolvedInvoiceType === invoiceType
-                              ? "bg-white text-zinc-900 shadow-sm"
-                              : "text-zinc-600"
-                          }`}
-                          onClick={() => setSelectedInvoiceType(invoiceType)}
-                          disabled={isIssuing || isSavingInvoiceSale}
-                        >
-                          Factura {invoiceType}
-                        </button>
-                      ))}
-                    </div>
-                    {resolvedInvoiceType !== recommendedInvoiceType ? (
-                      <p className="mt-2 text-[11px] text-amber-700">
-                        Sugerida por condicion fiscal: Factura {recommendedInvoiceType}.
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-6 sm:py-5">
+              <div className="space-y-5">
+                {invoiceStatus || invoiceWarnings.length ? (
+                  <div className="space-y-2">
+                    {invoiceStatus ? (
+                      <p
+                        className={cn(
+                          "text-sm font-medium",
+                          invoiceStatus === "Factura emitida correctamente."
+                            ? "text-emerald-700"
+                            : "text-zinc-800"
+                        )}
+                      >
+                        {invoiceStatus}
                       </p>
                     ) : null}
+                    {invoiceWarnings.length ? (
+                      <ul className="mt-2 space-y-1 text-xs text-amber-700">
+                        {invoiceWarnings.map((warning) => (
+                          <li key={warning}>• {warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </div>
-                  <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600">
-                    <span className="font-medium text-zinc-900">Condicion fiscal:</span>{" "}
-                    {customerFiscalTaxProfileLabel}
+                ) : null}
+
+                {invoiceResolution ? (
+                  <div className="space-y-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">
+                      Solucion sugerida
+                    </p>
+                    <p className="mt-1.5 text-sm font-semibold text-zinc-900 sm:text-base">
+                      {invoiceResolution.title}
+                    </p>
+                    <p className="mt-2 max-w-3xl text-xs leading-5 text-zinc-600 sm:text-sm">
+                      {invoiceResolution.description}
+                    </p>
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        className="btn btn-emerald h-9 px-3.5 text-sm"
+                        onClick={() => {
+                          void applyInvoiceResolution();
+                        }}
+                        disabled={isIssuing}
+                      >
+                        {isIssuing
+                          ? "Emitiendo..."
+                          : invoiceResolution.primaryActionLabel}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn h-9 px-3.5 text-sm"
+                        onClick={() => {
+                          setInvoiceResolution(null);
+                          setInvoiceStatus(null);
+                          setInvoiceStep("FORM");
+                        }}
+                        disabled={isIssuing}
+                      >
+                        Revisar factura
+                      </button>
+                    </div>
                   </div>
-                  <div className="rounded-xl border border-zinc-200/70 bg-white px-3 py-2 text-xs text-zinc-600 sm:col-span-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                          Receptor
+                ) : null}
+
+                {invoiceStep === "FORM" ? (
+                  <>
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+                      <section>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="section-title">Comprobante</p>
+                            <p className="mt-1.5 text-sm font-semibold text-zinc-900">
+                              Tipo de factura
+                            </p>
+                          </div>
+                          {resolvedInvoiceType !== recommendedInvoiceType ? (
+                            <span className="rounded-full border border-amber-200 bg-white px-3 py-1 text-[11px] font-medium text-amber-800">
+                              Sugerida: Factura {recommendedInvoiceType}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-3 inline-flex rounded-2xl border border-zinc-200 bg-white p-1 shadow-[0_2px_12px_-10px_rgba(24,24,27,0.22)]">
+                          {(["A", "B"] as const).map((invoiceType) => (
+                            <button
+                              key={invoiceType}
+                              type="button"
+                              className={cn(
+                                "min-w-[112px] rounded-[14px] px-3.5 py-1.5 text-sm font-semibold transition",
+                                resolvedInvoiceType === invoiceType
+                                  ? "bg-zinc-900 text-white shadow-sm"
+                                  : "text-zinc-600 hover:bg-zinc-50"
+                              )}
+                              onClick={() => setSelectedInvoiceType(invoiceType)}
+                              disabled={isIssuing || isSavingInvoiceSale}
+                            >
+                              Factura {invoiceType}
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+
+                      <section className="self-start">
+                        <p className="section-title">Condicion fiscal</p>
+                        <p className="mt-2.5 text-base font-semibold text-zinc-900">
+                          {customerFiscalTaxProfileLabel}
                         </p>
-                        <p className="mt-1 font-semibold text-zinc-900">
-                          {recipientDocumentLabel}
-                        </p>
-                        {arcaValidation.checkedAt ? (
-                          <p className="text-[11px] text-zinc-500">
-                            Verificado:{" "}
-                            {new Date(arcaValidation.checkedAt).toLocaleString("es-AR")}
-                            {arcaValidation.source ? ` (${arcaValidation.source})` : ""}
+                        {shouldShowArcaCondition ? (
+                          <p className="mt-1 text-xs text-zinc-500 sm:text-sm">
+                            ARCA informa: {arcaValidation.arcaTaxStatus}
                           </p>
                         ) : null}
-                      </div>
-                      {hasRecipientDoc ? (
-                        <button
-                          type="button"
-                          className="btn text-xs"
-                          onClick={() => {
-                            void refreshArcaValidation();
-                          }}
-                          disabled={
-                            arcaValidation.status === "loading" || isSavingInvoiceSale
-                          }
-                        >
-                          {arcaValidation.status === "loading"
-                            ? "Validando..."
-                            : "Revalidar en ARCA"}
-                        </button>
-                      ) : null}
+                      </section>
                     </div>
-                    {arcaValidation.message ? (
-                      <p
-                        className={`mt-2 text-xs ${
-                          arcaValidation.status === "ok"
-                            ? "text-emerald-700"
-                            : arcaValidation.status === "warning"
-                              ? "text-amber-700"
-                              : arcaValidation.status === "error"
-                                ? "text-rose-700"
-                                : "text-zinc-600"
-                        }`}
-                      >
-                        {arcaValidation.message}
-                      </p>
+
+                    <section className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="section-title">Receptor</p>
+                          <p className="mt-1.5 text-base font-semibold text-zinc-950">
+                            {recipientDocumentLabel}
+                          </p>
+                          {invoiceRecipientCheckedLabel ? (
+                            <p className="mt-1 text-xs text-zinc-500">
+                              {invoiceRecipientCheckedLabel}
+                            </p>
+                          ) : null}
+                        </div>
+                        {hasRecipientDoc ? (
+                          <button
+                            type="button"
+                            className="btn h-9 px-3.5 text-sm"
+                            onClick={() => {
+                              void refreshArcaValidation();
+                            }}
+                            disabled={
+                              arcaValidation.status === "loading" || isSavingInvoiceSale
+                            }
+                          >
+                            {arcaValidation.status === "loading"
+                              ? "Validando..."
+                              : "Revalidar en ARCA"}
+                          </button>
+                        ) : null}
+                      </div>
+
+                      {invoiceRecipientMessageNormalized ? (
+                        <p
+                          className={cn(
+                            "text-sm leading-5",
+                            invoiceRecipientMessageClass
+                          )}
+                        >
+                          {invoiceRecipientMessageNormalized}
+                        </p>
+                      ) : null}
+
+                      {shouldShowDeductionToggle ? (
+                        <label className="flex items-start gap-3 border-t border-zinc-200/70 pt-4 text-sm text-zinc-600">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-zinc-300 accent-zinc-900"
+                            checked={invoiceForm.requiresIncomeTaxDeduction}
+                            onChange={(event) =>
+                              setInvoiceForm((prev) => ({
+                                ...prev,
+                                requiresIncomeTaxDeduction: event.target.checked,
+                              }))
+                            }
+                            disabled={isSavingInvoiceSale}
+                          />
+                          <span>El receptor solicita deduccion en Ganancias</span>
+                        </label>
+                      ) : null}
+                    </section>
+
+                    {hasRegularSurchargeAdjustment ? (
+                      <section>
+                        <p className="section-title text-amber-700">
+                          Revisar recargo e IVA
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-zinc-700 sm:text-sm">
+                          Esta venta tiene un recargo de{" "}
+                          <span className="font-semibold text-zinc-900">
+                            {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
+                          </span>
+                          . Para emitir, se integra al neto y al IVA fiscal para que
+                          la alicuota cierre contra la base imponible. Si en realidad
+                          era interes de tarjeta, conviene corregir el tipo de ajuste
+                          de la venta antes de emitir.
+                        </p>
+                      </section>
                     ) : null}
-                    {arcaValidation.arcaTaxStatus ? (
-                      <p className="mt-1 text-[11px] text-zinc-500">
-                        Condicion ARCA: {arcaValidation.arcaTaxStatus}
-                      </p>
+
+                    {previewItems.length ? (
+                      <section>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="section-title">Importes</p>
+                            <p className="mt-1.5 text-sm font-semibold text-zinc-900 sm:text-base">
+                              Revisar antes de emitir
+                            </p>
+                          </div>
+                          <span
+                            className={cn(
+                              "rounded-full px-3 py-1 text-[11px] font-medium",
+                              hasEditableInvoiceChanges
+                                ? "border border-amber-200 bg-amber-50 text-amber-800"
+                                : "border border-emerald-200 bg-emerald-50 text-emerald-800"
+                            )}
+                          >
+                            {hasEditableInvoiceChanges
+                              ? "Cambios pendientes"
+                              : "Sin cambios"}
+                          </span>
+                        </div>
+
+                        <div className="mt-4 space-y-3.5">
+                          {editableInvoiceItems.map((item, index) => {
+                            const previewItem = previewItems[index] ?? {
+                              lineTotal: 0,
+                            };
+                            return (
+                              <div
+                                key={item.id}
+                                className="grid gap-3.5 rounded-[20px] border border-zinc-200/80 bg-zinc-50/60 p-3.5 xl:grid-cols-[minmax(0,1.8fr)_112px_176px_160px] xl:items-end"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-zinc-900">
+                                    {item.productName}
+                                  </p>
+                                  <p className="mt-1 text-xs text-zinc-500">
+                                    IVA{" "}
+                                    {Number(item.taxRate).toLocaleString("es-AR")}%
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="input-label">Cantidad</p>
+                                  <div className="rounded-2xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-600">
+                                    {Number(item.qty).toLocaleString("es-AR")}
+                                  </div>
+                                </div>
+                                <label className="field-stack">
+                                  <span className="input-label">Precio unitario</span>
+                                  <MoneyInput
+                                    className="input w-full"
+                                    value={item.unitPrice}
+                                    onValueChange={(value) =>
+                                      setEditableInvoiceItems((prev) =>
+                                        prev.map((candidate) =>
+                                          candidate.id === item.id
+                                            ? {
+                                                ...candidate,
+                                                unitPrice: value || "0",
+                                              }
+                                            : candidate
+                                        )
+                                      )
+                                    }
+                                    disabled={isIssuing || isSavingInvoiceSale}
+                                    placeholder="0,00"
+                                  />
+                                </label>
+                                <div>
+                                  <p className="input-label">Total</p>
+                                  <div className="rounded-2xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-zinc-900 sm:text-base">
+                                    {formatCurrencyARS(previewItem.lineTotal.toFixed(2))}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                      </section>
                     ) : null}
-                  </div>
-                </div>
-                {shouldShowDeductionToggle ? (
-                  <label className="flex items-center gap-2 text-xs text-zinc-600">
-                    <input
-                      type="checkbox"
-                      checked={invoiceForm.requiresIncomeTaxDeduction}
-                      onChange={(event) =>
-                        setInvoiceForm((prev) => ({
-                          ...prev,
-                          requiresIncomeTaxDeduction: event.target.checked,
-                        }))
-                      }
-                      disabled={isSavingInvoiceSale}
-                    />
-                    El receptor solicita deduccion en Ganancias
-                  </label>
-                ) : null}
-                {requiresIdentification && !hasRecipientDoc ? (
-                  <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-                    Por monto o deduccion corresponde identificar al receptor.
-                    Para continuar, carga CUIT valido en el cliente.
-                  </p>
-                ) : null}
-                {resolvedInvoiceType === "A" && !hasRecipientDoc ? (
-                  <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-                    Factura A requiere CUIT valido del cliente.
-                  </p>
-                ) : null}
-                {requiresProfileTaxId && !hasRecipientDoc && resolvedInvoiceType !== "A" ? (
-                  <p className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-800">
-                    Esta condicion fiscal requiere CUIT valido para informar
-                    correctamente el receptor en ARCA.
-                  </p>
-                ) : null}
-                {hasRegularSurchargeAdjustment ? (
-                  <div className="rounded-xl border border-amber-200 bg-white p-3 text-xs">
-                    <p className="font-semibold text-zinc-900">
-                      Revisar recargo e IVA
-                    </p>
-                    <p className="mt-1 leading-5 text-zinc-600">
-                      Esta venta tiene un recargo de{" "}
-                      <span className="font-semibold text-zinc-900">
-                        {formatCurrencyARS(fiscalAdjustmentTotal.toFixed(2))}
-                      </span>
-                      . Para emitir, se integra al neto y al IVA fiscal para que
-                      la alicuota cierre contra la base imponible. Si en realidad
-                      era interes de tarjeta, conviene corregir el tipo de ajuste
-                      de la venta antes de emitir.
-                    </p>
-                  </div>
-                ) : null}
-                {previewItems.length ? (
-                  <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
-                    <div className="flex items-start justify-between gap-3">
+
+                    {fiscalPreview ? (
+                      <section className="rounded-[22px] border border-zinc-200/80 bg-zinc-50/50 p-4">
+                        <p className="section-title">Resumen fiscal</p>
+                        <div className="mt-3.5 grid gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
+                          <FiscalAmountItem label="Neto" value={fiscalPreview.net} />
+                          <FiscalAmountItem label="IVA" value={fiscalPreview.iva} />
+                          <FiscalAmountItem
+                            label={fiscalAdjustmentLabel}
+                            value={fiscalAdjustmentTotal}
+                          />
+                          <FiscalAmountItem label="Total" value={fiscalPreview.total} />
+                        </div>
+                      </section>
+                    ) : null}
+                  </>
+                ) : (
+                  <section>
+                    <div className="grid gap-3.5 sm:grid-cols-2">
                       <div>
-                        <p className="section-title">Editar importes antes de facturar</p>
-                        <p className="mt-1 text-xs text-zinc-500">
-                          Puedes corregir los precios unitarios. La venta se recalcula y queda lista
-                          para reemitir con el monto exacto.
+                        <p className="section-title">Fecha</p>
+                        <p className="mt-1.5 text-sm font-semibold text-zinc-900">
+                          {invoiceIssueDateLabel}
                         </p>
                       </div>
-                      {hasEditableInvoiceChanges ? (
-                        <span className="rounded-full border border-amber-200 bg-white px-2 py-1 text-[11px] font-medium text-amber-800">
-                          Cambios sin guardar
-                        </span>
-                      ) : (
-                        <span className="rounded-full border border-emerald-200 bg-white px-2 py-1 text-[11px] font-medium text-emerald-800">
-                          Sin cambios
-                        </span>
-                      )}
+                      <div>
+                        <p className="section-title">Comprobante</p>
+                        <p className="mt-1.5 text-sm font-semibold text-zinc-900">
+                          Factura {resolvedInvoiceType}
+                        </p>
+                      </div>
                     </div>
-                    <div className="mt-3 space-y-3">
-                      {editableInvoiceItems.map((item, index) => {
-                        const previewItem = previewItems[index] ?? {
-                          lineTotal: 0,
-                        };
-                        return (
-                          <div
-                            key={item.id}
-                            className="grid gap-3 rounded-xl border border-zinc-200/70 bg-zinc-50 p-3 sm:grid-cols-[minmax(0,1.5fr)_120px_160px_120px]"
-                          >
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-zinc-900">
-                                {item.productName}
-                              </p>
-                              <p className="mt-1 text-[11px] text-zinc-500">
-                                Cantidad: {Number(item.qty).toLocaleString("es-AR")} · IVA{" "}
-                                {Number(item.taxRate).toLocaleString("es-AR")}%
-                              </p>
-                            </div>
-                            <div>
-                              <p className="input-label">Cantidad</p>
-                              <div className="mt-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600">
-                                {Number(item.qty).toLocaleString("es-AR")}
-                              </div>
-                            </div>
-                            <label className="field-stack">
-                              <span className="input-label">Precio unitario</span>
-                              <MoneyInput
-                                className="input w-full"
-                                value={item.unitPrice}
-                                onValueChange={(value) =>
-                                  setEditableInvoiceItems((prev) =>
-                                    prev.map((candidate) =>
-                                      candidate.id === item.id
-                                        ? {
-                                            ...candidate,
-                                            unitPrice: value || "0",
-                                          }
-                                        : candidate
-                                    )
-                                  )
-                                }
-                                disabled={isIssuing || isSavingInvoiceSale}
-                                placeholder="0,00"
-                              />
-                            </label>
-                            <div>
-                              <p className="input-label">Total item</p>
-                              <div className="mt-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-900">
-                                {formatCurrencyARS(previewItem.lineTotal.toFixed(2))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-3 grid gap-3 rounded-xl border border-dashed border-sky-200 bg-sky-50/40 p-3 sm:grid-cols-4">
-                      <FiscalAmountItem label="Subtotal" value={previewSubtotal} />
-                      <FiscalAmountItem label="IVA" value={previewIva} />
+
+                    {previewItems.length ? (
+                      <div className="mt-5 table-scroll">
+                        <table className="w-full min-w-[680px] text-left text-xs sm:text-sm">
+                          <thead className="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
+                            <tr>
+                              <th className="pb-2.5 pr-4">Producto</th>
+                              <th className="pb-2.5 pr-4 text-right">Cant.</th>
+                              <th className="pb-2.5 pr-4 text-right">Unitario</th>
+                              <th className="pb-2.5 pr-4 text-right">IVA</th>
+                              <th className="pb-2.5 text-right">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewItems.map((item) => (
+                              <tr
+                                key={item.id}
+                                className="border-t border-zinc-200/70 align-top"
+                              >
+                                <td className="py-2.5 pr-4 text-zinc-700">
+                                  {item.productName}
+                                </td>
+                                <td className="py-2.5 pr-4 text-right text-zinc-600">
+                                  {item.qty.toLocaleString("es-AR")}
+                                </td>
+                                <td className="py-2.5 pr-4 text-right text-zinc-600">
+                                  {formatCurrencyARS(item.unitPrice.toFixed(2))}
+                                </td>
+                                <td className="py-2.5 pr-4 text-right text-zinc-600">
+                                  {formatCurrencyARS(item.iva.toFixed(2))}
+                                </td>
+                                <td className="py-2.5 text-right font-medium text-zinc-900">
+                                  {formatCurrencyARS(item.lineTotal.toFixed(2))}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-5 grid gap-3.5 rounded-[20px] border border-zinc-200/80 bg-zinc-50/50 p-3.5 sm:grid-cols-2 xl:grid-cols-4">
                       <FiscalAmountItem
-                        label={getAdjustmentLabel(
-                          saleToInvoice.extraType,
-                          previewExtraAmount + previewChargesTotal
-                        )}
-                        value={round2(previewExtraAmount + previewChargesTotal)}
+                        label="Neto"
+                        value={fiscalPreview?.net ?? previewSubtotal}
                       />
-                      <FiscalAmountItem label="Total" value={previewTotal} />
-                    </div>
-                  </div>
-                ) : null}
-                {fiscalPreview ? (
-                  <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
-                    <p className="section-title">Totales fiscales</p>
-                    <div className="mt-2 grid gap-3 sm:grid-cols-4">
-                      <FiscalAmountItem label="Neto" value={fiscalPreview.net} />
-                      <FiscalAmountItem label="IVA" value={fiscalPreview.iva} />
+                      <FiscalAmountItem
+                        label="IVA"
+                        value={fiscalPreview?.iva ?? previewIva}
+                      />
                       <FiscalAmountItem
                         label={fiscalAdjustmentLabel}
                         value={fiscalAdjustmentTotal}
                       />
-                      <FiscalAmountItem label="Total" value={fiscalPreview.total} />
+                      <FiscalAmountItem
+                        label="Total"
+                        value={fiscalPreview?.total ?? previewTotal}
+                      />
                     </div>
+                  </section>
+                )}
+              </div>
+            </div>
+
+            <div className="border-t border-zinc-200/70 bg-white px-5 py-4 sm:px-6">
+              <div
+                className={cn(
+                  "flex flex-col gap-4 sm:flex-row sm:items-center",
+                  showInvoiceFooterNote ? "sm:justify-between" : "sm:justify-end"
+                )}
+              >
+                {showInvoiceFooterNote ? (
+                  <div className="min-w-0">
+                    <p className="mt-1 text-xs text-amber-700">
+                      Se guardaran los cambios antes de pasar al paso final.
+                    </p>
                   </div>
                 ) : null}
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm text-zinc-600">
-                    Total:{" "}
-                    <span className="font-semibold text-zinc-900">
-                      {formatCurrencyARS(previewTotal.toFixed(2))}
-                    </span>
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-emerald text-xs"
-                    onClick={() => {
+                <button
+                  type="button"
+                  className="btn btn-emerald h-10 min-w-[200px] px-4 text-sm"
+                  onClick={() => {
+                    if (invoiceStep === "FORM") {
                       void goToConfirmStep();
-                    }}
-                    disabled={isIssuing || isSavingInvoiceSale}
-                  >
-                    {isSavingInvoiceSale
-                      ? "Guardando cambios..."
-                      : "Continuar a confirmar"}
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="rounded-xl border border-zinc-200/70 bg-white p-3">
-                  <h4 className="text-sm font-semibold text-zinc-900">Confirmar factura</h4>
-                  <div className="mt-2 grid gap-2 text-xs text-zinc-600 sm:grid-cols-2">
-                    <p>
-                      <span className="font-medium text-zinc-900">Cliente:</span>{" "}
-                      {saleToInvoice.customerName}
-                    </p>
-                    <p>
-                      <span className="font-medium text-zinc-900">Venta:</span>{" "}
-                      {saleToInvoice.saleNumber ?? saleToInvoice.id}
-                    </p>
-                    <p>
-                      <span className="font-medium text-zinc-900">Fecha:</span>{" "}
-                      {invoiceIssueDateLabel}
-                    </p>
-                    <p>
-                      <span className="font-medium text-zinc-900">Comprobante:</span>{" "}
-                      Factura {resolvedInvoiceType}
-                    </p>
-                  </div>
-                  {previewItems.length ? (
-                    <div className="mt-3 table-scroll">
-                      <table className="w-full text-left text-xs">
-                        <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
-                          <tr>
-                            <th className="py-1 pr-2">Producto</th>
-                            <th className="py-1 pr-2 text-right">Cant.</th>
-                            <th className="py-1 pr-2 text-right">Unitario</th>
-                            <th className="py-1 pr-2 text-right">IVA</th>
-                            <th className="py-1 pr-0 text-right">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {previewItems.map((item) => (
-                            <tr key={item.id} className="border-t border-zinc-200/60">
-                              <td className="py-1 pr-2 text-zinc-700">{item.productName}</td>
-                              <td className="py-1 pr-2 text-right text-zinc-600">
-                                {item.qty.toLocaleString("es-AR")}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-600">
-                                {formatCurrencyARS(item.unitPrice.toFixed(2))}
-                              </td>
-                              <td className="py-1 pr-2 text-right text-zinc-600">
-                                {formatCurrencyARS(item.iva.toFixed(2))}
-                              </td>
-                              <td className="py-1 pr-0 text-right text-zinc-900">
-                                {formatCurrencyARS(item.lineTotal.toFixed(2))}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
-                  <div className="mt-3 grid gap-3 rounded-lg border border-zinc-200/70 bg-zinc-50 p-2 sm:grid-cols-4">
-                    <FiscalAmountItem
-                      label="Neto"
-                      value={fiscalPreview?.net ?? previewSubtotal}
-                    />
-                    <FiscalAmountItem
-                      label="IVA"
-                      value={fiscalPreview?.iva ?? previewIva}
-                    />
-                    <FiscalAmountItem
-                      label={fiscalAdjustmentLabel}
-                      value={fiscalAdjustmentTotal}
-                    />
-                    <FiscalAmountItem
-                      label="Total"
-                      value={fiscalPreview?.total ?? previewTotal}
-                    />
-                  </div>
-                </div>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm text-zinc-600">
-                    Total:{" "}
-                    <span className="font-semibold text-zinc-900">
-                      {formatCurrencyARS(previewTotal.toFixed(2))}
-                    </span>
-                  </p>
-                  <button
-                    type="button"
-                    className="btn btn-emerald text-xs"
-                    onClick={() => {
-                      void submitInvoice();
-                    }}
-                    disabled={isIssuing || isSavingInvoiceSale}
-                  >
-                    {isIssuing ? "Confirmando..." : "Confirmar factura"}
-                  </button>
-                </div>
-              </>
-            )}
+                      return;
+                    }
+                    void submitInvoice();
+                  }}
+                  disabled={isIssuing || isSavingInvoiceSale}
+                >
+                  {invoicePrimaryActionLabel}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
