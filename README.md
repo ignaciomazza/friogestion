@@ -79,6 +79,12 @@ Instalado con `@afipsdk/afip.js`. Para habilitarlo:
 - El endpoint `POST /api/auth/register` queda habilitado solo para bootstrap inicial (cuando no existe ningun usuario).
 - El alta normal de usuarios se hace desde `/app/admin`.
 
+## Storefront API
+- Las rutas `/api/storefront/*` usan API key server-side y rate-limit por IP/ruta.
+- Los carritos storefront aceptan hasta 30 productos distintos, 50 unidades por producto y 200 unidades totales.
+- Las busquedas de seguimiento con referencias faciles de adivinar requieren email, telefono o DNI/CUIT de la compra.
+- Las lecturas de productos filtran en base de datos antes de aplicar ranking fuzzy para evitar cargar todo el catalogo en memoria.
+
 ## Arquitectura
 - Lineamientos y convenciones: `docs/ARCHITECTURE.md`
 - Flujo AFIP/ARCA: `docs/AFIP_ARCA.md`

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import { logServerError } from "@/lib/server/log";
 import { StorefrontAuthError } from "./auth";
 import { isStorefrontDomainError } from "./service";
 
@@ -24,17 +25,23 @@ export function storefrontErrorResponse(error: unknown) {
   }
 
   if (isStorefrontDomainError(error)) {
+    if (error.status >= 500) {
+      logServerError("storefront.domain", error);
+      return NextResponse.json(
+        { error: "No se pudo procesar la solicitud" },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json(
       { error: error.message },
       { status: error.status },
     );
   }
 
+  logServerError("storefront.unhandled", error);
   return NextResponse.json(
-    {
-      error:
-        error instanceof Error ? error.message : "No se pudo procesar la solicitud",
-    },
+    { error: "No se pudo procesar la solicitud" },
     { status: 500 },
   );
 }

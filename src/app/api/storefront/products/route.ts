@@ -1,21 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
+import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 import { requireStorefrontAccess } from "@/lib/storefront/auth";
 import { storefrontErrorResponse } from "@/lib/storefront/http";
-import { listStorefrontProducts } from "@/lib/storefront/service";
+import {
+  listStorefrontProducts,
+  STOREFRONT_MAX_PRODUCT_LIMIT,
+} from "@/lib/storefront/service";
 
 export const runtime = "nodejs";
 
 const filtersSchema = z.object({
-  q: z.string().optional(),
-  category: z.string().optional(),
-  brand: z.string().optional(),
+  q: z.string().max(120).optional(),
+  category: z.string().max(120).optional(),
+  brand: z.string().max(120).optional(),
   shippingType: z
     .enum(["normal", "pickup", "own_delivery", "quote", "restricted"])
     .optional(),
   onlyAvailable: z.boolean().optional(),
   featured: z.boolean().optional(),
-  limit: z.number().int().positive().max(100).optional(),
+  limit: z.number().int().positive().max(STOREFRONT_MAX_PRODUCT_LIMIT).optional(),
 });
 
 const parseBoolean = (value: string | null) => {
@@ -26,6 +30,13 @@ const parseBoolean = (value: string | null) => {
 };
 
 export async function GET(request: NextRequest) {
+  const rateLimit = checkRateLimit(request, {
+    key: "storefront:products",
+    limit: 240,
+    windowMs: 60 * 1000,
+  });
+  if (rateLimit.limited) return rateLimitResponse(rateLimit.retryAfter);
+
   try {
     const access = await requireStorefrontAccess(request);
     const searchParams = request.nextUrl.searchParams;

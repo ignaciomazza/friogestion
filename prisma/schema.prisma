@@ -506,6 +506,9 @@ model Product {
 
   @@unique([organizationId, sku])
   @@index([organizationId])
+  @@index([organizationId, name], map: "product_org_name_idx")
+  @@index([organizationId, brand], map: "product_org_brand_idx")
+  @@index([organizationId, purchaseCode], map: "product_org_purchase_code_idx")
 }
 
 model Customer {
@@ -1508,6 +1511,9 @@ model StorefrontPublication {
   @@index([channelId])
   @@index([productId])
   @@index([publicationStatus])
+  @@index([channelId, publicationStatus, featured, publicName], map: "storefront_publication_channel_status_featured_name_idx")
+  @@index([channelId, category], map: "storefront_publication_channel_category_idx")
+  @@index([channelId, shippingType], map: "storefront_publication_channel_shipping_type_idx")
 }
 
 model StorefrontOrder {
@@ -1554,6 +1560,9 @@ model StorefrontOrder {
   @@index([paymentStatus])
   @@index([displayNumber])
   @@index([createdAt])
+  @@index([channelId, displayNumber], map: "storefront_order_channel_display_number_idx")
+  @@index([channelId, paymentReference], map: "storefront_order_channel_payment_ref_idx")
+  @@index([channelId, externalReference], map: "storefront_order_channel_external_ref_idx")
 }
 
 model StorefrontOrderItem {
@@ -1615,6 +1624,7 @@ model StorefrontStockReservation {
   @@index([publicationId])
   @@index([status])
   @@index([expiresAt])
+  @@index([channelId, status, expiresAt], map: "storefront_reservation_channel_status_expires_idx")
 }
 
 model StorefrontPaymentEvent {

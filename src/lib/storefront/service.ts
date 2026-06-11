@@ -207,6 +207,11 @@ const DEFAULT_CHANNEL_NAME = "Storefront";
 const DEFAULT_FALLBACK_EMAIL = "ventas@local.invalid";
 const ORDER_COUNTER_KEY = "storefront-order-number";
 const SALE_COUNTER_KEY = "sale-number";
+export const STOREFRONT_DEFAULT_PRODUCT_LIMIT = 36;
+export const STOREFRONT_MAX_PRODUCT_LIMIT = 100;
+export const STOREFRONT_MAX_CART_LINES = 30;
+export const STOREFRONT_MAX_ITEM_QUANTITY = 50;
+export const STOREFRONT_MAX_CART_UNITS = 200;
 
 const orderStatusToApi = (
   status: StorefrontOrderStatus,
@@ -231,6 +236,13 @@ const shippingTypeToApi = (
 ): ApiShippingType => {
   if (value === "OWN_DELIVERY") return "own_delivery";
   return value.toLowerCase() as ApiShippingType;
+};
+
+const apiShippingTypeToDb = (
+  value: ApiShippingType,
+): StorefrontShippingType => {
+  if (value === "own_delivery") return "OWN_DELIVERY";
+  return value.toUpperCase() as StorefrontShippingType;
 };
 
 const apiDeliveryMethodToDb = (
@@ -325,6 +337,17 @@ const buildStorefrontOrderReferenceWhere = (
 
   return { OR: filters };
 };
+
+export function isHardToGuessStorefrontOrderReference(reference: string) {
+  const normalized = reference.trim();
+  const hasLetter = /[a-z]/i.test(normalized);
+  const hasDigit = /\d/.test(normalized);
+
+  return (
+    /^c[a-z0-9]{20,}$/i.test(normalized) ||
+    (normalized.length >= 24 && hasLetter && hasDigit && /^[a-z0-9_-]+$/i.test(normalized))
+  );
+}
 
 const getStorefrontOrderCode = (
   order: Pick<
@@ -610,6 +633,64 @@ const publicationMatchesSearch = (
   );
 };
 
+const buildPublicationSearchWhere = (
+  rawQuery: string,
+): Prisma.StorefrontPublicationWhereInput | null => {
+  const rawTerms = rawQuery
+    .trim()
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2);
+  const normalizedTerms = normalizeSearchText(rawQuery)
+    .split(" ")
+    .filter((term) => term.length >= 2);
+  const terms = Array.from(new Set([...rawTerms, ...normalizedTerms])).slice(0, 6);
+
+  if (terms.length === 0) return null;
+
+  return {
+    OR: terms.flatMap((term) => [
+      { publicName: { contains: term, mode: "insensitive" } },
+      { category: { contains: term, mode: "insensitive" } },
+      {
+        product: {
+          is: {
+            name: { contains: term, mode: "insensitive" },
+          },
+        },
+      },
+      {
+        product: {
+          is: {
+            sku: { contains: term, mode: "insensitive" },
+          },
+        },
+      },
+      {
+        product: {
+          is: {
+            purchaseCode: { contains: term, mode: "insensitive" },
+          },
+        },
+      },
+      {
+        product: {
+          is: {
+            brand: { contains: term, mode: "insensitive" },
+          },
+        },
+      },
+      {
+        product: {
+          is: {
+            model: { contains: term, mode: "insensitive" },
+          },
+        },
+      },
+    ]),
+  };
+};
+
 const storefrontProductFromPublication = (
   channel: StorefrontChannelWithRelations,
   publication: StorefrontPublicationWithProduct,
@@ -843,6 +924,33 @@ export class StorefrontDomainError extends Error {
 
 export function isStorefrontDomainError(error: unknown): error is StorefrontDomainError {
   return error instanceof StorefrontDomainError;
+}
+
+function assertStorefrontCartLimits(items: StorefrontCartItemInput[]) {
+  if (items.length > STOREFRONT_MAX_CART_LINES) {
+    throw new StorefrontDomainError(
+      `El carrito no puede superar ${STOREFRONT_MAX_CART_LINES} productos distintos.`,
+      400,
+    );
+  }
+
+  const totalUnits = items.reduce((total, item) => total + item.quantity, 0);
+  if (totalUnits > STOREFRONT_MAX_CART_UNITS) {
+    throw new StorefrontDomainError(
+      `El carrito no puede superar ${STOREFRONT_MAX_CART_UNITS} unidades.`,
+      400,
+    );
+  }
+
+  const oversizedItem = items.find(
+    (item) => item.quantity > STOREFRONT_MAX_ITEM_QUANTITY,
+  );
+  if (oversizedItem) {
+    throw new StorefrontDomainError(
+      `La cantidad por producto no puede superar ${STOREFRONT_MAX_ITEM_QUANTITY} unidades.`,
+      400,
+    );
+  }
 }
 
 const loadChannel = async (channelId: string) => {
@@ -1129,47 +1237,91 @@ export async function listStorefrontProducts(
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
 
-  const publications = await prisma.storefrontPublication.findMany({
-    where: {
-      channelId,
-      publicationStatus: "PUBLISHED",
-    },
-    orderBy: [
-      { featured: "desc" },
-      { publicName: "asc" },
-      { createdAt: "desc" },
-    ],
-    ...productInclude,
-  });
-
-  const allProducts = publications.map((publication) =>
-    storefrontProductFromPublication(
-      channel,
-      publication,
-      channel.defaultPaymentMethod,
-    ),
-  );
-
-  const categories = Array.from(
-    new Set(allProducts.map((item) => item.category).filter(Boolean)),
-  ).sort((a, b) => a.localeCompare(b, "es-AR"));
-  const brands = Array.from(
-    new Set(allProducts.map((item) => item.brand).filter(Boolean)),
-  )
-    .map((item) => item ?? "")
-    .filter(Boolean)
-    .sort((a, b) => a.localeCompare(b, "es-AR"));
+  const baseWhere: Prisma.StorefrontPublicationWhereInput = {
+    channelId,
+    publicationStatus: "PUBLISHED",
+  };
+  const filterWhere: Prisma.StorefrontPublicationWhereInput = {
+    ...baseWhere,
+    ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.shippingType
+      ? { shippingType: apiShippingTypeToDb(filters.shippingType) }
+      : {}),
+    ...(filters.featured ? { featured: true } : {}),
+    ...(filters.brand
+      ? {
+          product: {
+            is: {
+              brand: filters.brand,
+            },
+          },
+        }
+      : {}),
+    ...(filters.onlyAvailable ? { stockMode: { not: "OUT_OF_STOCK" } } : {}),
+  };
 
   const q = filters.q?.trim() ?? "";
-  const limited = Number.isFinite(filters.limit) ? Math.min(filters.limit ?? 48, 100) : 48;
+  const limited = Number.isFinite(filters.limit)
+    ? Math.min(filters.limit ?? STOREFRONT_DEFAULT_PRODUCT_LIMIT, STOREFRONT_MAX_PRODUCT_LIMIT)
+    : STOREFRONT_DEFAULT_PRODUCT_LIMIT;
+  const searchWhere = q.length >= 2 ? buildPublicationSearchWhere(q) : null;
+  const queryWhere: Prisma.StorefrontPublicationWhereInput = searchWhere
+    ? {
+        AND: [filterWhere, searchWhere],
+      }
+    : filterWhere;
+  const orderBy = [
+    { featured: "desc" },
+    { publicName: "asc" },
+    { createdAt: "desc" },
+  ] satisfies Prisma.StorefrontPublicationOrderByWithRelationInput[];
+  const candidateTake = searchWhere || filters.onlyAvailable
+    ? Math.min(Math.max(limited * 8, 120), 600)
+    : limited;
+
+  const [categoryRows, brandRows, publications, totalWithoutPostFilters] =
+    await Promise.all([
+      prisma.storefrontPublication.findMany({
+        where: baseWhere,
+        distinct: ["category"],
+        select: { category: true },
+        orderBy: { category: "asc" },
+      }),
+      prisma.storefrontPublication.findMany({
+        where: baseWhere,
+        select: {
+          product: {
+            select: {
+              brand: true,
+            },
+          },
+        },
+      }),
+      prisma.storefrontPublication.findMany({
+        where: queryWhere,
+        orderBy,
+        take: candidateTake,
+        ...productInclude,
+      }),
+      searchWhere || filters.onlyAvailable
+        ? Promise.resolve(null)
+        : prisma.storefrontPublication.count({ where: queryWhere }),
+    ]);
+
+  const categories = categoryRows
+    .map((item) => item.category)
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, "es-AR"));
+  const brands = Array.from(
+    new Set(
+      brandRows
+        .map((item) => item.product.brand)
+        .map((item) => item ?? "")
+        .filter(Boolean),
+    ),
+  ).sort((a, b) => a.localeCompare(b, "es-AR"));
 
   const filteredPublications = publications.filter((publication) => {
-    if (filters.category && publication.category !== filters.category) return false;
-    if (filters.brand && publication.product.brand !== filters.brand) return false;
-    if (filters.shippingType && shippingTypeToApi(publication.shippingType) !== filters.shippingType) {
-      return false;
-    }
-    if (filters.featured && !publication.featured) return false;
     if (filters.onlyAvailable) {
       const availableStock = resolvePublicationAvailableStock(publication);
       if (
@@ -1179,11 +1331,8 @@ export async function listStorefrontProducts(
       ) {
         return false;
       }
-      if (publication.stockMode === "OUT_OF_STOCK") {
-        return false;
-      }
     }
-    return publicationMatchesSearch(publication, q);
+    return q.length >= 2 ? publicationMatchesSearch(publication, q) : true;
   });
 
   return {
@@ -1196,7 +1345,7 @@ export async function listStorefrontProducts(
           channel.defaultPaymentMethod,
         ),
       ),
-    total: filteredPublications.length,
+    total: totalWithoutPostFilters ?? filteredPublications.length,
     categories,
     brands,
   };
@@ -1236,6 +1385,7 @@ export async function validateStorefrontCart(
   await expirePendingOrders(channelId);
 
   const normalizedItems = normalizeCartItems(items);
+  assertStorefrontCartLimits(normalizedItems);
   const publications = await loadPublicationsByProductIds(
     channelId,
     normalizedItems.map((item) => item.productId),
@@ -1289,6 +1439,7 @@ export async function quoteStorefrontShipping(
   await expirePendingOrders(channelId);
 
   const normalizedItems = normalizeCartItems(input.items);
+  assertStorefrontCartLimits(normalizedItems);
   const publications = await loadPublicationsByProductIds(
     channelId,
     normalizedItems.map((item) => item.productId),
@@ -1378,6 +1529,7 @@ export async function createStorefrontOrder(
   await expirePendingOrders(channelId);
 
   const normalizedItems = normalizeCartItems(input.items);
+  assertStorefrontCartLimits(normalizedItems);
   if (!normalizedItems.length) {
     throw new StorefrontDomainError("El pedido no tiene items validos.", 400);
   }
@@ -2337,6 +2489,11 @@ export async function searchStorefrontOrders(
     Boolean(taxId && taxId.length >= 6),
     Boolean(name && name.length >= 3),
   ].filter(Boolean).length;
+  const hasPrivateVerifier = Boolean(
+    contactEmail ||
+      (contactPhone && contactPhone.length >= 6) ||
+      (taxId && taxId.length >= 6),
+  );
 
   if (!reference && !dateRange && usableNonDateCriteriaCount === 0) {
     throw new StorefrontDomainError(
@@ -2355,6 +2512,17 @@ export async function searchStorefrontOrders(
   if (!reference && usableNonDateCriteriaCount < 1) {
     throw new StorefrontDomainError(
       "Sin codigo o comprobante, completa la fecha de compra y al menos otro dato.",
+      400,
+    );
+  }
+
+  if (
+    reference &&
+    !isHardToGuessStorefrontOrderReference(reference) &&
+    !hasPrivateVerifier
+  ) {
+    throw new StorefrontDomainError(
+      "Por seguridad, agrega email, telefono o DNI/CUIT para consultar esta referencia.",
       400,
     );
   }

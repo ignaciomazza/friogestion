@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import {
   calculateStorefrontPricePreview,
   evaluateStorefrontAvailability,
+  isHardToGuessStorefrontOrderReference,
 } from "../src/lib/storefront/service";
+import { buildStorefrontApiKeyValue } from "../src/lib/storefront/auth";
+import { storefrontErrorResponse } from "../src/lib/storefront/http";
 
 test("storefront pricing AUTO sums global, payment and publication adjustments", () => {
   const result = calculateStorefrontPricePreview({
@@ -104,4 +107,32 @@ test("OUT_OF_STOCK remains visible but cannot be purchased", () => {
   assert.equal(result.available, false);
   assert.equal(result.acceptedQuantity, 0);
   assert.match(result.warnings[0] ?? "", /sin compra disponible/i);
+});
+
+test("storefront api keys are random and only expose a prefix", () => {
+  const first = buildStorefrontApiKeyValue();
+  const second = buildStorefrontApiKeyValue();
+
+  assert.match(first.value, /^fgsf_[A-Za-z0-9_-]+$/);
+  assert.notEqual(first.value, second.value);
+  assert.equal(first.keyPrefix, first.value.slice(0, 10));
+  assert.notEqual(first.keyHash, second.keyHash);
+});
+
+test("storefront tracking references distinguish weak display numbers", () => {
+  assert.equal(isHardToGuessStorefrontOrderReference("WEB-000051"), false);
+  assert.equal(
+    isHardToGuessStorefrontOrderReference("cmqr8r6xz0000abc123456789"),
+    true,
+  );
+});
+
+test("storefront unhandled errors do not expose internal messages", async () => {
+  const response = storefrontErrorResponse(
+    new Error("DATABASE_URL=postgres://secret"),
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 500);
+  assert.equal(body.error, "No se pudo procesar la solicitud");
 });
