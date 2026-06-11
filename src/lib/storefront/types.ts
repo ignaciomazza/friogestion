@@ -150,6 +150,59 @@ export type StorefrontOrderDto = {
   items: StorefrontCartValidationLine[];
 };
 
+export type StorefrontPublicOrderItemDto = {
+  id: string;
+  productId: string;
+  slug: string | null;
+  sku: string | null;
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+};
+
+export type StorefrontPublicOrderSummaryDto = {
+  id: string;
+  friogestionOrderId: string;
+  displayNumber: string | null;
+  orderCode: string;
+  status:
+    | "PENDING_PAYMENT"
+    | "CONFIRMED"
+    | "REJECTED"
+    | "CANCELLED"
+    | "EXPIRED";
+  paymentStatus:
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "CANCELLED"
+    | "REFUNDED";
+  customerName: string;
+  maskedEmail: string;
+  maskedPhone: string | null;
+  maskedTaxId: string | null;
+  deliveryMethod: ApiDeliveryMethod;
+  subtotal: number;
+  shippingTotal: number;
+  total: number;
+  mercadoPagoPaymentId: string | null;
+  mercadoPagoStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+  items: StorefrontPublicOrderItemDto[];
+};
+
+export type StorefrontOrderTrackingSearchInput = {
+  reference?: string | null;
+  contact?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  taxId?: string | null;
+  name?: string | null;
+  date?: string | null;
+};
+
 export type StorefrontProductsListDto = {
   items: StorefrontProductDto[];
   total: number;

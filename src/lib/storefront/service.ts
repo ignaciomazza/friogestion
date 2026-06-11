@@ -28,6 +28,8 @@ import type {
   StorefrontConfigDto,
   StorefrontCreateOrderInput,
   StorefrontOrderDto,
+  StorefrontOrderTrackingSearchInput,
+  StorefrontPublicOrderSummaryDto,
   StorefrontProductDto,
   StorefrontProductsListDto,
   StorefrontShippingQuoteDto,
@@ -104,6 +106,20 @@ type StorefrontOrderWithRelations = Prisma.StorefrontOrderGetPayload<{
     };
     items: true;
     reservations: true;
+  };
+}>;
+
+type StorefrontTrackedOrderWithItems = Prisma.StorefrontOrderGetPayload<{
+  include: {
+    items: {
+      include: {
+        publication: {
+          select: {
+            slug: true;
+          };
+        };
+      };
+    };
   };
 }>;
 
@@ -246,6 +262,109 @@ const compactSpaces = (value: string) =>
     .trim()
     .replace(/\s+/g, " ")
     .slice(0, 240);
+
+const normalizeFreeText = (value?: string | null) => {
+  const raw = value?.trim() ?? "";
+  return raw ? compactSpaces(raw) : null;
+};
+
+const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
+const onlyDigits = (value?: string | null) => {
+  const digits = value?.replace(/\D/g, "") ?? "";
+  return digits.length > 0 ? digits : null;
+};
+
+const maskEmail = (email: string) => {
+  const [localPart, domain] = email.split("@");
+  if (!localPart || !domain) return email;
+  const visible = localPart.slice(0, Math.min(3, localPart.length));
+  return `${visible}${localPart.length > 3 ? "***" : ""}@${domain}`;
+};
+
+const maskTrailingDigits = (value?: string | null) => {
+  const digits = onlyDigits(value);
+  if (!digits) return null;
+  const visible = digits.slice(-4);
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${visible}`;
+};
+
+const storefrontDeliveryMethodToApi = (
+  value: StorefrontOrderDeliveryMethod,
+): ApiDeliveryMethod => {
+  if (value === "OWN_DELIVERY") return "own_delivery";
+  return value.toLowerCase() as ApiDeliveryMethod;
+};
+
+const buildStorefrontOrderDateRange = (date: string) => {
+  const start = new Date(`${date}T00:00:00.000-03:00`);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start, end };
+};
+
+const buildStorefrontOrderReferenceWhere = (
+  reference: string,
+): Prisma.StorefrontOrderWhereInput => {
+  const digits = onlyDigits(reference);
+  const filters: Prisma.StorefrontOrderWhereInput[] = [
+    { id: { equals: reference } },
+    { displayNumber: { contains: reference, mode: "insensitive" } },
+    { paymentReference: { contains: reference, mode: "insensitive" } },
+    { externalReference: { contains: reference, mode: "insensitive" } },
+  ];
+
+  if (digits && digits.length >= 4) {
+    filters.push(
+      { displayNumber: { contains: digits, mode: "insensitive" } },
+      { paymentReference: { contains: digits, mode: "insensitive" } },
+      { externalReference: { contains: digits, mode: "insensitive" } },
+    );
+  }
+
+  return { OR: filters };
+};
+
+const getStorefrontOrderCode = (
+  order: Pick<
+    StorefrontTrackedOrderWithItems,
+    "id" | "displayNumber" | "externalReference" | "paymentReference"
+  >,
+) => order.displayNumber ?? order.externalReference ?? order.paymentReference ?? order.id;
+
+const toPublicStorefrontOrderSummary = (
+  order: StorefrontTrackedOrderWithItems,
+): StorefrontPublicOrderSummaryDto => ({
+  id: order.id,
+  friogestionOrderId: order.id,
+  displayNumber: order.displayNumber,
+  orderCode: getStorefrontOrderCode(order),
+  status: order.status,
+  paymentStatus: order.paymentStatus,
+  customerName: order.customerDisplayName,
+  maskedEmail: maskEmail(order.customerEmail),
+  maskedPhone: maskTrailingDigits(order.customerPhone),
+  maskedTaxId: maskTrailingDigits(order.customerTaxId),
+  deliveryMethod: storefrontDeliveryMethodToApi(order.deliveryMethod),
+  subtotal: roundMoney(toNumber(order.subtotal)),
+  shippingTotal: roundMoney(toNumber(order.shippingTotal)),
+  total: roundMoney(toNumber(order.total)),
+  mercadoPagoPaymentId: order.paymentReference ?? null,
+  mercadoPagoStatus: order.paymentStatus,
+  createdAt: order.createdAt.toISOString(),
+  updatedAt: order.updatedAt.toISOString(),
+  items: order.items.map((item) => ({
+    id: item.id,
+    productId: item.productId,
+    slug: item.publication?.slug ?? null,
+    sku: item.sku ?? null,
+    name: item.publicName,
+    quantity: item.quantity,
+    unitPrice: roundMoney(toNumber(item.unitPriceFinal)),
+    total: roundMoney(toNumber(item.lineTotal)),
+  })),
+});
 
 const normalizeSlug = (value: string) =>
   compactSpaces(value)
@@ -2186,4 +2305,119 @@ export async function listStorefrontAdminOrders(
     createdAt: order.createdAt.toISOString(),
     expiresAt: order.expiresAt?.toISOString() ?? null,
   }));
+}
+
+export async function searchStorefrontOrders(
+  channelId: string,
+  input: StorefrontOrderTrackingSearchInput,
+): Promise<StorefrontPublicOrderSummaryDto[]> {
+  const channel = await loadChannel(channelId);
+  await expirePendingOrders(channel.id);
+
+  const reference = normalizeFreeText(input.reference);
+  const contact = normalizeFreeText(input.contact);
+  const directEmail = normalizeFreeText(input.email);
+  const directPhone = normalizeFreeText(input.phone);
+  const contactEmail = directEmail
+    ? normalizeEmail(directEmail)
+    : contact?.includes("@")
+      ? normalizeEmail(contact)
+      : null;
+  const contactPhone = directPhone
+    ? onlyDigits(directPhone)
+    : contact && !contactEmail
+      ? onlyDigits(contact)
+      : null;
+  const taxId = onlyDigits(input.taxId);
+  const name = normalizeFreeText(input.name);
+  const date = normalizeFreeText(input.date);
+  const dateRange = date ? buildStorefrontOrderDateRange(date) : null;
+  const usableNonDateCriteriaCount = [
+    Boolean(contactEmail || (contactPhone && contactPhone.length >= 6)),
+    Boolean(taxId && taxId.length >= 6),
+    Boolean(name && name.length >= 3),
+  ].filter(Boolean).length;
+
+  if (!reference && !dateRange && usableNonDateCriteriaCount === 0) {
+    throw new StorefrontDomainError(
+      "Ingresa un codigo de pedido o comprobante, o completa la fecha de compra junto con otro dato.",
+      400,
+    );
+  }
+
+  if (!reference && !dateRange) {
+    throw new StorefrontDomainError(
+      "Sin codigo o comprobante, la fecha de compra es obligatoria.",
+      400,
+    );
+  }
+
+  if (!reference && usableNonDateCriteriaCount < 1) {
+    throw new StorefrontDomainError(
+      "Sin codigo o comprobante, completa la fecha de compra y al menos otro dato.",
+      400,
+    );
+  }
+
+  const and: Prisma.StorefrontOrderWhereInput[] = [];
+
+  if (reference) {
+    and.push(buildStorefrontOrderReferenceWhere(reference));
+  }
+
+  if (contactEmail) {
+    and.push({
+      customerEmail: { equals: contactEmail, mode: "insensitive" },
+    });
+  }
+
+  if (contactPhone && contactPhone.length >= 6) {
+    and.push({ customerPhone: { contains: contactPhone } });
+  }
+
+  if (taxId && taxId.length >= 6) {
+    and.push({ customerTaxId: { contains: taxId } });
+  }
+
+  if (name && name.length >= 3) {
+    and.push({
+      customerDisplayName: { contains: name, mode: "insensitive" },
+    });
+  }
+
+  if (dateRange) {
+    and.push({
+      createdAt: { gte: dateRange.start, lt: dateRange.end },
+    });
+  }
+
+  if (and.length === 0) {
+    throw new StorefrontDomainError("Agrega mas datos para ubicar el pedido.", 400);
+  }
+
+  const orders = await prisma.storefrontOrder.findMany({
+    where: {
+      organizationId: channel.organizationId,
+      channelId: channel.id,
+      AND: and,
+    },
+    include: {
+      items: {
+        include: {
+          publication: {
+            select: {
+              slug: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      },
+    },
+    orderBy: [{ createdAt: "desc" }],
+    take: 8,
+  });
+
+  return orders.map(toPublicStorefrontOrderSummary);
 }
