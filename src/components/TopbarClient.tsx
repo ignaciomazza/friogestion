@@ -26,7 +26,7 @@ import {
   XMarkIcon,
 } from "@/components/icons";
 import { cn } from "@/lib/cn";
-import { ADMIN_ROLES, DASHBOARD_ROLES } from "@/lib/auth/rbac";
+import { ADMIN_ROLES, DASHBOARD_ROLES, WRITE_ROLES } from "@/lib/auth/rbac";
 import { formatCurrencyARS } from "@/lib/format";
 import { PRICE_PAGE_ENABLED } from "@/lib/features";
 import { requestAppNavigation } from "@/lib/navigation-guard";
@@ -100,7 +100,29 @@ const NAV_SECTIONS: NavSection[] = [
         Icon: ArrowDownTrayIcon,
         roles: [...ADMIN_ROLES],
       },
-      { href: "/app/storefront", label: "Tienda Online", Icon: CubeIcon },
+    ],
+  },
+  {
+    title: "E-commerce",
+    items: [
+      {
+        href: "/app/e-commerce/publicaciones",
+        label: "Publicaciones",
+        Icon: CubeIcon,
+        roles: [...WRITE_ROLES],
+      },
+      {
+        href: "/app/e-commerce/pedidos",
+        label: "Pedidos",
+        Icon: ShoppingCartIcon,
+        roles: [...WRITE_ROLES],
+      },
+      {
+        href: "/app/e-commerce/configuracion",
+        label: "Configuracion",
+        Icon: Cog6ToothIcon,
+        roles: [...WRITE_ROLES],
+      },
     ],
   },
   {
@@ -309,7 +331,7 @@ export default function TopbarClient({
       <section key={section.title} className="space-y-1">
         <p
           className={cn(
-            "px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-500 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            "h-4 overflow-hidden whitespace-nowrap px-2 text-[10px] font-semibold uppercase leading-4 tracking-[0.14em] text-zinc-500 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] select-none",
             showLabels
               ? "delay-100 translate-x-0 opacity-100"
               : "delay-0 -translate-x-1 opacity-0"
@@ -468,7 +490,7 @@ export default function TopbarClient({
             className="absolute inset-0 bg-black/45"
             onClick={() => setIsMobileOpen(false)}
           />
-          <aside className="absolute inset-y-0 left-0 flex w-[84vw] max-w-sm flex-col rounded-r-3xl border-r border-zinc-200/80 bg-zinc-50/95 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.4)] backdrop-blur-xl">
+          <aside className="absolute inset-y-0 left-0 flex w-[84vw] max-w-sm select-none flex-col rounded-r-3xl border-r border-zinc-200/80 bg-zinc-50/95 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.4)] backdrop-blur-xl">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-sm font-semibold tracking-wide text-sky-800">
@@ -505,7 +527,7 @@ export default function TopbarClient({
         onMouseEnter={handleSidebarMouseEnter}
         onMouseLeave={handleSidebarMouseLeave}
         className={cn(
-          "hidden overflow-x-hidden lg:fixed lg:left-[max(1rem,calc(50%-840px))] lg:top-4 lg:z-20 lg:flex lg:h-[calc(100svh-2rem)] lg:flex-col lg:gap-3 rounded-3xl border border-zinc-200/70 bg-white/65 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.28)] backdrop-blur-xl transition-[width,box-shadow,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          "hidden select-none overflow-x-hidden lg:fixed lg:left-[max(1rem,calc(50%-840px))] lg:top-4 lg:z-20 lg:flex lg:h-[calc(100svh-2rem)] lg:flex-col lg:gap-3 rounded-3xl border border-zinc-200/70 bg-white/65 p-3 shadow-[0_14px_30px_-24px_rgba(63,63,70,0.28)] backdrop-blur-xl transition-[width,box-shadow,background-color] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
           isSidebarExpanded ? "lg:w-64" : "lg:w-[4.5rem]"
         )}
       >

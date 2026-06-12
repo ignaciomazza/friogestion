@@ -62,6 +62,26 @@ export function ShoppingBagIcon(props: IconProps) {
   );
 }
 
+export function TruckIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.25 18.75a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h7.5m-10.5 0H3.375A1.125 1.125 0 0 1 2.25 17.625V6.75A1.5 1.5 0 0 1 3.75 5.25h8.25A1.5 1.5 0 0 1 13.5 6.75v12m2.25 0a1.5 1.5 0 1 1 3 0m-3 0a1.5 1.5 0 0 0 3 0m-3 0H13.5m5.25 0h1.875c.621 0 1.125-.504 1.125-1.125v-4.28a2.25 2.25 0 0 0-.659-1.591l-2.345-2.345A2.25 2.25 0 0 0 17.155 8.25H13.5"
+      />
+    </svg>
+  );
+}
+
 export function CubeIcon(props: IconProps) {
   return (
     <svg
@@ -311,6 +331,26 @@ export function ChartBarIcon(props: IconProps) {
   );
 }
 
+export function ClockIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+      />
+    </svg>
+  );
+}
+
 export function DocumentTextIcon(props: IconProps) {
   return (
     <svg
@@ -391,6 +431,31 @@ export function CheckIcon(props: IconProps) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M4.5 12.75 10.5 18.75 19.5 5.25"
+      />
+    </svg>
+  );
+}
+
+export function SaveIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M5.25 3.75h11.379c.398 0 .779.158 1.061.439l2.121 2.121c.281.282.439.663.439 1.061V18.75a1.5 1.5 0 0 1-1.5 1.5H5.25a1.5 1.5 0 0 1-1.5-1.5V5.25a1.5 1.5 0 0 1 1.5-1.5Z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7.5 3.75v5.25h8.25V3.75M8.25 20.25v-6h7.5v6"
       />
     </svg>
   );

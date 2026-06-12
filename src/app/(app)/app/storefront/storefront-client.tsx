@@ -2,6 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ToastContainer, toast } from "react-toastify";
+import {
+  ChartBarIcon,
+  CheckIcon,
+  ClockIcon,
+  CubeIcon,
+  CurrencyDollarIcon,
+  DocumentTextIcon,
+  EyeIcon,
+  PencilSquareIcon,
+  PlusIcon,
+  SaveIcon,
+  ShoppingBagIcon,
+  ShoppingCartIcon,
+  TrashIcon,
+  TruckIcon,
+  XMarkIcon,
+} from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { APP_NAVIGATION_GUARD_EVENT } from "@/lib/navigation-guard";
 import "react-toastify/dist/ReactToastify.css";
@@ -68,6 +85,7 @@ type PublicationRow = {
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
   computedPriceFinal: number;
+  salesCount: number;
 };
 
 type OrderRow = {
@@ -77,10 +95,42 @@ type OrderRow = {
   paymentStatus: string;
   customerDisplayName: string;
   customerEmail: string;
+  customerPhone: string | null;
+  customerTaxId: string | null;
+  customerFiscalCondition: string | null;
+  subtotal: number;
+  shippingTotal: number;
   total: number;
+  deliveryMethod: "normal" | "pickup" | "own_delivery" | "quote";
+  deliveryAddress: {
+    street?: string;
+    city?: string;
+    state?: string;
+    zipCode?: string;
+    notes?: string;
+  } | null;
+  paymentMethod: string;
+  manualBillingRequired: boolean;
   itemCount: number;
+  items: Array<{
+    id: string;
+    productId: string;
+    publicationId: string | null;
+    sku: string | null;
+    publicName: string;
+    quantity: number;
+    unitPriceFinal: number;
+    lineTotal: number;
+    stockMode: PublicationRow["stockMode"];
+    shippingType: PublicationRow["shippingType"];
+    pricingMode: PublicationRow["pricingMode"];
+    manualBilling: boolean;
+  }>;
   createdAt: string;
   expiresAt: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  cancelledAt: string | null;
 };
 
 type ConfigFormState = {
@@ -100,7 +150,7 @@ type ConfigFormState = {
   paymentAdjustmentMercadoPago: string;
 };
 
-type SectionKey = "config" | "publications" | "orders";
+export type StorefrontSectionKey = "config" | "publications" | "orders";
 type PublicationSortKey =
   | "name-asc"
   | "name-desc"
@@ -109,6 +159,8 @@ type PublicationSortKey =
   | "stock-desc"
   | "stock-asc";
 type PublicationStatusFilter = "active" | "paused" | "all";
+type OrderSortKey = "created-desc" | "created-asc" | "total-desc" | "total-asc";
+type OrderStatusFilter = "active" | "pending" | "confirmed" | "archived" | "all";
 
 const stockModeTone: Record<PublicationRow["stockMode"], string> = {
   STRICT: "border-sky-200 bg-sky-50 text-sky-900",
@@ -158,13 +210,8 @@ const shippingTypeLabels: Record<PublicationRow["shippingType"], string> = {
   RESTRICTED: "Logistica especial",
 };
 
-const pricingModeLabels: Record<PublicationRow["pricingMode"], string> = {
-  AUTO: "Automatico",
-  FIXED: "Precio fijo",
-};
-
 const billingModeLabels: Record<PublicationRow["billingMode"], string> = {
-  DEFAULT: "Segun canal",
+  DEFAULT: "Regla general",
   MANUAL: "Manual",
   AUTO: "Automatico",
 };
@@ -184,6 +231,24 @@ const paymentStatusLabels: Record<string, string> = {
   CANCELLED: "Cancelado",
   REFUNDED: "Reintegrado",
 };
+
+const deliveryMethodLabels: Record<OrderRow["deliveryMethod"], string> = {
+  normal: "Envio por transporte",
+  pickup: "Retiro en local",
+  own_delivery: "Retiro con transporte del cliente",
+  quote: "Coordinar despacho",
+};
+
+const closedOrderStatuses = new Set(["CANCELLED", "EXPIRED", "REJECTED"]);
+const closedPaymentStatuses = new Set(["CANCELLED", "REJECTED", "REFUNDED"]);
+
+const isArchivedOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
+  closedOrderStatuses.has(order.status) ||
+  closedPaymentStatuses.has(order.paymentStatus);
+
+const isPendingOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
+  !isArchivedOrder(order) &&
+  (order.status === "PENDING_PAYMENT" || order.paymentStatus === "PENDING");
 
 const panelClass =
   "rounded-[22px] border border-zinc-200 bg-white shadow-[0_16px_50px_-42px_rgba(24,39,75,0.28)]";
@@ -257,62 +322,41 @@ const formatDateTime = (value: string | null) => {
   return parsed.toLocaleString("es-AR");
 };
 
-function StoreIcon({ className = "h-5 w-5" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      className={className}
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M4.75 8.25h14.5l-1 9.5a1.5 1.5 0 0 1-1.49 1.25H7.24a1.5 1.5 0 0 1-1.49-1.25l-1-9.5Zm1.75 0 1.1-3A1.5 1.5 0 0 1 9 4.25h6a1.5 1.5 0 0 1 1.4 1l1.1 3M9.5 11.75h5"
-      />
-    </svg>
-  );
-}
+const formatDeliveryAddress = (address: OrderRow["deliveryAddress"]) => {
+  if (!address) return null;
+  const location = [address.city, address.state, address.zipCode]
+    .filter(Boolean)
+    .join(", ");
+  const formatted = [address.street, location, address.notes ? `Notas: ${address.notes}` : null]
+    .filter(Boolean)
+    .join(" · ");
+  return formatted || null;
+};
 
-function PackageIcon({ className = "h-5 w-5" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      className={className}
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m12 3 7 4-7 4-7-4 7-4Zm7 4v10l-7 4-7-4V7m7 4v10"
-      />
-    </svg>
-  );
-}
+const formatPaymentMethod = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  if (normalized.includes("mercadopago")) return "Mercado Pago";
+  if (normalized.includes("cash") || normalized.includes("efectivo")) return "Efectivo";
+  if (!value.trim()) return "Sin metodo registrado";
+  return value;
+};
 
-function OrdersIcon({ className = "h-5 w-5" }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.8}
-      className={className}
-      aria-hidden
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="M7.75 4.75h8.5a1.5 1.5 0 0 1 1.5 1.5v11.5a1.5 1.5 0 0 1-1.5 1.5h-8.5a1.5 1.5 0 0 1-1.5-1.5V6.25a1.5 1.5 0 0 1 1.5-1.5Zm2.25 4h4m-4 3h4m-4 3h2.5"
-      />
-    </svg>
-  );
-}
+const formatFiscalCondition = (value: string | null) => {
+  if (!value) return null;
+  const normalized = value.trim().toUpperCase();
+  const labels: Record<string, string> = {
+    CONSUMIDOR_FINAL: "Consumidor final",
+    RESPONSABLE_INSCRIPTO: "Responsable inscripto",
+    MONOTRIBUTISTA: "Monotributista",
+    EXENTO: "Exento",
+  };
+  if (labels[normalized]) return labels[normalized];
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(" ");
+};
 
 function ChevronDownSmallIcon({ className = "h-4 w-4" }: { className?: string }) {
   return (
@@ -413,15 +457,24 @@ function SelectInput({
   onChange,
   options,
   placeholder,
+  embedded = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   options: Array<{ label: string; value: string }>;
   placeholder?: string;
+  embedded?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const selected = options.find((option) => option.value === value);
+  const buttonClassName = embedded
+    ? `relative flex w-full min-h-[38px] items-center rounded-xl border border-transparent bg-transparent px-2 pr-8 text-left text-sm transition hover:bg-zinc-50/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30 ${
+        open ? "bg-white text-sky-950 ring-2 ring-sky-400/20" : ""
+      }`
+    : `input relative flex w-full min-h-[46px] items-center rounded-2xl border border-zinc-200 bg-white px-4 pr-12 text-left text-[15px] shadow-[0_10px_24px_-22px_rgba(24,39,75,0.4)] transition hover:border-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+        open ? "border-sky-300 ring-2 ring-sky-400/20" : ""
+      }`;
 
   useEffect(() => {
     if (!open) return;
@@ -457,9 +510,7 @@ function SelectInput({
     >
       <button
         type="button"
-        className={`input relative flex w-full min-h-[46px] items-center rounded-2xl border border-zinc-200 bg-white px-4 pr-12 text-left text-[15px] shadow-[0_10px_24px_-22px_rgba(24,39,75,0.4)] transition hover:border-sky-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
-          open ? "border-sky-300 ring-2 ring-sky-400/20" : ""
-        }`}
+        className={buttonClassName}
         onClick={() => setOpen((current) => !current)}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -467,7 +518,7 @@ function SelectInput({
         <span className={`block min-w-0 truncate ${selected ? "text-zinc-900" : "text-zinc-500"}`}>
           {selected?.label ?? placeholder ?? "Seleccionar"}
         </span>
-        <span className="pointer-events-none absolute right-4 top-1/2 inline-flex -translate-y-1/2 items-center justify-center text-zinc-500">
+        <span className={`pointer-events-none absolute top-1/2 inline-flex -translate-y-1/2 items-center justify-center text-zinc-500 ${embedded ? "right-2" : "right-4"}`}>
           <ChevronDownSmallIcon className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
         </span>
       </button>
@@ -585,76 +636,177 @@ function Badge({ tone, children }: { tone: string; children: ReactNode }) {
   );
 }
 
+function InfoPill({
+  icon,
+  children,
+  tone = "border-zinc-200 bg-white text-zinc-700",
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+  tone?: string;
+}) {
+  return (
+    <span className={`inline-flex min-h-[28px] items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium leading-none ${tone}`}>
+      <span className="inline-flex shrink-0 items-center text-current [&>svg]:size-3.5">
+        {icon}
+      </span>
+      <span className="inline-flex items-center">{children}</span>
+    </span>
+  );
+}
+
+function StorefrontLoadingCard({
+  title = "Cargando tienda online",
+  description = "Sincronizando productos, pedidos y configuracion.",
+}: {
+  title?: string;
+  description?: string;
+}) {
+  return (
+    <div className="rounded-[22px] border border-dashed border-sky-200 bg-sky-50/45 px-4 py-5 shadow-[0_18px_36px_-34px_rgba(24,39,75,0.34)] sm:px-5">
+      <div className="flex items-center gap-3">
+        <span
+          aria-hidden="true"
+          className="inline-flex size-9 shrink-0 items-center justify-center rounded-full border border-sky-200 bg-white text-sky-700 shadow-[0_10px_24px_-22px_rgba(14,165,233,0.9)]"
+        >
+          <span className="size-4 rounded-full border-2 border-sky-200 border-t-sky-600 animate-spin" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-zinc-950">{title}</div>
+          <div className="mt-0.5 text-xs text-zinc-500">{description}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PublicationEditorCard({
+  row,
+  onOpen,
+}: {
+  row: PublicationRow;
+  onOpen: () => void;
+}) {
+  const productMeta = [
+    row.sku || "Sin codigo",
+    row.brand,
+    row.unit,
+    row.featured ? "destacado" : null,
+  ].filter((item): item is string => Boolean(item));
+
+  return (
+    <article className="overflow-visible rounded-[22px] border border-dashed border-zinc-200 bg-white px-4 py-4 shadow-[0_18px_36px_-34px_rgba(24,39,75,0.34)] sm:px-5">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0 pl-2.5">
+          <h3 className="text-base font-semibold leading-snug text-zinc-950">
+            <span>{row.productName}</span>
+            {productMeta.map((item) => (
+              <span key={item} className="text-xs font-medium text-zinc-500">
+                <span className="px-1.5 text-zinc-300">·</span>
+                {item}
+              </span>
+            ))}
+          </h3>
+        </div>
+        <div className="flex shrink-0 items-start lg:justify-end">
+          <div className="pr-4 text-right text-base font-semibold text-zinc-950 sm:text-lg">
+            ${formatMoney(row.computedPriceFinal)}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          <InfoPill icon={<CheckIcon />} tone={statusTone[row.publicationStatus]}>
+            {publicationStatusLabels[row.publicationStatus]}
+          </InfoPill>
+          <InfoPill icon={<CubeIcon />} tone={stockModeTone[row.stockMode]}>
+            {stockModeLabels[row.stockMode]}
+          </InfoPill>
+          <InfoPill icon={<CubeIcon />}>
+            {row.webStockAvailable.toLocaleString("es-AR")} Unidades
+          </InfoPill>
+          <InfoPill icon={<ShoppingBagIcon />}>
+            {row.webStockReserved.toLocaleString("es-AR")} Reservas
+          </InfoPill>
+          <InfoPill icon={<ChartBarIcon />}>
+            {row.salesCount.toLocaleString("es-AR")} Ventas
+          </InfoPill>
+          <InfoPill icon={<TruckIcon />}>
+            {shippingTypeLabels[row.shippingType]}
+          </InfoPill>
+          <InfoPill icon={<DocumentTextIcon />}>
+            Factura - {billingModeLabels[row.billingMode]}
+          </InfoPill>
+        </div>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="btn btn-sky shrink-0 self-start gap-1.5 px-4 py-2 text-xs leading-none transition hover:-translate-y-0.5 hover:shadow-[0_10px_20px_-14px_rgba(14,165,233,0.9)] lg:self-center"
+        >
+          <PencilSquareIcon className="size-4" />
+          Editar
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function PublicationEditorModal({
   row,
   onChange,
   onSave,
+  onClose,
   categoryOptions,
-  open,
-  onToggleOpen,
 }: {
   row: PublicationRow;
   onChange: (patch: Partial<PublicationRow>) => void;
   onSave: () => void;
+  onClose: () => void;
   categoryOptions: Array<{ label: string; value: string }>;
-  open: boolean;
-  onToggleOpen: () => void;
 }) {
   return (
-    <article className="overflow-visible rounded-[22px] border border-dashed border-zinc-200 bg-white shadow-[0_18px_36px_-34px_rgba(24,39,75,0.34)]">
-      <button
-        type="button"
-        onClick={onToggleOpen}
-        className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-zinc-50/50 sm:px-5"
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-base font-semibold text-zinc-950">{row.productName}</h3>
-            <p className="mt-1 text-xs text-zinc-500">
-              {row.sku || "Sin codigo"}
-              {row.brand ? ` · ${row.brand}` : ""}
-              {row.unit ? ` · ${row.unit}` : ""}
-              {row.featured ? " · destacado" : ""}
-            </p>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-zinc-950/30 px-3 py-3 backdrop-blur-sm sm:px-6 sm:py-6"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="publication-editor-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[1120px] flex-col overflow-hidden rounded-[22px] border border-zinc-200 bg-white shadow-[0_24px_80px_-32px_rgba(24,39,75,0.48)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-[24px]">
+        <div className="grid shrink-0 gap-3 border-b border-zinc-100 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
+          <div className="min-w-0 sm:pr-4">
+            <h3 id="publication-editor-title" className="text-xl font-semibold tracking-[-0.02em] text-zinc-950 break-words">
+              {row.productName}
+            </h3>
           </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Badge tone={statusTone[row.publicationStatus]}>
-              {publicationStatusLabels[row.publicationStatus]}
-            </Badge>
-            <Badge tone={stockModeTone[row.stockMode]}>
-              {stockModeLabels[row.stockMode]}
-            </Badge>
+          <div className="flex min-w-0 items-center justify-between gap-3 sm:justify-end">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+              <Badge tone={statusTone[row.publicationStatus]}>
+                {publicationStatusLabels[row.publicationStatus]}
+              </Badge>
+              <Badge tone={stockModeTone[row.stockMode]}>
+                {stockModeLabels[row.stockMode]}
+              </Badge>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="inline-flex size-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 transition hover:bg-zinc-50 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30"
+            >
+              <XMarkIcon className="size-4" />
+            </button>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-wrap gap-2 text-xs text-zinc-600">
-            <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1">
-              Cupo: {row.webStockAvailable}
-            </span>
-            <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1">
-              Reservado: {row.webStockReserved}
-            </span>
-            <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1">
-              Entrega: {shippingTypeLabels[row.shippingType]}
-            </span>
-            <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1">
-              Facturacion: {billingModeLabels[row.billingMode]}
-            </span>
-          </div>
-          <div className="text-right text-base font-semibold text-zinc-950 sm:text-lg">
-            ${formatMoney(row.computedPriceFinal)}
-          </div>
-        </div>
-      </button>
-
-      {open ? (
-        <div className="rounded-b-[22px] border-t border-dashed border-zinc-200 bg-white px-4 py-4 sm:px-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
           <div className="space-y-4">
-            <div className="space-y-4 border-b border-zinc-100 pb-4">
-              <div>
-                <h4 className="text-sm font-semibold text-zinc-950">Contenido visible</h4>
-              </div>
+            <div className="pb-4">
               <div className="grid gap-4 lg:grid-cols-3">
                 <Field label="Nombre publico">
                   <input
@@ -682,7 +834,7 @@ function PublicationEditorCard({
                     }
                   />
                 </Field>
-                <div className="lg:col-span-2">
+                <div className="lg:col-span-3">
                   <Field
                     label="Descripcion larga"
                   >
@@ -697,10 +849,7 @@ function PublicationEditorCard({
               </div>
             </div>
 
-            <div className="space-y-4 border-b border-zinc-100 pb-4">
-              <div>
-                <h4 className="text-sm font-semibold text-zinc-950">Operacion comercial</h4>
-              </div>
+            <div className="pb-4">
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
                 <div className="rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4">
                   <div className="grid gap-4 lg:grid-cols-2">
@@ -771,27 +920,31 @@ function PublicationEditorCard({
                 </div>
 
                 <div className="rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4">
-                  <div className="grid gap-4">
-                    <div>
-                      <Field label="Como se factura">
-                        <ChoicePills
-                          value={row.billingMode}
-                          onChange={(value) =>
-                            onChange({
-                              billingMode: value as PublicationRow["billingMode"],
-                            })
-                          }
-                          options={[
-                            { value: "DEFAULT", label: billingModeLabels.DEFAULT },
-                            { value: "MANUAL", label: billingModeLabels.MANUAL },
-                            { value: "AUTO", label: billingModeLabels.AUTO },
-                          ]}
-                        />
-                      </Field>
+                  <div className="grid gap-5">
+                    <div className="field-stack">
+                      <span className="input-label">
+                        Facturacion del pedido
+                      </span>
+                      <ChoicePills
+                        value={row.billingMode}
+                        onChange={(value) =>
+                          onChange({
+                            billingMode: value as PublicationRow["billingMode"],
+                          })
+                        }
+                        options={[
+                          { value: "DEFAULT", label: "Regla general" },
+                          { value: "MANUAL", label: "Factura manual" },
+                          { value: "AUTO", label: "Factura automatica" },
+                        ]}
+                      />
                     </div>
-                    <div className="grid gap-4 lg:grid-cols-[max-content_minmax(0,1fr)] lg:items-end">
-                      <div className="lg:min-w-[260px]">
-                        <Field label="Como calcular el precio">
+
+                    <div className="grid gap-4 lg:grid-cols-[max-content_minmax(0,1fr)]">
+                      <div className="field-stack lg:min-w-[260px]">
+                        <span className="input-label">
+                          Precio publicado
+                        </span>
                           <ChoicePills
                             value={row.pricingMode}
                             onChange={(value) =>
@@ -804,14 +957,13 @@ function PublicationEditorCard({
                               })
                             }
                             options={[
-                              { value: "AUTO", label: pricingModeLabels.AUTO },
-                              { value: "FIXED", label: pricingModeLabels.FIXED },
+                              { value: "AUTO", label: "Usar lista" },
+                              { value: "FIXED", label: "Fijar precio" },
                             ]}
                           />
-                        </Field>
                       </div>
                       {row.pricingMode === "AUTO" ? (
-                        <Field label="Ajuste de esta publicacion">
+                        <Field label="Ajuste sobre lista">
                           <PercentInput
                             value={String(row.priceAdjustmentPercent ?? 0)}
                             onChange={(value) =>
@@ -822,7 +974,7 @@ function PublicationEditorCard({
                           />
                         </Field>
                       ) : (
-                        <Field label="Precio fijo">
+                        <Field label="Monto fijo">
                           <div className="relative mt-1">
                             <MoneyInput
                               className="input no-spinner w-full min-h-[46px] rounded-2xl pl-9 pr-3 text-right tabular-nums"
@@ -851,7 +1003,7 @@ function PublicationEditorCard({
               </div>
             </div>
 
-            <div className="flex flex-col gap-4 border-t border-zinc-100 pt-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex flex-col gap-4 pt-4 lg:flex-row lg:items-end lg:justify-between">
               <div className="flex w-full flex-col gap-4 lg:max-w-[920px] lg:flex-row lg:items-stretch">
                 <div className="w-full lg:max-w-[520px]">
                   <MiniToggle
@@ -878,81 +1030,332 @@ function PublicationEditorCard({
               </div>
               <div className="flex justify-end">
                 <button className="btn btn-sky" onClick={onSave} type="button">
-                  Guardar publicacion
+                  <SaveIcon className="size-4" />
+                  Guardar
                 </button>
               </div>
             </div>
           </div>
         </div>
-      ) : null}
-    </article>
+      </div>
+    </div>
   );
 }
 
-function OrderCard({ order }: { order: OrderRow }) {
+function OrderCard({
+  order,
+  onOpen,
+}: {
+  order: OrderRow;
+  onOpen: () => void;
+}) {
+  const statusLabel = orderStatusLabels[order.status] ?? order.status;
+  const paymentLabel = paymentStatusLabels[order.paymentStatus] ?? order.paymentStatus;
+  const statusIcon =
+    order.status === "CONFIRMED" ? (
+      <CheckIcon />
+    ) : order.status === "PENDING_PAYMENT" ? (
+      <ClockIcon />
+    ) : (
+      <XMarkIcon />
+    );
+  const orderMeta = [
+    order.customerDisplayName,
+    order.customerEmail,
+  ].filter((item): item is string => Boolean(item));
+
   return (
-    <article className="rounded-[20px] border border-zinc-200 bg-zinc-50/50 px-4 py-4 sm:px-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-base font-semibold text-zinc-950">
-              {order.displayNumber || order.id}
-            </h3>
-            <Badge tone={orderStatusTone[order.status] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
-              {orderStatusLabels[order.status] ?? order.status}
-            </Badge>
-            <Badge tone={paymentTone[order.paymentStatus] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
-              {paymentStatusLabels[order.paymentStatus] ?? order.paymentStatus}
-            </Badge>
-          </div>
-          <p className="mt-1 text-sm text-zinc-700">{order.customerDisplayName}</p>
-          <p className="text-xs text-zinc-500">{order.customerEmail}</p>
+    <article className="overflow-visible rounded-[22px] border border-dashed border-zinc-200 bg-white px-4 py-4 shadow-[0_18px_36px_-34px_rgba(24,39,75,0.34)] sm:px-5">
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+        <div className="min-w-0 pl-2.5">
+          <h3 className="text-base font-semibold leading-snug text-zinc-950">
+            <span>{order.displayNumber || order.id}</span>
+            {orderMeta.map((item) => (
+              <span key={item} className="text-xs font-medium text-zinc-500">
+                <span className="px-1.5 text-zinc-300">·</span>
+                {item}
+              </span>
+            ))}
+          </h3>
         </div>
-
-        <div className="grid gap-2 text-right">
-          <div className="rounded-2xl border border-zinc-200 bg-white px-3 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-zinc-500">
-              Total
-            </div>
-            <div className="text-base font-semibold text-zinc-950">${formatMoney(order.total)}</div>
+        <div className="flex shrink-0 items-start lg:justify-end">
+          <div className="pr-4 text-right text-base font-semibold text-zinc-950 sm:text-lg">
+            ${formatMoney(order.total)}
           </div>
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-[16px] border border-zinc-200 bg-white px-3 py-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-zinc-500">
-            Items
-          </div>
-          <div className="mt-1 text-sm font-medium text-zinc-900">{order.itemCount}</div>
-        </div>
-        <div className="rounded-[16px] border border-zinc-200 bg-white px-3 py-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-zinc-500">
-            Creado
-          </div>
-          <div className="mt-1 text-sm font-medium text-zinc-900">
+      <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          <InfoPill
+            icon={statusIcon}
+            tone={orderStatusTone[order.status] ?? "border-zinc-200 bg-white text-zinc-700"}
+          >
+            {statusLabel}
+          </InfoPill>
+          <InfoPill
+            icon={<CurrencyDollarIcon />}
+            tone={paymentTone[order.paymentStatus] ?? "border-zinc-200 bg-white text-zinc-700"}
+          >
+            {paymentLabel}
+          </InfoPill>
+          <InfoPill icon={<ShoppingCartIcon />}>
+            {order.itemCount.toLocaleString("es-AR")} {order.itemCount === 1 ? "item" : "items"}
+          </InfoPill>
+          <InfoPill icon={<ClockIcon />}>
             {formatDateTime(order.createdAt)}
-          </div>
+          </InfoPill>
+          <InfoPill icon={<ClockIcon />}>
+            Expira {formatDateTime(order.expiresAt)}
+          </InfoPill>
         </div>
-        <div className="rounded-[16px] border border-zinc-200 bg-white px-3 py-3">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.05em] text-zinc-500">
-            Expira
-          </div>
-          <div className="mt-1 text-sm font-medium text-zinc-900">
-            {formatDateTime(order.expiresAt)}
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="btn btn-sky shrink-0 self-start gap-1.5 px-4 py-2 text-xs leading-none transition hover:-translate-y-0.5 hover:shadow-[0_10px_20px_-14px_rgba(14,165,233,0.9)] lg:self-center"
+        >
+          <EyeIcon className="size-4" />
+          Ver
+        </button>
       </div>
     </article>
   );
 }
 
-export default function StorefrontClient({ role: _role }: { role: string }) {
+function OrderDetailModal({
+  order,
+  onClose,
+}: {
+  order: OrderRow;
+  onClose: () => void;
+}) {
+  const orderNumber = order.displayNumber || order.id;
+  const statusLabel = orderStatusLabels[order.status] ?? order.status;
+  const paymentLabel = paymentStatusLabels[order.paymentStatus] ?? order.paymentStatus;
+  const deliveryAddress = formatDeliveryAddress(order.deliveryAddress);
+  const customerFiscalCondition = formatFiscalCondition(order.customerFiscalCondition);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-zinc-950/30 px-3 py-3 backdrop-blur-sm sm:px-6 sm:py-6"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="order-detail-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[1040px] flex-col overflow-hidden rounded-[22px] border border-zinc-200 bg-white shadow-[0_24px_80px_-32px_rgba(24,39,75,0.48)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-[24px]">
+        <div className="grid shrink-0 gap-3 border-b border-zinc-100 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
+          <div className="min-w-0">
+            <h3
+              id="order-detail-title"
+              className="text-xl font-semibold tracking-[-0.02em] text-zinc-950"
+            >
+              {orderNumber}
+            </h3>
+          </div>
+          <div className="flex min-w-0 items-center justify-between gap-3 sm:justify-end">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
+              <Badge tone={orderStatusTone[order.status] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
+                {statusLabel}
+              </Badge>
+              <Badge tone={paymentTone[order.paymentStatus] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
+                {paymentLabel}
+              </Badge>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="inline-flex size-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 transition hover:bg-zinc-50 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30"
+            >
+              <XMarkIcon className="size-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,0.65fr)] lg:items-stretch">
+            <div className="flex h-full flex-col gap-4 lg:col-start-1 lg:row-start-1">
+              <section className="flex-1 rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4">
+                <div className="flex items-center gap-2">
+                  <ShoppingCartIcon className="size-4 text-zinc-500" />
+                  <h4 className="text-sm font-semibold text-zinc-950">Productos</h4>
+                </div>
+                <div className="mt-3 divide-y divide-zinc-200/80">
+                  {order.items.map((item) => (
+                    <div key={item.id} className="py-3 first:pt-0 last:pb-0">
+                      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-zinc-950">
+                            {item.publicName}
+                          </div>
+                          {item.sku ? (
+                            <div className="mt-1 text-xs text-zinc-500">
+                              {item.sku}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="grid min-w-[180px] grid-cols-3 gap-2 text-right text-sm">
+                          <div>
+                            <div className="text-[11px] font-medium text-zinc-500">Cant.</div>
+                            <div className="mt-1 font-semibold text-zinc-950">
+                              {item.quantity.toLocaleString("es-AR")}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] font-medium text-zinc-500">Unit.</div>
+                            <div className="mt-1 font-semibold text-zinc-950">
+                              ${formatMoney(item.unitPriceFinal)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[11px] font-medium text-zinc-500">Total</div>
+                            <div className="mt-1 font-semibold text-zinc-950">
+                              ${formatMoney(item.lineTotal)}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4">
+                <div className="flex items-center gap-2">
+                  <TruckIcon className="size-4 text-zinc-500" />
+                  <h4 className="text-sm font-semibold text-zinc-950">Entrega</h4>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500">Modalidad</div>
+                    <div className="mt-1 text-sm font-semibold text-zinc-950">
+                      {deliveryMethodLabels[order.deliveryMethod]}
+                    </div>
+                  </div>
+                  {order.shippingTotal > 0 ? (
+                    <div>
+                      <div className="text-xs font-medium text-zinc-500">Costo de envio</div>
+                      <div className="mt-1 text-sm font-semibold text-zinc-950">
+                        ${formatMoney(order.shippingTotal)}
+                      </div>
+                    </div>
+                  ) : null}
+                  {deliveryAddress ? (
+                    <div className="sm:col-span-2">
+                      <div className="text-xs font-medium text-zinc-500">Direccion / notas</div>
+                      <div className="mt-1 text-sm font-medium text-zinc-800">
+                        {deliveryAddress}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            </div>
+
+            <section className="h-full rounded-[20px] border border-zinc-200 bg-white px-4 py-4 lg:col-start-1 lg:row-start-2">
+                <div className="flex items-center gap-2">
+                  <CurrencyDollarIcon className="size-4 text-zinc-500" />
+                  <h4 className="text-sm font-semibold text-zinc-950">Resumen</h4>
+                </div>
+                <div className="mt-4 space-y-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-zinc-500">Subtotal</span>
+                    <span className="font-semibold text-zinc-950">
+                      ${formatMoney(order.subtotal)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-zinc-500">Envio</span>
+                    <span className="font-semibold text-zinc-950">
+                      ${formatMoney(order.shippingTotal)}
+                    </span>
+                  </div>
+                  <div className="border-t border-zinc-200 pt-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-semibold text-zinc-950">Total</span>
+                      <span className="text-lg font-semibold text-zinc-950">
+                        ${formatMoney(order.total)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+            </section>
+
+            <section className="h-full rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4 lg:col-start-2 lg:row-start-1">
+                <div className="flex items-center gap-2">
+                  <DocumentTextIcon className="size-4 text-zinc-500" />
+                  <h4 className="text-sm font-semibold text-zinc-950">Pedido</h4>
+                </div>
+                <div className="mt-3 space-y-3 text-sm">
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500">Creado</div>
+                    <div className="mt-1 font-semibold text-zinc-950">
+                      {formatDateTime(order.createdAt)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500">Expira</div>
+                    <div className="mt-1 font-semibold text-zinc-950">
+                      {formatDateTime(order.expiresAt)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500">Metodo de pago</div>
+                    <div className="mt-1 font-semibold text-zinc-950">
+                      {formatPaymentMethod(order.paymentMethod)}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs font-medium text-zinc-500">Facturacion</div>
+                    <div className="mt-1 font-semibold text-zinc-950">
+                      {order.manualBillingRequired ? "Manual" : "Automatica"}
+                    </div>
+                  </div>
+                </div>
+            </section>
+
+            <section className="h-full rounded-[20px] border border-zinc-200 bg-zinc-50/45 px-4 py-4 lg:col-start-2 lg:row-start-2">
+                <div className="flex items-center gap-2">
+                  <DocumentTextIcon className="size-4 text-zinc-500" />
+                  <h4 className="text-sm font-semibold text-zinc-950">Cliente</h4>
+                </div>
+                <div className="mt-3 space-y-2 text-sm text-zinc-700">
+                  <div className="font-semibold text-zinc-950">
+                    {order.customerDisplayName}
+                  </div>
+                  <div>{order.customerEmail}</div>
+                  {order.customerPhone ? <div>{order.customerPhone}</div> : null}
+                  {order.customerTaxId ? <div>CUIT/DNI {order.customerTaxId}</div> : null}
+                  {customerFiscalCondition ? (
+                    <div>{customerFiscalCondition}</div>
+                  ) : null}
+                </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function StorefrontClient({
+  role: _role,
+  section,
+}: {
+  role: string;
+  section: StorefrontSectionKey;
+}) {
   void _role;
   const [channelData, setChannelData] = useState<ChannelResponse | null>(null);
   const [publications, setPublications] = useState<PublicationRow[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [query, setQuery] = useState("");
+  const [orderQuery, setOrderQuery] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
@@ -960,18 +1363,22 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [isNewApiKeyCopied, setIsNewApiKeyCopied] = useState(false);
   const [apiKeyActionId, setApiKeyActionId] = useState<string | null>(null);
+  const [isApiKeysOpen, setIsApiKeysOpen] = useState(false);
   const [configForm, setConfigForm] = useState<ConfigFormState>(
     createDefaultConfigForm(),
   );
-  const [activeSection, setActiveSection] = useState<SectionKey>("config");
   const [visiblePublicationsCount, setVisiblePublicationsCount] = useState(
     PUBLICATIONS_PAGE_SIZE,
   );
   const [publicationStatusFilter, setPublicationStatusFilter] =
     useState<PublicationStatusFilter>("active");
-  const [openPublicationIds, setOpenPublicationIds] = useState<string[]>([]);
+  const [selectedPublicationId, setSelectedPublicationId] = useState<string | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [publicationSort, setPublicationSort] =
     useState<PublicationSortKey>("name-asc");
+  const [orderStatusFilter, setOrderStatusFilter] =
+    useState<OrderStatusFilter>("active");
+  const [orderSort, setOrderSort] = useState<OrderSortKey>("created-desc");
   const skipInitialQuerySyncRef = useRef(true);
   const publicationBaselineRef = useRef<Record<string, string>>({});
   const configBaselineRef = useRef("");
@@ -1117,6 +1524,26 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
       );
   }, []);
 
+  useEffect(() => {
+    if (!selectedPublicationId && !selectedOrderId) return;
+
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedPublicationId(null);
+        setSelectedOrderId(null);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedOrderId, selectedPublicationId]);
+
   async function handleSaveConfig() {
     setIsSavingConfig(true);
     setStatus(null);
@@ -1185,6 +1612,7 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
       }
 
       setNewApiKey(data.value);
+      setIsApiKeysOpen(true);
       setStatus("Clave de conexion generada.");
       toast.success("Clave de conexion generada.");
       await loadDashboard(query);
@@ -1267,9 +1695,7 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
       return;
     }
 
-    setOpenPublicationIds((current) =>
-      current.filter((productId) => productId !== row.productId),
-    );
+    setSelectedPublicationId(null);
     setStatus(`Publicacion actualizada: ${row.productName}.`);
     toast.success(`Cambios guardados en ${row.productName}.`);
     await loadDashboard(query);
@@ -1283,24 +1709,19 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
     );
   }
 
-  function togglePublicationOpen(productId: string) {
-    setOpenPublicationIds((current) =>
-      current.includes(productId)
-        ? current.filter((id) => id !== productId)
-        : [...current, productId],
-    );
-  }
-
   const publishedCount = publications.filter(
     (row) => row.publicationStatus === "PUBLISHED",
   ).length;
-  const pausedCount = publications.length - publishedCount;
   const pendingOrders = orders.filter(
-    (order) => order.status === "PENDING_PAYMENT",
+    (order) => isPendingOrder(order),
+  ).length;
+  const archivedOrders = orders.filter((order) => isArchivedOrder(order)).length;
+  const activeOrders = orders.length - archivedOrders;
+  const confirmedOrders = orders.filter(
+    (order) => !isArchivedOrder(order) && order.status === "CONFIRMED",
   ).length;
   const filteredPublications = useMemo(() => {
     const items = publications.filter((row) => {
-      if (openPublicationIds.includes(row.productId)) return true;
       if (publicationStatusFilter === "active") {
         return row.publicationStatus === "PUBLISHED";
       }
@@ -1333,7 +1754,57 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
     });
 
     return items;
-  }, [openPublicationIds, publicationSort, publicationStatusFilter, publications]);
+  }, [publicationSort, publicationStatusFilter, publications]);
+  const filteredOrders = useMemo(() => {
+    const normalizedQuery = orderQuery.trim().toLowerCase();
+    const getDateTime = (value: string | null) => {
+      if (!value) return 0;
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+    const items = orders.filter((order) => {
+      const isArchived = isArchivedOrder(order);
+      const isPending = isPendingOrder(order);
+      const isConfirmed = !isArchived && order.status === "CONFIRMED";
+
+      if (orderStatusFilter === "active" && isArchived) return false;
+      if (orderStatusFilter === "pending" && !isPending) return false;
+      if (orderStatusFilter === "confirmed" && !isConfirmed) return false;
+      if (orderStatusFilter === "archived" && !isArchived) return false;
+
+      if (!normalizedQuery) return true;
+
+      const searchable = [
+        order.displayNumber,
+        order.id,
+        order.customerDisplayName,
+        order.customerEmail,
+        orderStatusLabels[order.status],
+        paymentStatusLabels[order.paymentStatus],
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return searchable.includes(normalizedQuery);
+    });
+
+    items.sort((left, right) => {
+      switch (orderSort) {
+        case "created-asc":
+          return getDateTime(left.createdAt) - getDateTime(right.createdAt);
+        case "total-desc":
+          return right.total - left.total;
+        case "total-asc":
+          return left.total - right.total;
+        case "created-desc":
+        default:
+          return getDateTime(right.createdAt) - getDateTime(left.createdAt);
+      }
+    });
+
+    return items;
+  }, [orderQuery, orderSort, orderStatusFilter, orders]);
   const publicationCategoryOptions = useMemo(() => {
     const categories = Array.from(
       new Set(
@@ -1350,29 +1821,42 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
       value: category,
     }));
   }, [publications]);
+  const selectedPublication =
+    publications.find((row) => row.productId === selectedPublicationId) ?? null;
+  const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
+  const getPublicationCategoryOptions = (row: PublicationRow) =>
+    publicationCategoryOptions.some((option) => option.value === row.category)
+      ? publicationCategoryOptions
+      : [
+          ...publicationCategoryOptions,
+          { label: row.category || "General", value: row.category || "General" },
+        ];
   const visiblePublications = filteredPublications.slice(0, visiblePublicationsCount);
   const hasMorePublications = visiblePublicationsCount < filteredPublications.length;
   const nextApiKeyLabel =
     (channelData?.apiKeys.length ?? 0) > 0
       ? `Conexion principal #${(channelData?.apiKeys.length ?? 0) + 1}`
       : "Conexion principal";
+  const orderEmptyMessage = !orders.length
+    ? "Todavia no hay pedidos registrados en esta tienda."
+    : orderStatusFilter === "archived"
+      ? "No hay pedidos archivados."
+      : orderStatusFilter === "active"
+        ? "No hay pedidos activos para mostrar."
+        : "No hay pedidos para mostrar con el filtro actual.";
+  const summaryPills = (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 pt-1 sm:justify-end">
+      <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
+        Publicadas: {publishedCount}
+      </span>
+      <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+        Pendientes: {pendingOrders}
+      </span>
+    </div>
+  );
 
   return (
     <div className="space-y-5 px-2 pb-8 lg:px-0">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-[2rem] font-semibold tracking-[-0.03em] text-zinc-950">
-          Tienda online
-        </h1>
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
-            Publicadas: {publishedCount}
-          </span>
-          <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
-            Pendientes: {pendingOrders}
-          </span>
-        </div>
-      </div>
-
       {status ? (
         <div
           className={`rounded-[18px] border px-4 py-3 text-sm ${
@@ -1385,266 +1869,279 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap gap-2">
-        {[
-          { key: "config", label: "Configuracion", icon: <StoreIcon className="h-4 w-4" /> },
-          { key: "publications", label: "Publicaciones", icon: <PackageIcon className="h-4 w-4" /> },
-          { key: "orders", label: "Pedidos", icon: <OrdersIcon className="h-4 w-4" /> },
-        ].map((section) => (
-          <button
-            key={section.key}
-            type="button"
-            onClick={() => setActiveSection(section.key as SectionKey)}
-            className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
-              activeSection === section.key
-                ? "border-sky-300 bg-sky-50 text-sky-950"
-                : "border-zinc-200 bg-white text-zinc-600"
-            }`}
-          >
-            {section.icon}
-            <span className="font-medium">{section.label}</span>
-          </button>
-        ))}
-      </div>
-
-      {activeSection === "config" ? (
+      {section === "config" ? (
         <>
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold text-zinc-950">Configuracion</h2>
-            <p className="text-sm text-zinc-500">
-              Precios generales, claves de conexion y reglas de funcionamiento de la tienda.
-            </p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-[2rem] font-semibold tracking-[-0.03em] text-zinc-950">
+                Configuracion
+              </h2>
+              <p className="text-sm text-zinc-500">
+                Precios generales, claves de conexion y reglas de funcionamiento de la tienda.
+              </p>
+            </div>
+            {summaryPills}
           </div>
-        <section className={`${panelClass} px-5 py-5 sm:px-6`}>
-          <div className="space-y-6">
-            <div>
-              <div className="mb-4">
-                <h3 className="text-base font-semibold text-zinc-950">Precios y funcionamiento</h3>
-                <p className="mt-1 text-sm text-zinc-500">
-                  Elegi la lista base, defini recargos y ajusta las reglas generales de la tienda.
-                </p>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-1">
-                <div className="max-w-[460px]">
-                  <Field label="Lista base">
-                    <SelectInput
-                      value={configForm.defaultPriceListId}
-                      placeholder="Elegir lista"
-                      onChange={(value) =>
-                        setConfigForm((current) => ({
-                          ...current,
-                          defaultPriceListId: value,
-                        }))
-                      }
-                      options={[
-                        { label: "Elegir lista", value: "" },
-                        ...(
-                          channelData?.priceLists.map((priceList) => ({
-                            value: priceList.id,
-                            label: `${priceList.name}${
-                              priceList.isConsumerFinal ? " · consumidor final" : ""
-                            }${priceList.isDefault ? " · default" : ""}`,
-                          })) ?? []
-                        ),
-                      ]}
-                    />
-                  </Field>
+          <div className="space-y-4">
+            <section className={`${panelClass} px-5 py-6 sm:px-6 sm:py-7`}>
+              <div>
+                <div className="mb-6">
+                  <h3 className="text-base font-semibold text-zinc-950">
+                    Precios y funcionamiento
+                  </h3>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Elegi la lista base, defini recargos y ajusta las reglas generales de la tienda.
+                  </p>
                 </div>
-              </div>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-3">
-                <Field label="Recargo o descuento general">
-                  <PercentInput
-                    value={configForm.globalPriceAdjustmentPercent}
-                    onChange={(value) =>
-                      setConfigForm((current) => ({
-                        ...current,
-                        globalPriceAdjustmentPercent: value,
-                      }))
-                    }
-                  />
-                </Field>
-                <Field label="Recargo por cobro con Mercado Pago">
-                  <PercentInput
-                    value={configForm.paymentAdjustmentMercadoPago}
-                    onChange={(value) =>
-                      setConfigForm((current) => ({
-                        ...current,
-                        paymentAdjustmentMercadoPago: value,
-                      }))
-                    }
-                  />
-                </Field>
-                <Field label="Costo fijo de envio normal">
-                  <div className="relative mt-1">
-                    <MoneyInput
-                      className="input no-spinner w-full min-h-[46px] rounded-2xl pl-9 pr-3 text-right tabular-nums"
-                      value={configForm.normalShippingAmount}
-                      onValueChange={(value) =>
-                        setConfigForm((current) => ({
-                          ...current,
-                          normalShippingAmount: value,
-                        }))
-                      }
-                      placeholder="0"
-                      maxDecimals={2}
-                      caretToEndOnFocus
-                    />
-                    <span
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-y-1 left-1.5 inline-flex min-w-[1.5rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:left-2"
-                    >
-                      $
-                    </span>
-                  </div>
-                </Field>
-              </div>
-
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                <MiniToggle checked={configForm.manualBillingByDefault} onChange={() => setConfigForm((current) => ({ ...current, manualBillingByDefault: !current.manualBillingByDefault }))} label="Facturacion manual por defecto" help="Si un producto no define excepcion propia, el pedido queda en circuito manual." />
-                <div className="rounded-[18px] border border-zinc-200 bg-zinc-50/70 px-3.5 py-3">
-                  <Field label="Tiempo de reserva">
-                    <div className="mt-1 flex flex-wrap gap-2">
-                      {[15, 30, 45, 60].map((minutes) => (
-                        <button
-                          key={minutes}
-                          type="button"
-                          onClick={() =>
+                <div className="space-y-6">
+                  <div className="grid gap-5 md:grid-cols-3">
+                    <div>
+                      <Field label="Lista base">
+                        <SelectInput
+                          value={configForm.defaultPriceListId}
+                          placeholder="Elegir lista"
+                          onChange={(value) =>
                             setConfigForm((current) => ({
                               ...current,
-                              reserveTtlMinutes: String(minutes),
+                              defaultPriceListId: value,
                             }))
                           }
-                          className={`toggle-pill ${
-                            configForm.reserveTtlMinutes === String(minutes)
-                              ? "toggle-pill-active border-sky-300 bg-sky-50 text-sky-950"
-                              : ""
-                          }`}
-                        >
-                          {minutes} min
-                        </button>
-                      ))}
+                          options={[
+                            { label: "Elegir lista", value: "" },
+                            ...(
+                              channelData?.priceLists.map((priceList) => ({
+                                value: priceList.id,
+                                label: `${priceList.name}${
+                                  priceList.isConsumerFinal ? " · consumidor final" : ""
+                                }${priceList.isDefault ? " · default" : ""}`,
+                              })) ?? []
+                            ),
+                          ]}
+                        />
+                      </Field>
                     </div>
-                  </Field>
+                  </div>
+
+                  <div className="grid gap-5 md:grid-cols-3">
+                    <Field label="Recargo o descuento general">
+                      <PercentInput
+                        value={configForm.globalPriceAdjustmentPercent}
+                        onChange={(value) =>
+                          setConfigForm((current) => ({
+                            ...current,
+                            globalPriceAdjustmentPercent: value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Recargo por cobro con Mercado Pago">
+                      <PercentInput
+                        value={configForm.paymentAdjustmentMercadoPago}
+                        onChange={(value) =>
+                          setConfigForm((current) => ({
+                            ...current,
+                            paymentAdjustmentMercadoPago: value,
+                          }))
+                        }
+                      />
+                    </Field>
+                    <Field label="Costo fijo de envio normal">
+                      <div className="relative mt-1">
+                        <MoneyInput
+                          className="input no-spinner w-full min-h-[46px] rounded-2xl pl-9 pr-3 text-right tabular-nums"
+                          value={configForm.normalShippingAmount}
+                          onValueChange={(value) =>
+                            setConfigForm((current) => ({
+                              ...current,
+                              normalShippingAmount: value,
+                            }))
+                          }
+                          placeholder="0"
+                          maxDecimals={2}
+                          caretToEndOnFocus
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-y-1 left-1.5 inline-flex min-w-[1.5rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:left-2"
+                        >
+                          $
+                        </span>
+                      </div>
+                    </Field>
+                  </div>
+
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    <MiniToggle checked={configForm.manualBillingByDefault} onChange={() => setConfigForm((current) => ({ ...current, manualBillingByDefault: !current.manualBillingByDefault }))} label="Facturacion manual por defecto" help="Si un producto no define excepcion propia, el pedido queda en circuito manual." />
+                    <div className="rounded-[18px] border border-zinc-200 bg-zinc-50/70 px-4 py-4">
+                      <Field label="Tiempo de reserva">
+                        <div className="mt-1 flex flex-wrap gap-2">
+                          {[15, 30, 45, 60].map((minutes) => (
+                            <button
+                              key={minutes}
+                              type="button"
+                              onClick={() =>
+                                setConfigForm((current) => ({
+                                  ...current,
+                                  reserveTtlMinutes: String(minutes),
+                                }))
+                              }
+                              className={`toggle-pill ${
+                                configForm.reserveTtlMinutes === String(minutes)
+                                  ? "toggle-pill-active border-sky-300 bg-sky-50 text-sky-950"
+                                  : ""
+                              }`}
+                            >
+                              {minutes} min
+                            </button>
+                          ))}
+                        </div>
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-7 border-t border-zinc-200 pt-6">
+                  <div className="flex justify-end">
+                    <button className="btn btn-sky min-w-[160px]" disabled={isSavingConfig || isLoading} onClick={handleSaveConfig} type="button">
+                      <CheckIcon className="size-4" />
+                      {isSavingConfig ? "Guardando..." : "Guardar"}
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="border-t border-zinc-200 pt-6">
-              <div className="mb-4">
-                <h3 className="text-base font-semibold text-zinc-950">Claves de conexion</h3>
-                <p className="mt-1 text-sm text-zinc-500">
-                  Permiten que la tienda online consulte productos, precios y stock desde Frio Gestion.
-                </p>
-              </div>
+            <section className={panelClass}>
+              <button
+                type="button"
+                onClick={() => setIsApiKeysOpen((current) => !current)}
+                aria-expanded={isApiKeysOpen}
+                className="flex w-full flex-col gap-3 px-5 py-5 text-left transition hover:bg-zinc-50/70 sm:flex-row sm:items-center sm:justify-between sm:px-6"
+              >
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-zinc-950">
+                    Claves de conexion
+                  </h3>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Permiten que la tienda online consulte productos, precios y stock desde Frio Gestion.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="inline-flex size-8 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-500">
+                    <ChevronDownSmallIcon className={`size-4 transition-transform ${isApiKeysOpen ? "rotate-180" : ""}`} />
+                  </span>
+                </div>
+              </button>
 
-              {newApiKey ? (
-                <div className="mb-4 rounded-[18px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-emerald-950">
-                        Clave nueva generada
-                      </div>
-                      <div className="mt-1 text-sm text-emerald-900">
-                        Copiala ahora. Despues no se vuelve a mostrar completa.
-                      </div>
-                      <div className="mt-3 rounded-2xl border border-emerald-200 bg-white/80 px-4 py-3 font-mono text-xs break-all text-emerald-950">
-                        {newApiKey}
+              {isApiKeysOpen ? (
+                <div className="border-t border-zinc-200 px-5 py-5 sm:px-6">
+                  {newApiKey ? (
+                    <div className="mb-4 rounded-[18px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-emerald-950">
+                            Clave nueva generada
+                          </div>
+                          <div className="mt-1 text-sm text-emerald-900">
+                            Copiala ahora. Despues no se vuelve a mostrar completa.
+                          </div>
+                          <div className="mt-3 rounded-2xl border border-emerald-200 bg-white/80 px-4 py-3 font-mono text-xs break-all text-emerald-950">
+                            {newApiKey}
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCopyNewApiKey}
+                            className="btn btn-emerald min-w-[150px]"
+                          >
+                            {isNewApiKeyCopied ? "Clave copiada" : "Copiar clave"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewApiKey(null);
+                              setIsNewApiKeyCopied(false);
+                            }}
+                            className="btn min-w-[120px] border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
+                          >
+                            Cerrar
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  ) : null}
 
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={handleCopyNewApiKey}
-                        className="btn btn-emerald min-w-[150px]"
-                      >
-                        {isNewApiKeyCopied ? "Clave copiada" : "Copiar clave"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setNewApiKey(null);
-                          setIsNewApiKeyCopied(false);
-                        }}
-                        className="btn min-w-[120px] border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50"
-                      >
-                        Cerrar
-                      </button>
-                    </div>
+                  <div className="flex justify-end">
+                    <button className="btn btn-emerald min-w-[170px]" disabled={isCreatingKey || isLoading} onClick={handleCreateApiKey} type="button">
+                      <PlusIcon className="size-4" />
+                      {isCreatingKey ? "Generando..." : "Generar clave"}
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {channelData?.apiKeys.length ? (
+                      channelData.apiKeys.map((apiKey) => (
+                        <div key={apiKey.id} className="rounded-[18px] border border-zinc-200 bg-zinc-50/40 px-4 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-zinc-950">{apiKey.label}</div>
+                              <div className="mt-1 font-mono text-[11px] text-zinc-500">{apiKey.keyPrefix}...</div>
+                            </div>
+                            <div className="shrink-0">
+                              <Badge tone={apiKey.isActive ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-zinc-200 bg-zinc-100 text-zinc-700"}>
+                                {apiKey.isActive ? "Activa" : "Inactiva"}
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                            {apiKey.isActive ? (
+                              <button
+                                type="button"
+                                onClick={() => handleDeactivateApiKey(apiKey.id, apiKey.label)}
+                                disabled={apiKeyActionId === apiKey.id}
+                                className="inline-flex min-h-8 items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <TrashIcon className="size-3.5" />
+                                {apiKeyActionId === apiKey.id ? "Desactivando..." : "Desactivar"}
+                              </button>
+                            ) : null}
+                            <div className="ml-auto text-right text-xs text-zinc-500">
+                              Ultimo uso: {formatDateTime(apiKey.lastUsedAt)}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-[18px] border border-dashed border-zinc-200 bg-zinc-50/40 px-4 py-4 text-sm text-zinc-500 lg:col-span-2">
+                        Todavia no hay claves de conexion creadas para esta tienda.
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : null}
-
-              <div className="flex justify-end">
-                <button className="btn btn-emerald min-w-[220px]" disabled={isCreatingKey || isLoading} onClick={handleCreateApiKey} type="button">
-                  {isCreatingKey
-                    ? "Generando..."
-                    : channelData?.apiKeys.length
-                      ? "Generar nueva clave"
-                      : "Generar clave"}
-                </button>
-              </div>
-
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                {channelData?.apiKeys.length ? (
-                  channelData.apiKeys.map((apiKey) => (
-                    <div key={apiKey.id} className="rounded-[18px] border border-zinc-200 bg-zinc-50/40 px-4 py-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium text-zinc-950">{apiKey.label}</div>
-                          <div className="mt-1 font-mono text-[11px] text-zinc-500">{apiKey.keyPrefix}...</div>
-                        </div>
-                        <Badge tone={apiKey.isActive ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-zinc-200 bg-zinc-100 text-zinc-700"}>
-                          {apiKey.isActive ? "Activa" : "Inactiva"}
-                        </Badge>
-                      </div>
-                      <div className="mt-2 text-xs text-zinc-500">Ultimo uso: {formatDateTime(apiKey.lastUsedAt)}</div>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {apiKey.isActive ? (
-                          <button
-                            type="button"
-                            onClick={() => handleDeactivateApiKey(apiKey.id, apiKey.label)}
-                            disabled={apiKeyActionId === apiKey.id}
-                            className="btn min-w-[130px] border-rose-200 bg-white text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {apiKeyActionId === apiKey.id ? "Desactivando..." : "Desactivar"}
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-[18px] border border-dashed border-zinc-200 bg-zinc-50/40 px-4 py-4 text-sm text-zinc-500 lg:col-span-2">
-                    Todavia no hay claves de conexion creadas para esta tienda.
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="border-t border-zinc-200 pt-6">
-              <div className="flex justify-end">
-                <button className="btn btn-sky min-w-[220px]" disabled={isSavingConfig || isLoading} onClick={handleSaveConfig} type="button">
-                  {isSavingConfig ? "Guardando..." : "Guardar configuracion"}
-                </button>
-              </div>
-            </div>
+            </section>
           </div>
-        </section>
         </>
       ) : null}
 
-      {activeSection === "publications" ? (
+      {section === "publications" ? (
         <>
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold text-zinc-950">Publicaciones</h2>
-            <p className="text-sm text-zinc-500">
-              Publica, pausa y ajusta reglas por producto desde una vista simple.
-            </p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-[2rem] font-semibold tracking-[-0.03em] text-zinc-950">
+                Publicaciones
+              </h2>
+              <p className="text-sm text-zinc-500">
+                Publica, pausa y ajusta reglas por producto desde una vista simple.
+              </p>
+            </div>
+            {summaryPills}
           </div>
           <div className="flex">
-            <div className="inline-flex rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
+            <div className="flex max-w-full flex-wrap rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
               {[
                 { value: "active", label: "Activas" },
                 { value: "paused", label: "Pausadas" },
@@ -1657,7 +2154,7 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
                     setPublicationStatusFilter(option.value as PublicationStatusFilter);
                     setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
                   }}
-                  className={`rounded-[12px] px-4 py-2 text-sm font-medium transition ${
+                  className={`inline-flex items-center rounded-[12px] px-4 py-2 text-sm font-medium transition ${
                     publicationStatusFilter === option.value
                       ? "bg-white text-zinc-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
                       : "text-zinc-600 hover:text-zinc-900"
@@ -1669,25 +2166,16 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
             </div>
           </div>
         <div className="space-y-5">
-          <div className="sticky top-4 z-20 rounded-[22px] border border-zinc-200 bg-white/92 px-5 py-4 shadow-[0_18px_38px_-30px_rgba(24,39,75,0.32)] backdrop-blur supports-[backdrop-filter]:bg-white/82 sm:px-6">
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-500">
-                <span className="text-base font-semibold uppercase tracking-[0.04em] text-zinc-700">
-                  Productos publicados
-                </span>
-                <span>&bull;</span>
-                <span>{filteredPublications.length.toLocaleString("es-AR")} en vista</span>
-                <span>&bull;</span>
-                <span>{publishedCount} activas</span>
-                <span>&bull;</span>
-                <span>{pausedCount} pausadas</span>
-              </div>
-
-              <div className="grid gap-3 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-center">
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-zinc-600">Ordenar</span>
-                  <div className="min-w-[220px]">
+          <div className="sticky top-4 z-20 rounded-[20px] border border-zinc-200 bg-white/92 px-3 py-2.5 shadow-[0_18px_38px_-30px_rgba(24,39,75,0.32)] backdrop-blur supports-[backdrop-filter]:bg-white/82">
+            <div className="flex flex-col gap-2">
+              <div className="grid gap-2 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:items-center">
+                <div className="flex min-h-[38px] items-center rounded-2xl border border-zinc-200 bg-white px-1.5 shadow-[0_10px_24px_-24px_rgba(24,39,75,0.32)]">
+                  <span className="shrink-0 border-r border-zinc-200 px-1.5 text-xs font-medium text-zinc-500">
+                    Ordenar
+                  </span>
+                  <div className="min-w-0 flex-1">
                     <SelectInput
+                      embedded
                       value={publicationSort}
                       onChange={(value) =>
                         setPublicationSort(value as PublicationSortKey)
@@ -1706,7 +2194,7 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
 
                 <div>
                   <input
-                    className={`${fieldClass} w-full`}
+                    className="input w-full min-h-[38px] rounded-2xl border-zinc-200 px-2.5 text-sm placeholder:text-zinc-400"
                     placeholder="Buscar por nombre, codigo o marca"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
@@ -1717,23 +2205,17 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
           </div>
 
           <div className="space-y-4">
-            {filteredPublications.length ? (
+            {isLoading ? (
+              <StorefrontLoadingCard
+                title="Cargando publicaciones"
+                description="Actualizando productos publicados, stock y reglas de venta."
+              />
+            ) : filteredPublications.length ? (
               visiblePublications.map((row) => (
                 <PublicationEditorCard
                   key={row.productId}
                   row={row}
-                  categoryOptions={
-                    publicationCategoryOptions.some((option) => option.value === row.category)
-                      ? publicationCategoryOptions
-                      : [
-                          ...publicationCategoryOptions,
-                          { label: row.category || "General", value: row.category || "General" },
-                        ]
-                  }
-                  open={openPublicationIds.includes(row.productId)}
-                  onToggleOpen={() => togglePublicationOpen(row.productId)}
-                  onChange={(patch) => updatePublication(row.productId, patch)}
-                  onSave={() => handleSavePublication(row)}
+                  onOpen={() => setSelectedPublicationId(row.productId)}
                 />
               ))
             ) : (
@@ -1742,6 +2224,16 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
               </div>
             )}
           </div>
+
+          {selectedPublication ? (
+            <PublicationEditorModal
+              row={selectedPublication}
+              categoryOptions={getPublicationCategoryOptions(selectedPublication)}
+              onClose={() => setSelectedPublicationId(null)}
+              onChange={(patch) => updatePublication(selectedPublication.productId, patch)}
+              onSave={() => handleSavePublication(selectedPublication)}
+            />
+          ) : null}
 
           {hasMorePublications ? (
             <div className="flex justify-center">
@@ -1762,32 +2254,115 @@ export default function StorefrontClient({ role: _role }: { role: string }) {
         </>
       ) : null}
 
-      {activeSection === "orders" ? (
+      {section === "orders" ? (
         <>
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold text-zinc-950">Pedidos</h2>
-            <p className="text-sm text-zinc-500">
-              Revisa pedidos y estados de pago desde una vista simple.
-            </p>
-          </div>
-        <section className={`${panelClass} px-5 py-5 sm:px-6`}>
-        <div className="space-y-4">
-          {orders.length ? (
-            orders.map((order) => <OrderCard key={order.id} order={order} />)
-          ) : (
-            <div className="rounded-[20px] border border-dashed border-zinc-200 bg-zinc-50/50 px-4 py-6 text-sm text-zinc-500">
-              Todavia no hay pedidos registrados en esta tienda.
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-[2rem] font-semibold tracking-[-0.03em] text-zinc-950">
+                Pedidos
+              </h2>
+              <p className="text-sm text-zinc-500">
+                Revisa pedidos activos. Los cancelados, expirados o rechazados se archivan automaticamente.
+              </p>
             </div>
-          )}
-        </div>
-        </section>
+            {summaryPills}
+          </div>
+          <div className="flex">
+            <div className="inline-flex rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
+              {[
+                { value: "active", label: "Activos", count: activeOrders },
+                { value: "pending", label: "Pendientes", count: pendingOrders },
+                { value: "confirmed", label: "Confirmados", count: confirmedOrders },
+                { value: "archived", label: "Archivados", count: archivedOrders },
+                { value: "all", label: "Todos", count: orders.length },
+              ].map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setOrderStatusFilter(option.value as OrderStatusFilter)}
+                  className={`rounded-[12px] px-4 py-2 text-sm font-medium transition ${
+                    orderStatusFilter === option.value
+                      ? "bg-white text-zinc-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  }`}
+                >
+                  <span>{option.label}</span>
+                  <span className="ml-2 rounded-full border border-zinc-200 bg-white/80 px-1.5 py-0.5 text-[11px] leading-none text-zinc-500">
+                    {option.count.toLocaleString("es-AR")}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-5">
+            <div className="sticky top-4 z-20 rounded-[20px] border border-zinc-200 bg-white/92 px-3 py-2.5 shadow-[0_18px_38px_-30px_rgba(24,39,75,0.32)] backdrop-blur supports-[backdrop-filter]:bg-white/82">
+              <div className="grid gap-2 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:items-center">
+                <div className="flex min-h-[38px] items-center rounded-2xl border border-zinc-200 bg-white px-1.5 shadow-[0_10px_24px_-24px_rgba(24,39,75,0.32)]">
+                  <span className="shrink-0 border-r border-zinc-200 px-1.5 text-xs font-medium text-zinc-500">
+                    Ordenar
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <SelectInput
+                      embedded
+                      value={orderSort}
+                      onChange={(value) => setOrderSort(value as OrderSortKey)}
+                      options={[
+                        { label: "Mas recientes", value: "created-desc" },
+                        { label: "Mas antiguos", value: "created-asc" },
+                        { label: "Total mas alto", value: "total-desc" },
+                        { label: "Total mas bajo", value: "total-asc" },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <input
+                    className="input w-full min-h-[38px] rounded-2xl border-zinc-200 px-2.5 text-sm placeholder:text-zinc-400"
+                    placeholder="Buscar por pedido, cliente o email"
+                    value={orderQuery}
+                    onChange={(event) => setOrderQuery(event.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {isLoading ? (
+                <StorefrontLoadingCard
+                  title="Cargando pedidos"
+                  description="Consultando pedidos, pagos y vencimientos de la tienda."
+                />
+              ) : filteredOrders.length ? (
+                filteredOrders.map((order) => (
+                  <OrderCard
+                    key={order.id}
+                    order={order}
+                    onOpen={() => setSelectedOrderId(order.id)}
+                  />
+                ))
+              ) : (
+                <div className="rounded-[20px] border border-dashed border-zinc-200 bg-zinc-50/50 px-4 py-6 text-sm text-zinc-500">
+                  {orderEmptyMessage}
+                </div>
+              )}
+            </div>
+
+            {selectedOrder ? (
+              <OrderDetailModal
+                order={selectedOrder}
+                onClose={() => setSelectedOrderId(null)}
+              />
+            ) : null}
+          </div>
         </>
       ) : null}
 
-      {isLoading ? (
-        <div className="rounded-[18px] border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-600">
-          Cargando Storefront...
-        </div>
+      {isLoading && section === "config" ? (
+        <StorefrontLoadingCard
+          title="Cargando configuracion"
+          description="Preparando precios, reglas generales y claves de conexion."
+        />
       ) : null}
 
       <ToastContainer position="bottom-right" theme="light" />

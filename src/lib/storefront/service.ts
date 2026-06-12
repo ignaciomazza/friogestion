@@ -146,6 +146,7 @@ type StorefrontAdminPublicationRow = {
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
   computedPriceFinal: number;
+  salesCount: number;
 };
 
 type StorefrontPaymentAdjustmentInput = {
@@ -2227,7 +2228,7 @@ export async function listStorefrontAdminPublications(
   query?: string,
 ): Promise<StorefrontAdminPublicationRow[]> {
   const channel = await ensureDefaultStorefrontChannel(organizationId);
-  const [products, publications] = await Promise.all([
+  const [products, publications, salesByProduct] = await Promise.all([
     prisma.product.findMany({
       where: { organizationId },
       include: {
@@ -2244,10 +2245,26 @@ export async function listStorefrontAdminPublications(
       where: { organizationId, channelId: channel.id },
       ...productInclude,
     }),
+    prisma.storefrontOrderItem.groupBy({
+      by: ["productId"],
+      where: {
+        organizationId,
+        order: {
+          channelId: channel.id,
+          status: "CONFIRMED",
+        },
+      },
+      _sum: {
+        quantity: true,
+      },
+    }),
   ]);
 
   const publicationByProductId = new Map(
     publications.map((publication) => [publication.productId, publication]),
+  );
+  const salesCountByProductId = new Map(
+    salesByProduct.map((item) => [item.productId, item._sum.quantity ?? 0]),
   );
   const rawQuery = query?.trim() || "";
 
@@ -2307,6 +2324,7 @@ export async function listStorefrontAdminPublications(
         billingMode: publication?.billingMode ?? "DEFAULT",
         featured: publication?.featured ?? false,
         computedPriceFinal: pricing.priceFinal,
+        salesCount: salesCountByProductId.get(product.id) ?? 0,
       };
     });
 }
@@ -2452,10 +2470,36 @@ export async function listStorefrontAdminOrders(
     paymentStatus: order.paymentStatus,
     customerDisplayName: order.customerDisplayName,
     customerEmail: order.customerEmail,
+    customerPhone: order.customerPhone,
+    customerTaxId: order.customerTaxId,
+    customerFiscalCondition: order.customerFiscalCondition,
+    subtotal: roundMoney(toNumber(order.subtotal)),
+    shippingTotal: roundMoney(toNumber(order.shippingTotal)),
     total: roundMoney(toNumber(order.total)),
+    deliveryMethod: storefrontDeliveryMethodToApi(order.deliveryMethod),
+    deliveryAddress: order.deliveryAddress,
+    paymentMethod: order.paymentMethod,
+    manualBillingRequired: order.manualBillingRequired,
     itemCount: order.items.length,
+    items: order.items.map((item) => ({
+      id: item.id,
+      productId: item.productId,
+      publicationId: item.publicationId,
+      sku: item.sku,
+      publicName: item.publicName,
+      quantity: item.quantity,
+      unitPriceFinal: roundMoney(toNumber(item.unitPriceFinal)),
+      lineTotal: roundMoney(toNumber(item.lineTotal)),
+      stockMode: item.stockMode,
+      shippingType: item.shippingType,
+      pricingMode: item.pricingMode,
+      manualBilling: item.manualBilling,
+    })),
     createdAt: order.createdAt.toISOString(),
     expiresAt: order.expiresAt?.toISOString() ?? null,
+    approvedAt: order.approvedAt?.toISOString() ?? null,
+    rejectedAt: order.rejectedAt?.toISOString() ?? null,
+    cancelledAt: order.cancelledAt?.toISOString() ?? null,
   }));
 }
 
