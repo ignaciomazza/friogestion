@@ -26,11 +26,13 @@ const bodySchema = z.object({
     "QUOTE",
     "RESTRICTED",
   ]),
+  normalShippingOverrideAmount: z.coerce.number().nonnegative().optional().nullable(),
   stockMode: z.enum(["STRICT", "CONSULT", "BACKORDER", "OUT_OF_STOCK"]),
   webStockAvailable: z.coerce.number().int().nonnegative(),
   pricingMode: z.enum(["AUTO", "FIXED"]),
   fixedFinalPrice: z.coerce.number().nonnegative().optional().nullable(),
   priceAdjustmentPercent: z.coerce.number(),
+  mercadoPagoFeeDays: z.coerce.number().int().min(0).max(90).optional().nullable(),
   billingMode: z.enum(["DEFAULT", "MANUAL", "AUTO"]),
   flags: z
     .object({

@@ -78,6 +78,10 @@ type StorefrontPublicationWithProduct = Prisma.StorefrontPublicationGetPayload<{
   };
 }>;
 
+type StorefrontPublicationWithMercadoPagoFee = StorefrontPublicationWithProduct & {
+  mercadoPagoFeeDays: number | null;
+};
+
 type StorefrontOrderWithRelations = Prisma.StorefrontOrderGetPayload<{
   include: {
     channel: {
@@ -140,8 +144,11 @@ type StorefrontAdminPublicationRow = {
   webStockAvailable: number;
   webStockReserved: number;
   shippingType: "NORMAL" | "PICKUP" | "OWN_DELIVERY" | "QUOTE" | "RESTRICTED";
+  normalShippingOverrideAmount: number | null;
   pricingMode: "AUTO" | "FIXED";
   fixedFinalPrice: number | null;
+  mercadoPagoFeeDays: number | null;
+  mercadoPagoFeePercent: number;
   priceAdjustmentPercent: number;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
@@ -152,6 +159,11 @@ type StorefrontAdminPublicationRow = {
 type StorefrontPaymentAdjustmentInput = {
   paymentMethod: string;
   percent: number;
+};
+
+type StorefrontMercadoPagoFeeRuleInput = {
+  days: number;
+  netPercent: number;
 };
 
 type StorefrontChannelConfigInput = {
@@ -169,6 +181,10 @@ type StorefrontChannelConfigInput = {
   normalShippingAmount: number;
   reserveTtlMinutes: number;
   manualBillingByDefault: boolean;
+  productCategories: string[];
+  mercadoPagoFeeRegion?: string | null;
+  mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
+  mercadoPagoDefaultFeeDays?: number | null;
   paymentAdjustments: StorefrontPaymentAdjustmentInput[];
 };
 
@@ -182,11 +198,13 @@ type UpsertStorefrontPublicationInput = {
   category: string;
   featured: boolean;
   shippingType: "NORMAL" | "PICKUP" | "OWN_DELIVERY" | "QUOTE" | "RESTRICTED";
+  normalShippingOverrideAmount?: number | null;
   stockMode: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
   webStockAvailable: number;
   pricingMode: "AUTO" | "FIXED";
   fixedFinalPrice?: number | null;
   priceAdjustmentPercent: number;
+  mercadoPagoFeeDays?: number | null;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   flags?: {
     hasGas?: boolean;
@@ -206,6 +224,16 @@ type PaymentMutationResult = {
 const DEFAULT_CHANNEL_CODE = "default";
 const DEFAULT_CHANNEL_NAME = "Storefront";
 const DEFAULT_FALLBACK_EMAIL = "ventas@local.invalid";
+const DEFAULT_PRODUCT_CATEGORY = "General";
+const MERCADOPAGO_PAYMENT_METHOD = "mercadopago_checkout_api";
+const DEFAULT_MERCADOPAGO_FEE_REGION = "ba_ch_er";
+const DEFAULT_MERCADOPAGO_FEE_RULES = [
+  { days: 0, netPercent: 6.6 },
+  { days: 10, netPercent: 4.61 },
+  { days: 18, netPercent: 3.56 },
+  { days: 35, netPercent: 1.56 },
+] satisfies StorefrontMercadoPagoFeeRuleInput[];
+export const MERCADOPAGO_FEE_IVA_PERCENT = 21;
 const ORDER_COUNTER_KEY = "storefront-order-number";
 const SALE_COUNTER_KEY = "sale-number";
 export const STOREFRONT_DEFAULT_PRODUCT_LIMIT = 36;
@@ -280,6 +308,231 @@ const normalizeFreeText = (value?: string | null) => {
   const raw = value?.trim() ?? "";
   return raw ? compactSpaces(raw) : null;
 };
+
+const normalizeProductCategories = (
+  value: Prisma.JsonValue | string[] | null | undefined,
+) => {
+  const rawItems = Array.isArray(value) ? value : [];
+  const categories = rawItems
+    .map((item) => compactSpaces(String(item ?? "")))
+    .filter(Boolean);
+  const unique = Array.from(
+    new Map(
+      categories.map((category) => [
+        category.toLocaleLowerCase("es-AR"),
+        category,
+      ]),
+    ).values(),
+  ).slice(0, 24);
+
+  return unique.length ? unique : [DEFAULT_PRODUCT_CATEGORY];
+};
+
+const readChannelProductCategories = async (
+  client: typeof prisma | Prisma.TransactionClient,
+  channelId: string,
+) => {
+  const rows = await client.$queryRaw<
+    Array<{ productCategories: Prisma.JsonValue | null }>
+  >`
+    SELECT "productCategories"
+    FROM "StorefrontChannel"
+    WHERE "id" = ${channelId}
+    LIMIT 1
+  `;
+
+  return normalizeProductCategories(rows.at(0)?.productCategories);
+};
+
+const writeChannelProductCategories = async (
+  tx: Prisma.TransactionClient,
+  channelId: string,
+  categories: string[],
+) => {
+  await tx.$executeRaw`
+    UPDATE "StorefrontChannel"
+    SET "productCategories" = CAST(${JSON.stringify(
+      normalizeProductCategories(categories),
+    )} AS jsonb)
+    WHERE "id" = ${channelId}
+  `;
+};
+
+const roundPercent = (value: number) =>
+  Number.isFinite(value) ? Number(value.toFixed(4)) : 0;
+
+const normalizeMercadoPagoFeeRules = (
+  value: Prisma.JsonValue | StorefrontMercadoPagoFeeRuleInput[] | null | undefined,
+  legacyFinalPercent = 0,
+) => {
+  const rawItems = Array.isArray(value) ? value : [];
+  const rules = rawItems
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const raw = item as Record<string, unknown>;
+      const days = Math.max(0, Math.trunc(Number(raw.days ?? 0) || 0));
+      const netPercent = Math.max(0, roundPercent(Number(raw.netPercent ?? 0) || 0));
+      return { days, netPercent };
+    })
+    .filter((item): item is StorefrontMercadoPagoFeeRuleInput => Boolean(item));
+
+  const unique = Array.from(
+    new Map(rules.map((rule) => [rule.days, rule])).values(),
+  ).sort((a, b) => a.days - b.days);
+
+  if (unique.length) return unique.slice(0, 12);
+
+  const legacyNetPercent =
+    legacyFinalPercent > 0
+      ? roundPercent(legacyFinalPercent / (1 + MERCADOPAGO_FEE_IVA_PERCENT / 100))
+      : 0;
+
+  return [{ days: 0, netPercent: legacyNetPercent }];
+};
+
+const normalizeMercadoPagoDefaultFeeDays = (
+  value: number | null | undefined,
+  rules: StorefrontMercadoPagoFeeRuleInput[],
+) => {
+  const days = value === null || value === undefined ? null : Math.trunc(value);
+  if (days !== null && rules.some((rule) => rule.days === days)) return days;
+  return rules.at(0)?.days ?? 0;
+};
+
+export const calculateMercadoPagoFeeBreakdown = (netPercent: number) => {
+  const normalizedNet = Math.max(0, roundPercent(netPercent));
+  const ivaPercent = roundPercent(
+    normalizedNet * (MERCADOPAGO_FEE_IVA_PERCENT / 100),
+  );
+
+  return {
+    netPercent: normalizedNet,
+    ivaPercent,
+    finalPercent: roundPercent(normalizedNet + ivaPercent),
+  };
+};
+
+const resolveMercadoPagoFeeRule = (
+  rules: StorefrontMercadoPagoFeeRuleInput[],
+  days: number | null | undefined,
+) => {
+  const normalizedDays =
+    days === null || days === undefined ? null : Math.trunc(days);
+  return (
+    rules.find((rule) => rule.days === normalizedDays) ??
+    rules.at(0) ??
+    { days: 0, netPercent: 0 }
+  );
+};
+
+const resolveMercadoPagoFeePercent = (
+  rules: StorefrontMercadoPagoFeeRuleInput[],
+  days: number | null | undefined,
+) => {
+  const rule = resolveMercadoPagoFeeRule(rules, days);
+  return calculateMercadoPagoFeeBreakdown(rule.netPercent).finalPercent;
+};
+
+const readChannelMercadoPagoFeeConfig = async (
+  client: typeof prisma | Prisma.TransactionClient,
+  channelId: string,
+  legacyFinalPercent = 0,
+) => {
+  const rows = await client.$queryRaw<
+    Array<{
+      mercadoPagoFeeRegion: string | null;
+      mercadoPagoFeeRules: Prisma.JsonValue | null;
+      mercadoPagoDefaultFeeDays: number | null;
+    }>
+  >`
+    SELECT "mercadoPagoFeeRegion", "mercadoPagoFeeRules", "mercadoPagoDefaultFeeDays"
+    FROM "StorefrontChannel"
+    WHERE "id" = ${channelId}
+    LIMIT 1
+  `;
+  const row = rows.at(0);
+  const rules = normalizeMercadoPagoFeeRules(
+    row?.mercadoPagoFeeRules,
+    legacyFinalPercent,
+  );
+
+  return {
+    mercadoPagoFeeRegion:
+      row?.mercadoPagoFeeRegion || DEFAULT_MERCADOPAGO_FEE_REGION,
+    mercadoPagoFeeRules: rules,
+    mercadoPagoDefaultFeeDays: normalizeMercadoPagoDefaultFeeDays(
+      row?.mercadoPagoDefaultFeeDays,
+      rules,
+    ),
+  };
+};
+
+const writeChannelMercadoPagoFeeConfig = async (
+  tx: Prisma.TransactionClient,
+  channelId: string,
+  rules: StorefrontMercadoPagoFeeRuleInput[],
+  defaultFeeDays: number | null | undefined,
+  region: string | null | undefined,
+) => {
+  const normalizedRules = normalizeMercadoPagoFeeRules(rules);
+  const normalizedDefaultDays = normalizeMercadoPagoDefaultFeeDays(
+    defaultFeeDays,
+    normalizedRules,
+  );
+
+  await tx.$executeRaw`
+    UPDATE "StorefrontChannel"
+    SET
+      "mercadoPagoFeeRegion" = ${region || DEFAULT_MERCADOPAGO_FEE_REGION},
+      "mercadoPagoFeeRules" = CAST(${JSON.stringify(normalizedRules)} AS jsonb),
+      "mercadoPagoDefaultFeeDays" = ${normalizedDefaultDays}
+    WHERE "id" = ${channelId}
+  `;
+
+  return {
+    mercadoPagoFeeRegion: region || DEFAULT_MERCADOPAGO_FEE_REGION,
+    mercadoPagoFeeRules: normalizedRules,
+    mercadoPagoDefaultFeeDays: normalizedDefaultDays,
+  };
+};
+
+const writePublicationMercadoPagoFeeDays = async (
+  client: typeof prisma | Prisma.TransactionClient,
+  publicationId: string,
+  feeDays: number | null | undefined,
+) => {
+  const normalizedDays =
+    feeDays === null || feeDays === undefined ? null : Math.max(0, Math.trunc(feeDays));
+
+  await client.$executeRaw`
+    UPDATE "StorefrontPublication"
+    SET "mercadoPagoFeeDays" = ${normalizedDays}
+    WHERE "id" = ${publicationId}
+  `;
+};
+
+const readPublicationMercadoPagoFeeDaysMap = async (
+  client: typeof prisma | Prisma.TransactionClient,
+  publicationIds: string[],
+) => {
+  if (!publicationIds.length) return new Map<string, number | null>();
+  const rows = await client.$queryRaw<Array<{ id: string; mercadoPagoFeeDays: number | null }>>`
+    SELECT "id", "mercadoPagoFeeDays"
+    FROM "StorefrontPublication"
+    WHERE "id" IN (${Prisma.join(publicationIds)})
+  `;
+
+  return new Map(rows.map((row) => [row.id, row.mercadoPagoFeeDays]));
+};
+
+const attachPublicationMercadoPagoFeeDays = (
+  publications: StorefrontPublicationWithProduct[],
+  feeDaysByPublicationId: Map<string, number | null>,
+): StorefrontPublicationWithMercadoPagoFee[] =>
+  publications.map((publication) => ({
+    ...publication,
+    mercadoPagoFeeDays: feeDaysByPublicationId.get(publication.id) ?? null,
+  }));
 
 const normalizeEmail = (value: string) => value.trim().toLowerCase();
 
@@ -486,6 +739,7 @@ export function calculateStorefrontPricePreview(input: {
   fixedFinalPrice?: number | null;
   globalAdjustmentPercent?: number;
   paymentAdjustmentPercent?: number;
+  mercadoPagoFeePercent?: number;
   publicationAdjustmentPercent?: number;
 }) {
   if (input.pricingMode === "FIXED" && input.fixedFinalPrice !== null && input.fixedFinalPrice !== undefined) {
@@ -498,6 +752,7 @@ export function calculateStorefrontPricePreview(input: {
   const adjustmentPercentTotal = roundMoney(
     (input.globalAdjustmentPercent ?? 0) +
       (input.paymentAdjustmentPercent ?? 0) +
+      (input.mercadoPagoFeePercent ?? 0) +
       (input.publicationAdjustmentPercent ?? 0),
   );
 
@@ -581,12 +836,55 @@ const resolvePublicationItemManualBilling = (
   return channel.manualBillingByDefault;
 };
 
+const isMercadoPagoPaymentMethod = (paymentMethod: string) =>
+  paymentMethod.trim().toLowerCase().includes("mercadopago");
+
+const getLegacyMercadoPagoAdjustmentPercent = (
+  channel: StorefrontChannelWithRelations,
+) =>
+  toNumber(
+    channel.paymentAdjustments.find((candidate) =>
+      isMercadoPagoPaymentMethod(candidate.paymentMethod),
+    )?.percent,
+  );
+
+const readMercadoPagoFeeConfigForChannel = (
+  client: typeof prisma | Prisma.TransactionClient,
+  channel: StorefrontChannelWithRelations,
+) =>
+  readChannelMercadoPagoFeeConfig(
+    client,
+    channel.id,
+    getLegacyMercadoPagoAdjustmentPercent(channel),
+  );
+
 const resolvePublicationPrice = (
   channel: StorefrontChannelWithRelations,
-  publication: StorefrontPublicationWithProduct,
+  publication: StorefrontPublicationWithProduct & {
+    mercadoPagoFeeDays?: number | null;
+  },
   paymentMethod: string,
+  mercadoPagoFeeConfig?: {
+    mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
+    mercadoPagoDefaultFeeDays: number;
+  },
 ) => {
   const basePrice = resolveBasePrice(publication.product, channel.defaultPriceListId);
+  const legacyPaymentAdjustment = toNumber(
+    channel.paymentAdjustments.find(
+      (candidate) =>
+        candidate.paymentMethod.trim().toLowerCase() ===
+        paymentMethod.trim().toLowerCase(),
+    )?.percent,
+  );
+  const mercadoPagoFeePercent =
+    mercadoPagoFeeConfig && isMercadoPagoPaymentMethod(paymentMethod)
+      ? resolveMercadoPagoFeePercent(
+          mercadoPagoFeeConfig.mercadoPagoFeeRules,
+          publication.mercadoPagoFeeDays ??
+            mercadoPagoFeeConfig.mercadoPagoDefaultFeeDays,
+        )
+      : 0;
   const computed = calculateStorefrontPricePreview({
     basePrice,
     pricingMode: publication.pricingMode,
@@ -595,19 +893,18 @@ const resolvePublicationPrice = (
         ? null
         : roundMoney(toNumber(publication.fixedFinalPrice)),
     globalAdjustmentPercent: toNumber(channel.globalPriceAdjustmentPercent),
-    paymentAdjustmentPercent: toNumber(
-      channel.paymentAdjustments.find(
-        (candidate) =>
-          candidate.paymentMethod.trim().toLowerCase() ===
-          paymentMethod.trim().toLowerCase(),
-      )?.percent,
-    ),
+    paymentAdjustmentPercent:
+      mercadoPagoFeeConfig && isMercadoPagoPaymentMethod(paymentMethod)
+        ? 0
+        : legacyPaymentAdjustment,
+    mercadoPagoFeePercent,
     publicationAdjustmentPercent: toNumber(publication.priceAdjustmentPercent),
   });
 
   return {
     basePrice,
     adjustmentPercentTotal: computed.adjustmentPercentTotal,
+    mercadoPagoFeePercent,
     priceFinal: computed.priceFinal,
   };
 };
@@ -694,10 +991,19 @@ const buildPublicationSearchWhere = (
 
 const storefrontProductFromPublication = (
   channel: StorefrontChannelWithRelations,
-  publication: StorefrontPublicationWithProduct,
+  publication: StorefrontPublicationWithMercadoPagoFee,
   paymentMethod: string,
+  mercadoPagoFeeConfig: {
+    mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
+    mercadoPagoDefaultFeeDays: number;
+  },
 ): StorefrontProductDto => {
-  const pricing = resolvePublicationPrice(channel, publication, paymentMethod);
+  const pricing = resolvePublicationPrice(
+    channel,
+    publication,
+    paymentMethod,
+    mercadoPagoFeeConfig,
+  );
   const slug = publication.slug || normalizeSlug(publication.publicName || publication.product.name);
 
   return {
@@ -739,11 +1045,20 @@ const storefrontProductFromPublication = (
 
 const evaluateCartLine = (
   channel: StorefrontChannelWithRelations,
-  publication: StorefrontPublicationWithProduct,
+  publication: StorefrontPublicationWithMercadoPagoFee,
   requestedQuantity: number,
   paymentMethod: string,
+  mercadoPagoFeeConfig: {
+    mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
+    mercadoPagoDefaultFeeDays: number;
+  },
 ): StorefrontCartValidationLine => {
-  const product = storefrontProductFromPublication(channel, publication, paymentMethod);
+  const product = storefrontProductFromPublication(
+    channel,
+    publication,
+    paymentMethod,
+    mercadoPagoFeeConfig,
+  );
   const availability = evaluateStorefrontAvailability({
     publicationStatus: publication.publicationStatus,
     stockMode: publication.stockMode,
@@ -782,6 +1097,33 @@ const shippingTypeAllowsDeliveryMethod = (
     return deliveryMethod === "own_delivery" || deliveryMethod === "pickup";
   }
   return false;
+};
+
+const resolveNormalShippingAmount = (
+  channel: StorefrontChannelWithRelations,
+  items: StorefrontCartItemInput[],
+  publicationsByProductId: Map<string, StorefrontPublicationWithMercadoPagoFee>,
+) => {
+  const overrideAmounts = items
+    .map((item) => {
+      const publication = publicationsByProductId.get(item.productId);
+      if (!publication || publication.shippingType !== "NORMAL") return null;
+      if (publication.normalShippingOverrideAmount === null) return null;
+      return roundMoney(toNumber(publication.normalShippingOverrideAmount));
+    })
+    .filter((amount): amount is number => amount !== null);
+
+  if (overrideAmounts.length) {
+    return {
+      amount: Math.max(...overrideAmounts),
+      usesPublicationOverride: true,
+    };
+  }
+
+  return {
+    amount: roundMoney(toNumber(channel.normalShippingAmount)),
+    usesPublicationOverride: false,
+  };
 };
 
 const buildOrderEventKey = (payload: unknown, action: StorefrontPaymentEventAction) => {
@@ -1006,7 +1348,7 @@ const ensureDefaultChannelForOrganizationTx = async (
     throw new StorefrontDomainError("Organizacion no encontrada.", 404);
   }
 
-  return tx.storefrontChannel.create({
+  const created = await tx.storefrontChannel.create({
     data: {
       organizationId,
       code: DEFAULT_CHANNEL_CODE,
@@ -1018,7 +1360,7 @@ const ensureDefaultChannelForOrganizationTx = async (
       defaultPriceListId: defaultPriceList?.id,
       allowsCustomerAccounts: true,
       customerAccountsMode: "prepared",
-      defaultPaymentMethod: "mercadopago_checkout_api",
+      defaultPaymentMethod: MERCADOPAGO_PAYMENT_METHOD,
       globalPriceAdjustmentPercent: "0",
       normalShippingAmount: "0",
       reserveTtlMinutes: 30,
@@ -1026,6 +1368,23 @@ const ensureDefaultChannelForOrganizationTx = async (
     },
     ...getChannelInclude,
   });
+
+  await writeChannelProductCategories(tx, created.id, [DEFAULT_PRODUCT_CATEGORY]);
+  await writeChannelMercadoPagoFeeConfig(
+    tx,
+    created.id,
+    DEFAULT_MERCADOPAGO_FEE_RULES,
+    0,
+    DEFAULT_MERCADOPAGO_FEE_REGION,
+  );
+
+  return {
+    ...created,
+    productCategories: [DEFAULT_PRODUCT_CATEGORY],
+    mercadoPagoFeeRegion: DEFAULT_MERCADOPAGO_FEE_REGION,
+    mercadoPagoFeeRules: DEFAULT_MERCADOPAGO_FEE_RULES,
+    mercadoPagoDefaultFeeDays: 0,
+  };
 };
 
 const expirePendingOrdersTx = async (
@@ -1170,13 +1529,22 @@ const orderToDto = (
     | "items"
     | "channel"
   >,
-  publicationsByProductId: Map<string, StorefrontPublicationWithProduct>,
+  publicationsByProductId: Map<string, StorefrontPublicationWithMercadoPagoFee>,
   paymentMethod: string,
+  mercadoPagoFeeConfig: {
+    mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
+    mercadoPagoDefaultFeeDays: number;
+  },
 ): StorefrontOrderDto => {
   const items = order.items.flatMap((item) => {
       const publication = publicationsByProductId.get(item.productId);
       if (!publication) return [];
-      const product = storefrontProductFromPublication(order.channel, publication, paymentMethod);
+      const product = storefrontProductFromPublication(
+        order.channel,
+        publication,
+        paymentMethod,
+        mercadoPagoFeeConfig,
+      );
       return [{
         product,
         requestedQuantity: item.quantity,
@@ -1237,6 +1605,10 @@ export async function listStorefrontProducts(
 ): Promise<StorefrontProductsListDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
+  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
+    prisma,
+    channel,
+  );
 
   const baseWhere: Prisma.StorefrontPublicationWhereInput = {
     channelId,
@@ -1321,8 +1693,16 @@ export async function listStorefrontProducts(
         .filter(Boolean),
     ),
   ).sort((a, b) => a.localeCompare(b, "es-AR"));
+  const feeDaysByPublicationId = await readPublicationMercadoPagoFeeDaysMap(
+    prisma,
+    publications.map((publication) => publication.id),
+  );
+  const publicationsWithFeeDays = attachPublicationMercadoPagoFeeDays(
+    publications,
+    feeDaysByPublicationId,
+  );
 
-  const filteredPublications = publications.filter((publication) => {
+  const filteredPublications = publicationsWithFeeDays.filter((publication) => {
     if (filters.onlyAvailable) {
       const availableStock = resolvePublicationAvailableStock(publication);
       if (
@@ -1344,6 +1724,7 @@ export async function listStorefrontProducts(
           channel,
           publication,
           channel.defaultPaymentMethod,
+          mercadoPagoFeeConfig,
         ),
       ),
     total: totalWithoutPostFilters ?? filteredPublications.length,
@@ -1358,6 +1739,10 @@ export async function getStorefrontProduct(
 ): Promise<StorefrontProductDto | null> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
+  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
+    prisma,
+    channel,
+  );
 
   const publication = await prisma.storefrontPublication.findFirst({
     where: {
@@ -1369,11 +1754,22 @@ export async function getStorefrontProduct(
   });
 
   if (!publication) return null;
+  const feeDaysByPublicationId = await readPublicationMercadoPagoFeeDaysMap(
+    prisma,
+    [publication.id],
+  );
+  const publicationWithFeeDays = attachPublicationMercadoPagoFeeDays(
+    [publication],
+    feeDaysByPublicationId,
+  )[0];
+
+  if (!publicationWithFeeDays) return null;
 
   return storefrontProductFromPublication(
     channel,
-    publication,
+    publicationWithFeeDays,
     channel.defaultPaymentMethod,
+    mercadoPagoFeeConfig,
   );
 }
 
@@ -1384,12 +1780,24 @@ export async function validateStorefrontCart(
 ): Promise<StorefrontCartValidationDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
+  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
+    prisma,
+    channel,
+  );
 
   const normalizedItems = normalizeCartItems(items);
   assertStorefrontCartLimits(normalizedItems);
-  const publications = await loadPublicationsByProductIds(
+  const rawPublications = await loadPublicationsByProductIds(
     channelId,
     normalizedItems.map((item) => item.productId),
+  );
+  const feeDaysByPublicationId = await readPublicationMercadoPagoFeeDaysMap(
+    prisma,
+    rawPublications.map((publication) => publication.id),
+  );
+  const publications = attachPublicationMercadoPagoFeeDays(
+    rawPublications,
+    feeDaysByPublicationId,
   );
   const publicationByProductId = new Map(
     publications.map((publication) => [publication.productId, publication]),
@@ -1412,6 +1820,7 @@ export async function validateStorefrontCart(
         publication,
         item.quantity,
         resolvedPaymentMethod,
+        mercadoPagoFeeConfig,
       ),
     );
   }
@@ -1491,13 +1900,21 @@ export async function quoteStorefrontShipping(
   }
 
   if (input.deliveryMethod === "normal") {
+    const normalShipping = resolveNormalShippingAmount(
+      channel,
+      normalizedItems,
+      publicationByProductId,
+    );
+
     return {
       deliveryMethod: input.deliveryMethod,
       available: true,
       label: "Envio por transporte",
-      amount: roundMoney(toNumber(channel.normalShippingAmount)),
+      amount: normalShipping.amount,
       currencyCode: "ARS",
-      message: "Monto fijo configurable del canal storefront.",
+      message: normalShipping.usesPublicationOverride
+        ? "Monto fijo definido para la publicacion."
+        : "Monto fijo configurable del canal storefront.",
     };
   }
 
@@ -1528,6 +1945,10 @@ export async function createStorefrontOrder(
 ): Promise<StorefrontOrderDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
+  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
+    prisma,
+    channel,
+  );
 
   const normalizedItems = normalizeCartItems(input.items);
   assertStorefrontCartLimits(normalizedItems);
@@ -1538,13 +1959,21 @@ export async function createStorefrontOrder(
   return prisma.$transaction(async (tx) => {
     await expirePendingOrdersTx(tx, channelId, new Date());
 
-    const publications = await tx.storefrontPublication.findMany({
+    const rawPublications = await tx.storefrontPublication.findMany({
       where: {
         channelId,
         productId: { in: normalizedItems.map((item) => item.productId) },
       },
       ...productInclude,
     });
+    const feeDaysByPublicationId = await readPublicationMercadoPagoFeeDaysMap(
+      tx,
+      rawPublications.map((publication) => publication.id),
+    );
+    const publications = attachPublicationMercadoPagoFeeDays(
+      rawPublications,
+      feeDaysByPublicationId,
+    );
 
     const publicationByProductId = new Map(
       publications.map((publication) => [publication.productId, publication]),
@@ -1568,7 +1997,15 @@ export async function createStorefrontOrder(
           ...productInclude,
         })
       : [];
-    for (const publication of lockedPublications) {
+    const lockedFeeDaysByPublicationId =
+      await readPublicationMercadoPagoFeeDaysMap(
+        tx,
+        lockedPublications.map((publication) => publication.id),
+      );
+    for (const publication of attachPublicationMercadoPagoFeeDays(
+      lockedPublications,
+      lockedFeeDaysByPublicationId,
+    )) {
       publicationByProductId.set(publication.productId, publication);
     }
 
@@ -1581,7 +2018,13 @@ export async function createStorefrontOrder(
             409,
           );
         }
-        return evaluateCartLine(channel, publication, item.quantity, input.paymentMethod);
+        return evaluateCartLine(
+          channel,
+          publication,
+          item.quantity,
+          input.paymentMethod,
+          mercadoPagoFeeConfig,
+        );
       }),
     );
 
@@ -1665,7 +2108,12 @@ export async function createStorefrontOrder(
             if (!publication) {
               throw new StorefrontDomainError("No se pudo materializar el pedido.", 500);
             }
-            const pricing = resolvePublicationPrice(channel, publication, input.paymentMethod);
+            const pricing = resolvePublicationPrice(
+              channel,
+              publication,
+              input.paymentMethod,
+              mercadoPagoFeeConfig,
+            );
             return {
               organizationId: channel.organizationId,
               publicationId: publication.id,
@@ -1726,6 +2174,7 @@ export async function createStorefrontOrder(
       { ...created, channel },
       publicationByProductId,
       input.paymentMethod,
+      mercadoPagoFeeConfig,
     );
   });
 }
@@ -2103,7 +2552,17 @@ export async function markStorefrontOrderPaymentRejected(
 }
 
 export async function getStorefrontAdminChannel(organizationId: string) {
-  return ensureDefaultStorefrontChannel(organizationId);
+  const channel = await ensureDefaultStorefrontChannel(organizationId);
+  const [productCategories, mercadoPagoFeeConfig] = await Promise.all([
+    readChannelProductCategories(prisma, channel.id),
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+  ]);
+
+  return {
+    ...channel,
+    productCategories,
+    ...mercadoPagoFeeConfig,
+  };
 }
 
 export async function updateStorefrontAdminChannel(
@@ -2111,51 +2570,94 @@ export async function updateStorefrontAdminChannel(
   input: StorefrontChannelConfigInput,
 ) {
   const channel = await ensureDefaultStorefrontChannel(organizationId);
-  return prisma.$transaction(async (tx) => {
-    const updated = await tx.storefrontChannel.update({
-      where: { id: channel.id },
-      data: {
-        name: compactSpaces(input.name),
-        storeName: compactSpaces(input.storeName),
-        supportEmail: input.supportEmail?.trim() || null,
-        supportPhone: input.supportPhone?.trim() || null,
-        pickupAddress: input.pickupAddress?.trim() || null,
-        currencyCode: input.currencyCode?.trim() || "ARS",
-        defaultPriceListId: input.defaultPriceListId || null,
-        allowsCustomerAccounts: input.allowsCustomerAccounts,
-        customerAccountsMode: input.customerAccountsMode,
-        defaultPaymentMethod: input.defaultPaymentMethod.trim(),
-        globalPriceAdjustmentPercent: roundMoney(
-          input.globalPriceAdjustmentPercent,
-        ).toFixed(4),
-        normalShippingAmount: roundMoney(input.normalShippingAmount).toFixed(2),
-        reserveTtlMinutes: Math.max(1, Math.trunc(input.reserveTtlMinutes)),
-        manualBillingByDefault: input.manualBillingByDefault,
-      },
-      ...getChannelInclude,
-    });
+  const productCategories = normalizeProductCategories(input.productCategories);
+  const mercadoPagoFeeRules = normalizeMercadoPagoFeeRules(
+    input.mercadoPagoFeeRules,
+  );
+  const mercadoPagoDefaultFeeDays = normalizeMercadoPagoDefaultFeeDays(
+    input.mercadoPagoDefaultFeeDays,
+    mercadoPagoFeeRules,
+  );
+  const mercadoPagoDefaultFinalPercent = resolveMercadoPagoFeePercent(
+    mercadoPagoFeeRules,
+    mercadoPagoDefaultFeeDays,
+  );
 
-    await tx.storefrontPaymentAdjustment.deleteMany({
-      where: { channelId: channel.id },
-    });
-
-    if (input.paymentAdjustments.length) {
-      await tx.storefrontPaymentAdjustment.createMany({
-        data: input.paymentAdjustments.map((item) => ({
-          organizationId,
-          channelId: channel.id,
-          paymentMethod: item.paymentMethod.trim(),
-          percent: roundMoney(item.percent).toFixed(4),
-          isActive: true,
-        })),
+  return prisma.$transaction(
+    async (tx) => {
+      const updated = await tx.storefrontChannel.update({
+        where: { id: channel.id },
+        data: {
+          name: compactSpaces(input.name),
+          storeName: compactSpaces(input.storeName),
+          supportEmail: input.supportEmail?.trim() || null,
+          supportPhone: input.supportPhone?.trim() || null,
+          pickupAddress: input.pickupAddress?.trim() || null,
+          currencyCode: input.currencyCode?.trim() || "ARS",
+          defaultPriceListId: input.defaultPriceListId || null,
+          allowsCustomerAccounts: input.allowsCustomerAccounts,
+          customerAccountsMode: input.customerAccountsMode,
+          defaultPaymentMethod: input.defaultPaymentMethod.trim(),
+          globalPriceAdjustmentPercent: roundMoney(
+            input.globalPriceAdjustmentPercent,
+          ).toFixed(4),
+          normalShippingAmount: roundMoney(input.normalShippingAmount).toFixed(2),
+          reserveTtlMinutes: Math.max(1, Math.trunc(input.reserveTtlMinutes)),
+          manualBillingByDefault: input.manualBillingByDefault,
+        },
+        ...getChannelInclude,
       });
-    }
 
-    return tx.storefrontChannel.findUniqueOrThrow({
-      where: { id: updated.id },
-      ...getChannelInclude,
-    });
-  });
+      await writeChannelProductCategories(tx, channel.id, productCategories);
+      const savedMercadoPagoFeeConfig = await writeChannelMercadoPagoFeeConfig(
+        tx,
+        channel.id,
+        mercadoPagoFeeRules,
+        mercadoPagoDefaultFeeDays,
+        input.mercadoPagoFeeRegion,
+      );
+
+      await tx.storefrontPaymentAdjustment.deleteMany({
+        where: { channelId: channel.id },
+      });
+
+      const paymentAdjustments = input.paymentAdjustments.filter(
+        (item) => !isMercadoPagoPaymentMethod(item.paymentMethod),
+      );
+      paymentAdjustments.push({
+        paymentMethod: MERCADOPAGO_PAYMENT_METHOD,
+        percent: mercadoPagoDefaultFinalPercent,
+      });
+
+      if (paymentAdjustments.length) {
+        await tx.storefrontPaymentAdjustment.createMany({
+          data: paymentAdjustments.map((item) => ({
+            organizationId,
+            channelId: channel.id,
+            paymentMethod: item.paymentMethod.trim(),
+            percent: roundMoney(item.percent).toFixed(4),
+            isActive: true,
+          })),
+        });
+      }
+
+      const saved = await tx.storefrontChannel.findUniqueOrThrow({
+        where: { id: updated.id },
+        ...getChannelInclude,
+      });
+      const savedProductCategories = await readChannelProductCategories(
+        tx,
+        saved.id,
+      );
+
+      return {
+        ...saved,
+        productCategories: savedProductCategories,
+        ...savedMercadoPagoFeeConfig,
+      };
+    },
+    { maxWait: 10_000, timeout: 20_000 },
+  );
 }
 
 export async function createStorefrontAdminApiKey(
@@ -2228,6 +2730,10 @@ export async function listStorefrontAdminPublications(
   query?: string,
 ): Promise<StorefrontAdminPublicationRow[]> {
   const channel = await ensureDefaultStorefrontChannel(organizationId);
+  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
+    prisma,
+    channel,
+  );
   const [products, publications, salesByProduct] = await Promise.all([
     prisma.product.findMany({
       where: { organizationId },
@@ -2260,8 +2766,15 @@ export async function listStorefrontAdminPublications(
     }),
   ]);
 
-  const publicationByProductId = new Map(
-    publications.map((publication) => [publication.productId, publication]),
+  const feeDaysByPublicationId = await readPublicationMercadoPagoFeeDaysMap(
+    prisma,
+    publications.map((publication) => publication.id),
+  );
+  const publicationWithFeeByProductId = new Map(
+    attachPublicationMercadoPagoFeeDays(
+      publications,
+      feeDaysByPublicationId,
+    ).map((publication) => [publication.productId, publication]),
   );
   const salesCountByProductId = new Map(
     salesByProduct.map((item) => [item.productId, item._sum.quantity ?? 0]),
@@ -2286,14 +2799,23 @@ export async function listStorefrontAdminPublications(
       );
     })
     .map((product) => {
-      const publication = publicationByProductId.get(product.id) ?? null;
+      const publication = publicationWithFeeByProductId.get(product.id) ?? null;
       const derivedSlug = normalizeSlug(publication?.publicName || product.name);
       const pricing =
         publication === null
           ? {
               priceFinal: resolveBasePrice(product, channel.defaultPriceListId),
+              mercadoPagoFeePercent: resolveMercadoPagoFeePercent(
+                mercadoPagoFeeConfig.mercadoPagoFeeRules,
+                mercadoPagoFeeConfig.mercadoPagoDefaultFeeDays,
+              ),
             }
-          : resolvePublicationPrice(channel, publication, channel.defaultPaymentMethod);
+          : resolvePublicationPrice(
+              channel,
+              publication,
+              channel.defaultPaymentMethod,
+              mercadoPagoFeeConfig,
+            );
 
       return {
         publicationId: publication?.id ?? null,
@@ -2313,11 +2835,18 @@ export async function listStorefrontAdminPublications(
         webStockAvailable: publication?.webStockAvailable ?? 0,
         webStockReserved: publication?.webStockReserved ?? 0,
         shippingType: publication?.shippingType ?? "NORMAL",
+        normalShippingOverrideAmount:
+          publication?.normalShippingOverrideAmount === null ||
+          publication?.normalShippingOverrideAmount === undefined
+            ? null
+            : roundMoney(toNumber(publication.normalShippingOverrideAmount)),
         pricingMode: publication?.pricingMode ?? "AUTO",
         fixedFinalPrice:
           publication?.fixedFinalPrice === null || publication?.fixedFinalPrice === undefined
             ? null
             : roundMoney(toNumber(publication.fixedFinalPrice)),
+        mercadoPagoFeeDays: publication?.mercadoPagoFeeDays ?? null,
+        mercadoPagoFeePercent: pricing.mercadoPagoFeePercent,
         priceAdjustmentPercent: roundMoney(
           toNumber(publication?.priceAdjustmentPercent ?? 0),
         ),
@@ -2394,6 +2923,12 @@ export async function upsertStorefrontAdminPublication(
     category: compactSpaces(input.category),
     featured: input.featured,
     shippingType: input.shippingType,
+    normalShippingOverrideAmount:
+      input.shippingType === "NORMAL" &&
+      input.normalShippingOverrideAmount !== null &&
+      input.normalShippingOverrideAmount !== undefined
+        ? roundMoney(input.normalShippingOverrideAmount).toFixed(2)
+        : null,
     stockMode: input.stockMode,
     webStockAvailable: Math.max(0, Math.trunc(input.webStockAvailable)),
     pricingMode: input.pricingMode,
@@ -2429,8 +2964,21 @@ export async function upsertStorefrontAdminPublication(
         webStockReserved: existing.webStockReserved,
       },
     });
+    await writePublicationMercadoPagoFeeDays(
+      prisma,
+      existing.id,
+      input.mercadoPagoFeeDays,
+    );
   } else {
-    await prisma.storefrontPublication.create({ data });
+    const created = await prisma.storefrontPublication.create({
+      data,
+      select: { id: true },
+    });
+    await writePublicationMercadoPagoFeeDays(
+      prisma,
+      created.id,
+      input.mercadoPagoFeeDays,
+    );
   }
 
   return prisma.storefrontPublication.findFirstOrThrow({
@@ -2442,6 +2990,45 @@ export async function upsertStorefrontAdminPublication(
     ...productInclude,
   });
 }
+
+const formatDeliveryNoteNumber = (
+  note: {
+    type: string;
+    pointOfSale: number;
+    number: number | null;
+  } | null,
+) => {
+  if (!note?.number) return null;
+  return `${note.type}-${String(note.pointOfSale).padStart(4, "0")}-${String(
+    note.number,
+  ).padStart(8, "0")}`;
+};
+
+const summarizeDeliveryNotes = (
+  notes: Array<{
+    type: string;
+    pointOfSale: number;
+    number: number | null;
+    status: "DRAFT" | "ISSUED" | "DELIVERED" | "CANCELLED";
+    issuedAt: Date | null;
+    deliveredAt: Date | null;
+  }>,
+) => {
+  const activeNotes = notes.filter((note) => note.status !== "CANCELLED");
+  const selected =
+    activeNotes.find((note) => note.status === "DELIVERED") ??
+    activeNotes.find((note) => note.status === "ISSUED") ??
+    activeNotes.find((note) => note.status === "DRAFT") ??
+    notes.find((note) => note.status === "CANCELLED") ??
+    null;
+
+  return {
+    status: selected?.status ?? "NONE",
+    issuedAt: selected?.issuedAt?.toISOString() ?? null,
+    deliveredAt: selected?.deliveredAt?.toISOString() ?? null,
+    noteNumber: formatDeliveryNoteNumber(selected),
+  };
+};
 
 export async function listStorefrontAdminOrders(
   organizationId: string,
@@ -2458,6 +3045,23 @@ export async function listStorefrontAdminOrders(
     },
     include: {
       items: true,
+      sale: {
+        select: {
+          id: true,
+          saleNumber: true,
+          deliveryNotes: {
+            select: {
+              type: true,
+              pointOfSale: true,
+              number: true,
+              status: true,
+              issuedAt: true,
+              deliveredAt: true,
+            },
+            orderBy: [{ createdAt: "desc" }],
+          },
+        },
+      },
     },
     orderBy: [{ createdAt: "desc" }],
     take: 100,
@@ -2466,6 +3070,8 @@ export async function listStorefrontAdminOrders(
   return orders.map((order) => ({
     id: order.id,
     displayNumber: order.displayNumber,
+    saleId: order.sale?.id ?? null,
+    saleNumber: order.sale?.saleNumber ?? null,
     status: order.status,
     paymentStatus: order.paymentStatus,
     customerDisplayName: order.customerDisplayName,
@@ -2500,6 +3106,7 @@ export async function listStorefrontAdminOrders(
     approvedAt: order.approvedAt?.toISOString() ?? null,
     rejectedAt: order.rejectedAt?.toISOString() ?? null,
     cancelledAt: order.cancelledAt?.toISOString() ?? null,
+    deliverySummary: summarizeDeliveryNotes(order.sale?.deliveryNotes ?? []),
   }));
 }
 

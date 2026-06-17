@@ -23,6 +23,16 @@ import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { APP_NAVIGATION_GUARD_EVENT } from "@/lib/navigation-guard";
 import "react-toastify/dist/ReactToastify.css";
 
+type MercadoPagoFeeRule = {
+  days: number;
+  netPercent: number;
+};
+
+type MercadoPagoFeeRuleForm = {
+  days: string;
+  netPercent: string;
+};
+
 type ChannelResponse = {
   channel: {
     id: string;
@@ -40,6 +50,10 @@ type ChannelResponse = {
     normalShippingAmount: string | number;
     reserveTtlMinutes: number;
     manualBillingByDefault: boolean;
+    productCategories: string[];
+    mercadoPagoFeeRegion?: string | null;
+    mercadoPagoFeeRules?: MercadoPagoFeeRule[];
+    mercadoPagoDefaultFeeDays?: number | null;
     paymentAdjustments: Array<{
       id: string;
       paymentMethod: string;
@@ -79,8 +93,11 @@ type PublicationRow = {
   webStockAvailable: number;
   webStockReserved: number;
   shippingType: "NORMAL" | "PICKUP" | "OWN_DELIVERY" | "QUOTE" | "RESTRICTED";
+  normalShippingOverrideAmount: number | null;
   pricingMode: "AUTO" | "FIXED";
   fixedFinalPrice: number | null;
+  mercadoPagoFeeDays: number | null;
+  mercadoPagoFeePercent: number;
   priceAdjustmentPercent: number;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
@@ -91,6 +108,8 @@ type PublicationRow = {
 type OrderRow = {
   id: string;
   displayNumber: string | null;
+  saleId: string | null;
+  saleNumber: string | null;
   status: string;
   paymentStatus: string;
   customerDisplayName: string;
@@ -131,6 +150,12 @@ type OrderRow = {
   approvedAt: string | null;
   rejectedAt: string | null;
   cancelledAt: string | null;
+  deliverySummary: {
+    status: "NONE" | "DRAFT" | "ISSUED" | "DELIVERED" | "CANCELLED";
+    issuedAt: string | null;
+    deliveredAt: string | null;
+    noteNumber: string | null;
+  };
 };
 
 type ConfigFormState = {
@@ -147,7 +172,10 @@ type ConfigFormState = {
   normalShippingAmount: string;
   reserveTtlMinutes: string;
   manualBillingByDefault: boolean;
-  paymentAdjustmentMercadoPago: string;
+  productCategories: string[];
+  mercadoPagoFeeRegion: string;
+  mercadoPagoFeeRules: MercadoPagoFeeRuleForm[];
+  mercadoPagoDefaultFeeDays: string;
 };
 
 export type StorefrontSectionKey = "config" | "publications" | "orders";
@@ -160,7 +188,8 @@ type PublicationSortKey =
   | "stock-asc";
 type PublicationStatusFilter = "active" | "paused" | "all";
 type OrderSortKey = "created-desc" | "created-asc" | "total-desc" | "total-asc";
-type OrderStatusFilter = "active" | "pending" | "confirmed" | "archived" | "all";
+type OrderStatusFilter = "pending" | "to-deliver" | "delivered" | "closed" | "all";
+type OrderDateRangeFilter = "operational" | "day" | "week" | "month" | "all";
 
 const stockModeTone: Record<PublicationRow["stockMode"], string> = {
   STRICT: "border-sky-200 bg-sky-50 text-sky-900",
@@ -172,22 +201,6 @@ const stockModeTone: Record<PublicationRow["stockMode"], string> = {
 const statusTone: Record<PublicationRow["publicationStatus"], string> = {
   PUBLISHED: "border-emerald-200 bg-emerald-50 text-emerald-900",
   PAUSED: "border-zinc-200 bg-zinc-100 text-zinc-700",
-};
-
-const orderStatusTone: Record<string, string> = {
-  PENDING_PAYMENT: "border-amber-200 bg-amber-50 text-amber-900",
-  CONFIRMED: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  REJECTED: "border-rose-200 bg-rose-50 text-rose-900",
-  CANCELLED: "border-zinc-200 bg-zinc-100 text-zinc-700",
-  EXPIRED: "border-zinc-200 bg-zinc-100 text-zinc-700",
-};
-
-const paymentTone: Record<string, string> = {
-  PENDING: "border-amber-200 bg-amber-50 text-amber-900",
-  APPROVED: "border-emerald-200 bg-emerald-50 text-emerald-900",
-  REJECTED: "border-rose-200 bg-rose-50 text-rose-900",
-  CANCELLED: "border-zinc-200 bg-zinc-100 text-zinc-700",
-  REFUNDED: "border-zinc-200 bg-zinc-100 text-zinc-700",
 };
 
 const publicationStatusLabels: Record<PublicationRow["publicationStatus"], string> = {
@@ -216,20 +229,20 @@ const billingModeLabels: Record<PublicationRow["billingMode"], string> = {
   AUTO: "Automatico",
 };
 
-const orderStatusLabels: Record<string, string> = {
-  PENDING_PAYMENT: "Pendiente de pago",
-  CONFIRMED: "Confirmado",
-  REJECTED: "Rechazado",
-  CANCELLED: "Cancelado",
-  EXPIRED: "Expirado",
+const deliveryStatusLabels: Record<OrderRow["deliverySummary"]["status"], string> = {
+  NONE: "Entrega pendiente",
+  DRAFT: "Remito en borrador",
+  ISSUED: "Remito emitido",
+  DELIVERED: "Entregado",
+  CANCELLED: "Remito cancelado",
 };
 
-const paymentStatusLabels: Record<string, string> = {
-  PENDING: "Pendiente",
-  APPROVED: "Aprobado",
-  REJECTED: "Rechazado",
-  CANCELLED: "Cancelado",
-  REFUNDED: "Reintegrado",
+const deliveryTone: Record<OrderRow["deliverySummary"]["status"], string> = {
+  NONE: "border-amber-200 bg-amber-50 text-amber-900",
+  DRAFT: "border-amber-200 bg-amber-50 text-amber-900",
+  ISSUED: "border-sky-200 bg-sky-50 text-sky-900",
+  DELIVERED: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  CANCELLED: "border-zinc-200 bg-zinc-100 text-zinc-700",
 };
 
 const deliveryMethodLabels: Record<OrderRow["deliveryMethod"], string> = {
@@ -242,13 +255,53 @@ const deliveryMethodLabels: Record<OrderRow["deliveryMethod"], string> = {
 const closedOrderStatuses = new Set(["CANCELLED", "EXPIRED", "REJECTED"]);
 const closedPaymentStatuses = new Set(["CANCELLED", "REJECTED", "REFUNDED"]);
 
-const isArchivedOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
+const isClosedOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
   closedOrderStatuses.has(order.status) ||
   closedPaymentStatuses.has(order.paymentStatus);
 
 const isPendingOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
-  !isArchivedOrder(order) &&
+  !isClosedOrder(order) &&
   (order.status === "PENDING_PAYMENT" || order.paymentStatus === "PENDING");
+
+const isConfirmedOrder = (order: Pick<OrderRow, "status" | "paymentStatus">) =>
+  !isClosedOrder(order) && order.status === "CONFIRMED";
+
+const isDeliveredOrder = (
+  order: Pick<OrderRow, "status" | "paymentStatus" | "deliverySummary">,
+) => isConfirmedOrder(order) && order.deliverySummary.status === "DELIVERED";
+
+const isToDeliverOrder = (
+  order: Pick<OrderRow, "status" | "paymentStatus" | "deliverySummary">,
+) => isConfirmedOrder(order) && order.deliverySummary.status !== "DELIVERED";
+
+const matchesOrderStatusFilter = (
+  order: Pick<OrderRow, "status" | "paymentStatus" | "deliverySummary">,
+  filter: OrderStatusFilter,
+) => {
+  if (filter === "pending") return isPendingOrder(order);
+  if (filter === "to-deliver") return isToDeliverOrder(order);
+  if (filter === "delivered") return isDeliveredOrder(order);
+  if (filter === "closed") return isClosedOrder(order);
+  return true;
+};
+
+const getOrderDateRangeStart = (
+  rangeFilter: OrderDateRangeFilter,
+  statusFilter: OrderStatusFilter,
+) => {
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+
+  if (rangeFilter === "day") return now - day;
+  if (rangeFilter === "week") return now - 7 * day;
+  if (rangeFilter === "month") return now - 30 * day;
+  if (rangeFilter === "operational") {
+    if (statusFilter === "closed") return now - 7 * day;
+    if (statusFilter === "delivered") return now - 30 * day;
+  }
+
+  return null;
+};
 
 const panelClass =
   "rounded-[22px] border border-zinc-200 bg-white shadow-[0_16px_50px_-42px_rgba(24,39,75,0.28)]";
@@ -257,6 +310,27 @@ const fieldClass =
 const textareaClass =
   "min-h-[118px] w-full rounded-[20px] border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-sky-200 focus:ring-2 focus:ring-sky-400/40";
 const PUBLICATIONS_PAGE_SIZE = 18;
+const MERCADOPAGO_FEE_IVA_PERCENT = 21;
+const DEFAULT_MERCADOPAGO_FEE_REGION = "ba_ch_er";
+const MERCADOPAGO_MAX_FEE_RULES = [
+  { days: 0, netPercent: 6.6 },
+  { days: 10, netPercent: 4.61 },
+  { days: 18, netPercent: 3.56 },
+  { days: 35, netPercent: 1.56 },
+] satisfies MercadoPagoFeeRule[];
+
+const mercadoPagoFeeRulesToForm = (rules: MercadoPagoFeeRule[]) =>
+  rules.map((rule) => ({
+    days: String(rule.days),
+    netPercent: String(rule.netPercent),
+  }));
+
+const DEFAULT_MERCADOPAGO_FEE_RULES = mercadoPagoFeeRulesToForm(
+  MERCADOPAGO_MAX_FEE_RULES,
+);
+
+const getMercadoPagoDaysLabel = (days: number) =>
+  days === 0 ? "Al instante" : `${days} dias`;
 
 const createDefaultConfigForm = (): ConfigFormState => ({
   name: "Storefront",
@@ -272,7 +346,10 @@ const createDefaultConfigForm = (): ConfigFormState => ({
   normalShippingAmount: "0",
   reserveTtlMinutes: "30",
   manualBillingByDefault: true,
-  paymentAdjustmentMercadoPago: "0",
+  productCategories: ["General"],
+  mercadoPagoFeeRegion: DEFAULT_MERCADOPAGO_FEE_REGION,
+  mercadoPagoFeeRules: DEFAULT_MERCADOPAGO_FEE_RULES,
+  mercadoPagoDefaultFeeDays: "0",
 });
 
 const serializePublicationDraft = (row: PublicationRow) =>
@@ -285,10 +362,12 @@ const serializePublicationDraft = (row: PublicationRow) =>
     category: row.category,
     featured: row.featured,
     shippingType: row.shippingType,
+    normalShippingOverrideAmount: row.normalShippingOverrideAmount,
     stockMode: row.stockMode,
     webStockAvailable: row.webStockAvailable,
     pricingMode: row.pricingMode,
     fixedFinalPrice: row.fixedFinalPrice,
+    mercadoPagoFeeDays: row.mercadoPagoFeeDays,
     priceAdjustmentPercent: row.priceAdjustmentPercent,
     billingMode: row.billingMode,
   });
@@ -300,13 +379,103 @@ const serializeConfigForm = (form: ConfigFormState) =>
     normalShippingAmount: form.normalShippingAmount,
     reserveTtlMinutes: form.reserveTtlMinutes,
     manualBillingByDefault: form.manualBillingByDefault,
-    paymentAdjustmentMercadoPago: form.paymentAdjustmentMercadoPago,
+    productCategories: form.productCategories,
+    mercadoPagoFeeRegion: form.mercadoPagoFeeRegion,
+    mercadoPagoFeeRules: normalizeMercadoPagoFeeRulesForPayload(
+      form.mercadoPagoFeeRules,
+    ),
+    mercadoPagoDefaultFeeDays: normalizeMercadoPagoDefaultFeeDays(
+      form.mercadoPagoDefaultFeeDays,
+      form.mercadoPagoFeeRules,
+    ),
   });
 
 const toNumber = (value: string | number | null | undefined) => {
   if (value === null || value === undefined || value === "") return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const roundPercent = (value: number) =>
+  Number.isFinite(value) ? Number(value.toFixed(4)) : 0;
+
+const formatPercent = (value: number) =>
+  roundPercent(value).toLocaleString("es-AR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+
+const getMercadoPagoFeeBreakdown = (netPercent: number) => {
+  const normalizedNet = Math.max(0, roundPercent(netPercent));
+  const ivaPercent = roundPercent(
+    normalizedNet * (MERCADOPAGO_FEE_IVA_PERCENT / 100),
+  );
+
+  return {
+    netPercent: normalizedNet,
+    ivaPercent,
+    finalPercent: roundPercent(normalizedNet + ivaPercent),
+  };
+};
+
+const normalizeMercadoPagoFeeRulesForPayload = (
+  rules: MercadoPagoFeeRuleForm[],
+) => {
+  const normalized = rules
+    .map((rule) => ({
+      days: Math.max(0, Math.trunc(toNumber(rule.days))),
+      netPercent: Math.max(0, roundPercent(toNumber(rule.netPercent))),
+    }))
+    .filter((rule) => Number.isFinite(rule.days) && Number.isFinite(rule.netPercent));
+  const unique = Array.from(
+    new Map(normalized.map((rule) => [rule.days, rule])).values(),
+  )
+    .sort((a, b) => a.days - b.days)
+    .slice(0, 12);
+
+  return unique.length ? unique : [{ days: 0, netPercent: 0 }];
+};
+
+const normalizeMercadoPagoDefaultFeeDays = (
+  value: string | number | null | undefined,
+  rules: MercadoPagoFeeRuleForm[],
+) => {
+  const normalizedRules = normalizeMercadoPagoFeeRulesForPayload(rules);
+  const days =
+    value === null || value === undefined || value === ""
+      ? null
+      : Math.trunc(Number(value));
+  if (days !== null && normalizedRules.some((rule) => rule.days === days)) {
+    return days;
+  }
+  return normalizedRules.at(0)?.days ?? 0;
+};
+
+const getMercadoPagoRuleLabel = (rule: MercadoPagoFeeRule) => {
+  const breakdown = getMercadoPagoFeeBreakdown(rule.netPercent);
+  return `${getMercadoPagoDaysLabel(rule.days)} · ${formatPercent(
+    breakdown.finalPercent,
+  )}% final`;
+};
+
+const normalizeProductCategoryName = (value: string) =>
+  value.trim().replace(/\s+/g, " ").slice(0, 80);
+
+const normalizeProductCategoryList = (value: unknown) => {
+  const rawItems = Array.isArray(value) ? value : [];
+  const categories = rawItems
+    .map((item) => normalizeProductCategoryName(String(item ?? "")))
+    .filter(Boolean);
+  const unique = Array.from(
+    new Map(
+      categories.map((category) => [
+        category.toLocaleLowerCase("es-AR"),
+        category,
+      ]),
+    ).values(),
+  ).slice(0, 24);
+
+  return unique.length ? unique : ["General"];
 };
 
 const formatMoney = (value: number) =>
@@ -320,6 +489,147 @@ const formatDateTime = (value: string | null) => {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return "Sin registrar";
   return parsed.toLocaleString("es-AR");
+};
+
+const isPastDateTime = (value: string | null) => {
+  if (!value) return false;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) && parsed <= Date.now();
+};
+
+const getOrderCommercialState = (order: OrderRow) => {
+  if (order.status === "PENDING_PAYMENT") {
+    const expiredLocally = isPastDateTime(order.expiresAt);
+    return {
+      label: expiredLocally
+        ? `Reserva vencida ${formatDateTime(order.expiresAt)}`
+        : `Pago pendiente hasta ${formatDateTime(order.expiresAt)}`,
+      tone: expiredLocally
+        ? "border-zinc-200 bg-zinc-100 text-zinc-700"
+        : "border-amber-200 bg-amber-50 text-amber-900",
+      icon: expiredLocally ? "x" : "clock",
+    };
+  }
+
+  if (order.status === "CONFIRMED") {
+    return {
+      label: `Pago confirmado ${formatDateTime(order.approvedAt ?? order.createdAt)}`,
+      tone: "border-emerald-200 bg-emerald-50 text-emerald-900",
+      icon: "check",
+    };
+  }
+
+  if (order.status === "REJECTED") {
+    return {
+      label: `Pago rechazado ${formatDateTime(order.rejectedAt)}`,
+      tone: "border-rose-200 bg-rose-50 text-rose-900",
+      icon: "x",
+    };
+  }
+
+  if (order.status === "CANCELLED") {
+    return {
+      label: `Pedido cancelado ${formatDateTime(order.cancelledAt)}`,
+      tone: "border-zinc-200 bg-zinc-100 text-zinc-700",
+      icon: "x",
+    };
+  }
+
+  if (order.paymentStatus === "REFUNDED") {
+    return {
+      label: `Pago reintegrado ${formatDateTime(
+        order.cancelledAt ?? order.createdAt,
+      )}`,
+      tone: "border-zinc-200 bg-zinc-100 text-zinc-700",
+      icon: "x",
+    };
+  }
+
+  return {
+    label: `Reserva vencida ${formatDateTime(
+      order.cancelledAt ?? order.expiresAt,
+    )}`,
+    tone: "border-zinc-200 bg-zinc-100 text-zinc-700",
+    icon: "x",
+  };
+};
+
+const getOrderCommercialIcon = (
+  icon: ReturnType<typeof getOrderCommercialState>["icon"],
+) => {
+  if (icon === "check") return <CheckIcon />;
+  if (icon === "clock") return <ClockIcon />;
+  return <XMarkIcon />;
+};
+
+const getOrderOperationalDate = (order: OrderRow) => {
+  if (order.status === "CONFIRMED") return order.approvedAt ?? order.createdAt;
+  if (order.status === "REJECTED") return order.rejectedAt ?? order.createdAt;
+  if (order.status === "CANCELLED") return order.cancelledAt ?? order.createdAt;
+  if (order.status === "EXPIRED") {
+    return order.cancelledAt ?? order.expiresAt ?? order.createdAt;
+  }
+  return order.createdAt;
+};
+
+const getDateTimeMs = (value: string | null) => {
+  if (!value) return 0;
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const isOrderInsideDateRange = (order: OrderRow, rangeStart: number | null) =>
+  rangeStart === null || getDateTimeMs(getOrderOperationalDate(order)) >= rangeStart;
+
+const getOrderTimelineRows = (order: OrderRow) => {
+  const rows = [{ label: "Creado", value: formatDateTime(order.createdAt) }];
+
+  if (order.status === "PENDING_PAYMENT") {
+    rows.push({
+      label: isPastDateTime(order.expiresAt)
+        ? "Reserva vencida"
+        : "Reserva vigente hasta",
+      value: formatDateTime(order.expiresAt),
+    });
+  } else if (order.status === "CONFIRMED") {
+    rows.push({
+      label: "Confirmado",
+      value: formatDateTime(order.approvedAt ?? order.createdAt),
+    });
+    rows.push({
+      label: "Reserva",
+      value: "Consumida al aprobar pago",
+    });
+  } else if (order.status === "REJECTED") {
+    rows.push({
+      label: "Rechazado",
+      value: formatDateTime(order.rejectedAt),
+    });
+  } else if (order.status === "CANCELLED") {
+    rows.push({
+      label: "Cancelado",
+      value: formatDateTime(order.cancelledAt),
+    });
+  } else {
+    rows.push({
+      label: "Reserva vencio",
+      value: formatDateTime(order.cancelledAt ?? order.expiresAt),
+    });
+  }
+
+  return rows;
+};
+
+const getOrderDeliveryLabel = (order: OrderRow) => {
+  if (order.status !== "CONFIRMED") return null;
+  const baseLabel = deliveryStatusLabels[order.deliverySummary.status];
+  if (order.deliverySummary.status === "DELIVERED") {
+    return `${baseLabel} ${formatDateTime(order.deliverySummary.deliveredAt)}`;
+  }
+  if (order.deliverySummary.status === "ISSUED") {
+    return `${baseLabel} ${formatDateTime(order.deliverySummary.issuedAt)}`;
+  }
+  return baseLabel;
 };
 
 const formatDeliveryAddress = (address: OrderRow["deliveryAddress"]) => {
@@ -735,6 +1045,9 @@ function PublicationEditorCard({
           <InfoPill icon={<TruckIcon />}>
             {shippingTypeLabels[row.shippingType]}
           </InfoPill>
+          <InfoPill icon={<CurrencyDollarIcon />}>
+            MP {formatPercent(row.mercadoPagoFeePercent)}%
+          </InfoPill>
           <InfoPill icon={<DocumentTextIcon />}>
             Factura - {billingModeLabels[row.billingMode]}
           </InfoPill>
@@ -758,13 +1071,41 @@ function PublicationEditorModal({
   onSave,
   onClose,
   categoryOptions,
+  mercadoPagoFeeRules,
+  mercadoPagoDefaultFeeDays,
 }: {
   row: PublicationRow;
   onChange: (patch: Partial<PublicationRow>) => void;
   onSave: () => void;
   onClose: () => void;
   categoryOptions: Array<{ label: string; value: string }>;
+  mercadoPagoFeeRules: MercadoPagoFeeRule[];
+  mercadoPagoDefaultFeeDays: number;
 }) {
+  const effectiveMercadoPagoFeeDays =
+    row.mercadoPagoFeeDays ?? mercadoPagoDefaultFeeDays;
+  const effectiveMercadoPagoRule =
+    mercadoPagoFeeRules.find((rule) => rule.days === effectiveMercadoPagoFeeDays) ??
+    mercadoPagoFeeRules[0] ??
+    { days: 0, netPercent: 0 };
+  const effectiveMercadoPagoBreakdown = getMercadoPagoFeeBreakdown(
+    effectiveMercadoPagoRule.netPercent,
+  );
+  const mercadoPagoDefaultRule =
+    mercadoPagoFeeRules.find((rule) => rule.days === mercadoPagoDefaultFeeDays) ??
+    mercadoPagoFeeRules[0] ??
+    { days: 0, netPercent: 0 };
+  const mercadoPagoFeeOptions = [
+    {
+      value: "DEFAULT",
+      label: `Usar configuracion (${getMercadoPagoRuleLabel(mercadoPagoDefaultRule)})`,
+    },
+    ...mercadoPagoFeeRules.map((rule) => ({
+      value: String(rule.days),
+      label: getMercadoPagoRuleLabel(rule),
+    })),
+  ];
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-zinc-950/30 px-3 py-3 backdrop-blur-sm sm:px-6 sm:py-6"
@@ -867,23 +1208,65 @@ function PublicationEditorModal({
                         ]}
                       />
                     </Field>
-                    <Field label="Como se entrega">
-                      <SelectInput
-                        value={row.shippingType}
-                        onChange={(value) =>
-                          onChange({
-                            shippingType: value as PublicationRow["shippingType"],
-                          })
-                        }
-                        options={[
-                          { value: "NORMAL", label: shippingTypeLabels.NORMAL },
-                          { value: "PICKUP", label: shippingTypeLabels.PICKUP },
-                          { value: "OWN_DELIVERY", label: shippingTypeLabels.OWN_DELIVERY },
-                          { value: "QUOTE", label: shippingTypeLabels.QUOTE },
-                          { value: "RESTRICTED", label: shippingTypeLabels.RESTRICTED },
-                        ]}
-                      />
-                    </Field>
+                    <div className="lg:col-span-2">
+                      <Field label="Como se entrega">
+                        <div
+                          className={`grid gap-3 ${
+                            row.shippingType === "NORMAL"
+                              ? "md:grid-cols-[minmax(0,1fr)_minmax(230px,0.72fr)]"
+                              : ""
+                          }`}
+                        >
+                          <SelectInput
+                            value={row.shippingType}
+                            onChange={(value) =>
+                              onChange({
+                                shippingType: value as PublicationRow["shippingType"],
+                                normalShippingOverrideAmount:
+                                  value === "NORMAL"
+                                    ? row.normalShippingOverrideAmount
+                                    : null,
+                              })
+                            }
+                            options={[
+                              { value: "NORMAL", label: shippingTypeLabels.NORMAL },
+                              { value: "PICKUP", label: shippingTypeLabels.PICKUP },
+                              { value: "OWN_DELIVERY", label: shippingTypeLabels.OWN_DELIVERY },
+                              { value: "QUOTE", label: shippingTypeLabels.QUOTE },
+                              { value: "RESTRICTED", label: shippingTypeLabels.RESTRICTED },
+                            ]}
+                          />
+                          {row.shippingType === "NORMAL" ? (
+                            <div className="relative">
+                              <MoneyInput
+                                className="input no-spinner w-full min-h-[46px] rounded-2xl pl-9 pr-3 text-right text-[15px] tabular-nums"
+                                value={
+                                  row.normalShippingOverrideAmount === null
+                                    ? ""
+                                    : String(row.normalShippingOverrideAmount)
+                                }
+                                onValueChange={(value) =>
+                                  onChange({
+                                    normalShippingOverrideAmount: value
+                                      ? Number(value)
+                                      : null,
+                                  })
+                                }
+                                placeholder="Costo envio propio"
+                                maxDecimals={2}
+                                caretToEndOnFocus
+                              />
+                              <span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute inset-y-1 left-1.5 inline-flex min-w-[1.5rem] items-center justify-center rounded-md border border-transparent bg-transparent px-1 text-[10px] font-semibold text-zinc-500 sm:left-2"
+                              >
+                                $
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </Field>
+                    </div>
                     <Field label="Disponibilidad">
                       <SelectInput
                         value={row.stockMode}
@@ -900,22 +1283,24 @@ function PublicationEditorModal({
                         ]}
                       />
                     </Field>
-                    <Field label="Cantidad para vender">
-                      <input
-                        className={fieldClass}
-                        inputMode="numeric"
-                        placeholder="0"
-                        value={row.webStockAvailable}
-                        onChange={(event) =>
-                          onChange({
-                            webStockAvailable: Math.max(
-                              0,
-                              Math.trunc(Number(event.target.value) || 0),
-                            ),
-                          })
-                        }
-                      />
-                    </Field>
+                    {row.stockMode === "STRICT" ? (
+                      <Field label="Cantidad para vender">
+                        <input
+                          className={fieldClass}
+                          inputMode="numeric"
+                          placeholder="0"
+                          value={row.webStockAvailable}
+                          onChange={(event) =>
+                            onChange({
+                              webStockAvailable: Math.max(
+                                0,
+                                Math.trunc(Number(event.target.value) || 0),
+                              ),
+                            })
+                          }
+                        />
+                      </Field>
+                    ) : null}
                   </div>
                 </div>
 
@@ -940,39 +1325,60 @@ function PublicationEditorModal({
                       />
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-[max-content_minmax(0,1fr)]">
-                      <div className="field-stack lg:min-w-[260px]">
+                    <div className="grid gap-4">
+                      <div className="field-stack">
                         <span className="input-label">
                           Precio publicado
                         </span>
-                          <ChoicePills
-                            value={row.pricingMode}
-                            onChange={(value) =>
-                              onChange({
-                                pricingMode: value as PublicationRow["pricingMode"],
-                                fixedFinalPrice:
-                                  value === "FIXED"
-                                    ? row.fixedFinalPrice
-                                    : null,
-                              })
-                            }
-                            options={[
-                              { value: "AUTO", label: "Usar lista" },
-                              { value: "FIXED", label: "Fijar precio" },
-                            ]}
-                          />
+                        <ChoicePills
+                          value={row.pricingMode}
+                          onChange={(value) =>
+                            onChange({
+                              pricingMode: value as PublicationRow["pricingMode"],
+                              fixedFinalPrice:
+                                value === "FIXED"
+                                  ? row.fixedFinalPrice
+                                  : null,
+                            })
+                          }
+                          options={[
+                            { value: "AUTO", label: "Usar lista" },
+                            { value: "FIXED", label: "Fijar precio" },
+                          ]}
+                        />
                       </div>
                       {row.pricingMode === "AUTO" ? (
-                        <Field label="Ajuste sobre lista">
-                          <PercentInput
-                            value={String(row.priceAdjustmentPercent ?? 0)}
-                            onChange={(value) =>
-                              onChange({
-                                priceAdjustmentPercent: Number(value) || 0,
-                              })
-                            }
-                          />
-                        </Field>
+                        <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(170px,0.38fr)]">
+                          <Field
+                            label="Mercado Pago"
+                            helper={`Aplica ${formatPercent(effectiveMercadoPagoBreakdown.finalPercent)}% final (${formatPercent(effectiveMercadoPagoBreakdown.netPercent)}% neto + IVA).`}
+                          >
+                            <SelectInput
+                              value={
+                                row.mercadoPagoFeeDays === null
+                                  ? "DEFAULT"
+                                  : String(row.mercadoPagoFeeDays)
+                              }
+                              onChange={(value) =>
+                                onChange({
+                                  mercadoPagoFeeDays:
+                                    value === "DEFAULT" ? null : Number(value),
+                                })
+                              }
+                              options={mercadoPagoFeeOptions}
+                            />
+                          </Field>
+                          <Field label="Extra sobre lista">
+                            <PercentInput
+                              value={String(row.priceAdjustmentPercent ?? 0)}
+                              onChange={(value) =>
+                                onChange({
+                                  priceAdjustmentPercent: Number(value) || 0,
+                                })
+                              }
+                            />
+                          </Field>
+                        </div>
                       ) : (
                         <Field label="Monto fijo">
                           <div className="relative mt-1">
@@ -1025,6 +1431,20 @@ function PublicationEditorModal({
                     <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1">
                       Precio final estimado: ${formatMoney(row.computedPriceFinal)}
                     </span>
+                    <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1">
+                      MP: {effectiveMercadoPagoFeeDays} dias · {formatPercent(row.mercadoPagoFeePercent)}%
+                    </span>
+                    {row.shippingType === "NORMAL" ? (
+                      <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1">
+                        Envio:{" "}
+                        {row.normalShippingOverrideAmount === null
+                          ? "regla general"
+                          : `$${formatMoney(row.normalShippingOverrideAmount)}`}
+                      </span>
+                    ) : null}
+                    <span className="rounded-full border border-sky-200 bg-white px-2.5 py-1">
+                      Extra: {formatPercent(row.priceAdjustmentPercent)}%
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1049,16 +1469,8 @@ function OrderCard({
   order: OrderRow;
   onOpen: () => void;
 }) {
-  const statusLabel = orderStatusLabels[order.status] ?? order.status;
-  const paymentLabel = paymentStatusLabels[order.paymentStatus] ?? order.paymentStatus;
-  const statusIcon =
-    order.status === "CONFIRMED" ? (
-      <CheckIcon />
-    ) : order.status === "PENDING_PAYMENT" ? (
-      <ClockIcon />
-    ) : (
-      <XMarkIcon />
-    );
+  const commercialState = getOrderCommercialState(order);
+  const deliveryLabel = getOrderDeliveryLabel(order);
   const orderMeta = [
     order.customerDisplayName,
     order.customerEmail,
@@ -1088,26 +1500,23 @@ function OrderCard({
       <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap gap-2">
           <InfoPill
-            icon={statusIcon}
-            tone={orderStatusTone[order.status] ?? "border-zinc-200 bg-white text-zinc-700"}
+            icon={getOrderCommercialIcon(commercialState.icon)}
+            tone={commercialState.tone}
           >
-            {statusLabel}
-          </InfoPill>
-          <InfoPill
-            icon={<CurrencyDollarIcon />}
-            tone={paymentTone[order.paymentStatus] ?? "border-zinc-200 bg-white text-zinc-700"}
-          >
-            {paymentLabel}
+            {commercialState.label}
           </InfoPill>
           <InfoPill icon={<ShoppingCartIcon />}>
-            {order.itemCount.toLocaleString("es-AR")} {order.itemCount === 1 ? "item" : "items"}
+            {order.itemCount.toLocaleString("es-AR")}{" "}
+            {order.itemCount === 1 ? "item" : "items"}
           </InfoPill>
-          <InfoPill icon={<ClockIcon />}>
-            {formatDateTime(order.createdAt)}
-          </InfoPill>
-          <InfoPill icon={<ClockIcon />}>
-            Expira {formatDateTime(order.expiresAt)}
-          </InfoPill>
+          {deliveryLabel ? (
+            <InfoPill
+              icon={<TruckIcon />}
+              tone={deliveryTone[order.deliverySummary.status]}
+            >
+              {deliveryLabel}
+            </InfoPill>
+          ) : null}
         </div>
         <button
           type="button"
@@ -1130,10 +1539,13 @@ function OrderDetailModal({
   onClose: () => void;
 }) {
   const orderNumber = order.displayNumber || order.id;
-  const statusLabel = orderStatusLabels[order.status] ?? order.status;
-  const paymentLabel = paymentStatusLabels[order.paymentStatus] ?? order.paymentStatus;
+  const commercialState = getOrderCommercialState(order);
+  const timelineRows = getOrderTimelineRows(order);
+  const deliveryLabel = getOrderDeliveryLabel(order);
   const deliveryAddress = formatDeliveryAddress(order.deliveryAddress);
-  const customerFiscalCondition = formatFiscalCondition(order.customerFiscalCondition);
+  const customerFiscalCondition = formatFiscalCondition(
+    order.customerFiscalCondition,
+  );
 
   return (
     <div
@@ -1159,12 +1571,7 @@ function OrderDetailModal({
           </div>
           <div className="flex min-w-0 items-center justify-between gap-3 sm:justify-end">
             <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-              <Badge tone={orderStatusTone[order.status] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
-                {statusLabel}
-              </Badge>
-              <Badge tone={paymentTone[order.paymentStatus] ?? "border-zinc-200 bg-zinc-100 text-zinc-700"}>
-                {paymentLabel}
-              </Badge>
+              <Badge tone={commercialState.tone}>{commercialState.label}</Badge>
             </div>
             <button
               type="button"
@@ -1253,6 +1660,19 @@ function OrderDetailModal({
                       </div>
                     </div>
                   ) : null}
+                  {deliveryLabel ? (
+                    <div className="sm:col-span-2">
+                      <div className="text-xs font-medium text-zinc-500">Estado operativo</div>
+                      <div className="mt-1 text-sm font-semibold text-zinc-950">
+                        {deliveryLabel}
+                      </div>
+                      {order.deliverySummary.noteNumber ? (
+                        <div className="mt-1 text-xs font-medium text-zinc-500">
+                          Remito {order.deliverySummary.noteNumber}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </section>
             </div>
@@ -1292,18 +1712,22 @@ function OrderDetailModal({
                   <h4 className="text-sm font-semibold text-zinc-950">Pedido</h4>
                 </div>
                 <div className="mt-3 space-y-3 text-sm">
-                  <div>
-                    <div className="text-xs font-medium text-zinc-500">Creado</div>
-                    <div className="mt-1 font-semibold text-zinc-950">
-                      {formatDateTime(order.createdAt)}
+                  {timelineRows.map((row) => (
+                    <div key={row.label}>
+                      <div className="text-xs font-medium text-zinc-500">{row.label}</div>
+                      <div className="mt-1 font-semibold text-zinc-950">
+                        {row.value}
+                      </div>
                     </div>
-                  </div>
-                  <div>
-                    <div className="text-xs font-medium text-zinc-500">Expira</div>
-                    <div className="mt-1 font-semibold text-zinc-950">
-                      {formatDateTime(order.expiresAt)}
+                  ))}
+                  {order.saleNumber ? (
+                    <div>
+                      <div className="text-xs font-medium text-zinc-500">Venta</div>
+                      <div className="mt-1 font-semibold text-zinc-950">
+                        #{order.saleNumber}
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
                   <div>
                     <div className="text-xs font-medium text-zinc-500">Metodo de pago</div>
                     <div className="mt-1 font-semibold text-zinc-950">
@@ -1367,6 +1791,7 @@ export default function StorefrontClient({
   const [configForm, setConfigForm] = useState<ConfigFormState>(
     createDefaultConfigForm(),
   );
+  const [categoryDraft, setCategoryDraft] = useState("");
   const [visiblePublicationsCount, setVisiblePublicationsCount] = useState(
     PUBLICATIONS_PAGE_SIZE,
   );
@@ -1377,7 +1802,9 @@ export default function StorefrontClient({
   const [publicationSort, setPublicationSort] =
     useState<PublicationSortKey>("name-asc");
   const [orderStatusFilter, setOrderStatusFilter] =
-    useState<OrderStatusFilter>("active");
+    useState<OrderStatusFilter>("to-deliver");
+  const [orderDateRangeFilter, setOrderDateRangeFilter] =
+    useState<OrderDateRangeFilter>("operational");
   const [orderSort, setOrderSort] = useState<OrderSortKey>("created-desc");
   const skipInitialQuerySyncRef = useRef(true);
   const publicationBaselineRef = useRef<Record<string, string>>({});
@@ -1410,15 +1837,26 @@ export default function StorefrontClient({
       ])) as [ChannelResponse, PublicationRow[], OrderRow[]];
 
       setChannelData(channelJson);
-      setPublications(publicationsJson);
+      const normalizedPublications = publicationsJson.map((row) => ({
+        ...row,
+        normalShippingOverrideAmount:
+          row.normalShippingOverrideAmount === null ||
+          row.normalShippingOverrideAmount === undefined
+            ? null
+            : toNumber(row.normalShippingOverrideAmount),
+        mercadoPagoFeeDays: row.mercadoPagoFeeDays ?? null,
+        mercadoPagoFeePercent: toNumber(row.mercadoPagoFeePercent),
+      }));
+      setPublications(normalizedPublications);
       setOrders(ordersJson);
       setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
       setStatus(null);
 
-      const mercadopagoAdjustment =
-        channelJson.channel.paymentAdjustments.find((item) =>
-          item.paymentMethod.trim().toLowerCase().includes("mercadopago"),
-        )?.percent ?? 0;
+      const mercadoPagoFeeRules = DEFAULT_MERCADOPAGO_FEE_RULES;
+      const mercadoPagoDefaultFeeDays = normalizeMercadoPagoDefaultFeeDays(
+        channelJson.channel.mercadoPagoDefaultFeeDays,
+        mercadoPagoFeeRules,
+      );
 
       const loadedConfigForm = {
         name: channelJson.channel.name,
@@ -1436,14 +1874,23 @@ export default function StorefrontClient({
         normalShippingAmount: String(channelJson.channel.normalShippingAmount ?? 0),
         reserveTtlMinutes: String(channelJson.channel.reserveTtlMinutes ?? 30),
         manualBillingByDefault: channelJson.channel.manualBillingByDefault,
-        paymentAdjustmentMercadoPago: String(mercadopagoAdjustment),
+        productCategories: normalizeProductCategoryList(
+          channelJson.channel.productCategories,
+        ),
+        mercadoPagoFeeRegion: DEFAULT_MERCADOPAGO_FEE_REGION,
+        mercadoPagoFeeRules,
+        mercadoPagoDefaultFeeDays: String(mercadoPagoDefaultFeeDays),
       };
 
       publicationBaselineRef.current = Object.fromEntries(
-        publicationsJson.map((row) => [row.productId, serializePublicationDraft(row)]),
+        normalizedPublications.map((row) => [
+          row.productId,
+          serializePublicationDraft(row),
+        ]),
       );
       configBaselineRef.current = serializeConfigForm(loadedConfigForm);
       setConfigForm(loadedConfigForm);
+      setCategoryDraft("");
     } finally {
       setIsLoading(false);
     }
@@ -1548,6 +1995,20 @@ export default function StorefrontClient({
     setIsSavingConfig(true);
     setStatus(null);
     try {
+      const mercadoPagoFeeRules = normalizeMercadoPagoFeeRulesForPayload(
+        configForm.mercadoPagoFeeRules,
+      );
+      const mercadoPagoDefaultFeeDays = normalizeMercadoPagoDefaultFeeDays(
+        configForm.mercadoPagoDefaultFeeDays,
+        configForm.mercadoPagoFeeRules,
+      );
+      const defaultMercadoPagoRule =
+        mercadoPagoFeeRules.find((rule) => rule.days === mercadoPagoDefaultFeeDays) ??
+        mercadoPagoFeeRules[0] ??
+        { days: 0, netPercent: 0 };
+      const defaultMercadoPagoFinalPercent = getMercadoPagoFeeBreakdown(
+        defaultMercadoPagoRule.netPercent,
+      ).finalPercent;
       const response = await fetch("/api/storefront/admin/channel", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -1568,10 +2029,16 @@ export default function StorefrontClient({
           normalShippingAmount: toNumber(configForm.normalShippingAmount),
           reserveTtlMinutes: toNumber(configForm.reserveTtlMinutes),
           manualBillingByDefault: configForm.manualBillingByDefault,
+          productCategories: normalizeProductCategoryList(
+            configForm.productCategories,
+          ),
+          mercadoPagoFeeRegion: configForm.mercadoPagoFeeRegion,
+          mercadoPagoFeeRules,
+          mercadoPagoDefaultFeeDays,
           paymentAdjustments: [
             {
               paymentMethod: "mercadopago_checkout_api",
-              percent: toNumber(configForm.paymentAdjustmentMercadoPago),
+              percent: defaultMercadoPagoFinalPercent,
             },
           ],
         }),
@@ -1679,10 +2146,12 @@ export default function StorefrontClient({
         category: row.category,
         featured: row.featured,
         shippingType: row.shippingType,
+        normalShippingOverrideAmount: row.normalShippingOverrideAmount,
         stockMode: row.stockMode,
         webStockAvailable: row.webStockAvailable,
         pricingMode: row.pricingMode,
         fixedFinalPrice: row.fixedFinalPrice,
+        mercadoPagoFeeDays: row.mercadoPagoFeeDays,
         priceAdjustmentPercent: row.priceAdjustmentPercent,
         billingMode: row.billingMode,
       }),
@@ -1709,17 +2178,66 @@ export default function StorefrontClient({
     );
   }
 
+  function addProductCategory() {
+    const nextCategory = normalizeProductCategoryName(categoryDraft);
+    if (!nextCategory) return;
+    setConfigForm((current) => ({
+      ...current,
+      productCategories: normalizeProductCategoryList([
+        ...current.productCategories,
+        nextCategory,
+      ]),
+    }));
+    setCategoryDraft("");
+  }
+
+  function removeProductCategory(category: string) {
+    setConfigForm((current) => {
+      const nextCategories = current.productCategories.filter(
+        (item) =>
+          item.toLocaleLowerCase("es-AR") !==
+          category.toLocaleLowerCase("es-AR"),
+      );
+      return {
+        ...current,
+        productCategories: normalizeProductCategoryList(nextCategories),
+      };
+    });
+  }
+
   const publishedCount = publications.filter(
     (row) => row.publicationStatus === "PUBLISHED",
   ).length;
   const pendingOrders = orders.filter(
     (order) => isPendingOrder(order),
   ).length;
-  const archivedOrders = orders.filter((order) => isArchivedOrder(order)).length;
-  const activeOrders = orders.length - archivedOrders;
-  const confirmedOrders = orders.filter(
-    (order) => !isArchivedOrder(order) && order.status === "CONFIRMED",
-  ).length;
+  const mercadoPagoFeeRules = useMemo(
+    () => normalizeMercadoPagoFeeRulesForPayload(configForm.mercadoPagoFeeRules),
+    [configForm.mercadoPagoFeeRules],
+  );
+  const mercadoPagoDefaultFeeDays = useMemo(
+    () =>
+      normalizeMercadoPagoDefaultFeeDays(
+        configForm.mercadoPagoDefaultFeeDays,
+        configForm.mercadoPagoFeeRules,
+      ),
+    [configForm.mercadoPagoDefaultFeeDays, configForm.mercadoPagoFeeRules],
+  );
+  const mercadoPagoDefaultRule =
+    mercadoPagoFeeRules.find((rule) => rule.days === mercadoPagoDefaultFeeDays) ??
+    mercadoPagoFeeRules[0] ??
+    { days: 0, netPercent: 0 };
+  const mercadoPagoDefaultBreakdown = getMercadoPagoFeeBreakdown(
+    mercadoPagoDefaultRule.netPercent,
+  );
+  const countOrdersForStatus = (statusFilter: OrderStatusFilter) => {
+    const rangeStart = getOrderDateRangeStart(orderDateRangeFilter, statusFilter);
+    return orders.filter(
+      (order) =>
+        matchesOrderStatusFilter(order, statusFilter) &&
+        isOrderInsideDateRange(order, rangeStart),
+    ).length;
+  };
   const filteredPublications = useMemo(() => {
     const items = publications.filter((row) => {
       if (publicationStatusFilter === "active") {
@@ -1757,20 +2275,13 @@ export default function StorefrontClient({
   }, [publicationSort, publicationStatusFilter, publications]);
   const filteredOrders = useMemo(() => {
     const normalizedQuery = orderQuery.trim().toLowerCase();
-    const getDateTime = (value: string | null) => {
-      if (!value) return 0;
-      const parsed = new Date(value).getTime();
-      return Number.isNaN(parsed) ? 0 : parsed;
-    };
+    const rangeStart = getOrderDateRangeStart(
+      orderDateRangeFilter,
+      orderStatusFilter,
+    );
     const items = orders.filter((order) => {
-      const isArchived = isArchivedOrder(order);
-      const isPending = isPendingOrder(order);
-      const isConfirmed = !isArchived && order.status === "CONFIRMED";
-
-      if (orderStatusFilter === "active" && isArchived) return false;
-      if (orderStatusFilter === "pending" && !isPending) return false;
-      if (orderStatusFilter === "confirmed" && !isConfirmed) return false;
-      if (orderStatusFilter === "archived" && !isArchived) return false;
+      if (!matchesOrderStatusFilter(order, orderStatusFilter)) return false;
+      if (!isOrderInsideDateRange(order, rangeStart)) return false;
 
       if (!normalizedQuery) return true;
 
@@ -1779,8 +2290,8 @@ export default function StorefrontClient({
         order.id,
         order.customerDisplayName,
         order.customerEmail,
-        orderStatusLabels[order.status],
-        paymentStatusLabels[order.paymentStatus],
+        getOrderCommercialState(order).label,
+        getOrderDeliveryLabel(order),
       ]
         .filter(Boolean)
         .join(" ")
@@ -1792,35 +2303,32 @@ export default function StorefrontClient({
     items.sort((left, right) => {
       switch (orderSort) {
         case "created-asc":
-          return getDateTime(left.createdAt) - getDateTime(right.createdAt);
+          return (
+            getDateTimeMs(getOrderOperationalDate(left)) -
+            getDateTimeMs(getOrderOperationalDate(right))
+          );
         case "total-desc":
           return right.total - left.total;
         case "total-asc":
           return left.total - right.total;
         case "created-desc":
         default:
-          return getDateTime(right.createdAt) - getDateTime(left.createdAt);
+          return (
+            getDateTimeMs(getOrderOperationalDate(right)) -
+            getDateTimeMs(getOrderOperationalDate(left))
+          );
       }
     });
 
     return items;
-  }, [orderQuery, orderSort, orderStatusFilter, orders]);
+  }, [orderDateRangeFilter, orderQuery, orderSort, orderStatusFilter, orders]);
   const publicationCategoryOptions = useMemo(() => {
-    const categories = Array.from(
-      new Set(
-        publications
-          .map((row) => row.category.trim())
-          .filter(Boolean),
-      ),
-    ).sort((left, right) =>
-      left.localeCompare(right, "es", { sensitivity: "base" }),
-    );
-
+    const categories = normalizeProductCategoryList(configForm.productCategories);
     return categories.map((category) => ({
       label: category,
       value: category,
     }));
-  }, [publications]);
+  }, [configForm.productCategories]);
   const selectedPublication =
     publications.find((row) => row.productId === selectedPublicationId) ?? null;
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
@@ -1839,11 +2347,15 @@ export default function StorefrontClient({
       : "Conexion principal";
   const orderEmptyMessage = !orders.length
     ? "Todavia no hay pedidos registrados en esta tienda."
-    : orderStatusFilter === "archived"
-      ? "No hay pedidos archivados."
-      : orderStatusFilter === "active"
-        ? "No hay pedidos activos para mostrar."
-        : "No hay pedidos para mostrar con el filtro actual.";
+    : orderStatusFilter === "closed"
+      ? "No hay pedidos vencidos, rechazados o cancelados en este periodo."
+      : orderStatusFilter === "pending"
+        ? "No hay reservas pendientes de pago en este periodo."
+        : orderStatusFilter === "to-deliver"
+          ? "No hay pedidos para entregar en este periodo."
+          : orderStatusFilter === "delivered"
+            ? "No hay pedidos entregados en este periodo."
+            : "No hay pedidos para mostrar con el filtro actual.";
   const summaryPills = (
     <div className="flex shrink-0 flex-wrap items-center gap-2 pt-1 sm:justify-end">
       <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-900">
@@ -1923,7 +2435,7 @@ export default function StorefrontClient({
                     </div>
                   </div>
 
-                  <div className="grid gap-5 md:grid-cols-3">
+                  <div className="grid gap-5 md:grid-cols-2">
                     <Field label="Recargo o descuento general">
                       <PercentInput
                         value={configForm.globalPriceAdjustmentPercent}
@@ -1931,17 +2443,6 @@ export default function StorefrontClient({
                           setConfigForm((current) => ({
                             ...current,
                             globalPriceAdjustmentPercent: value,
-                          }))
-                        }
-                      />
-                    </Field>
-                    <Field label="Recargo por cobro con Mercado Pago">
-                      <PercentInput
-                        value={configForm.paymentAdjustmentMercadoPago}
-                        onChange={(value) =>
-                          setConfigForm((current) => ({
-                            ...current,
-                            paymentAdjustmentMercadoPago: value,
                           }))
                         }
                       />
@@ -1971,6 +2472,69 @@ export default function StorefrontClient({
                     </Field>
                   </div>
 
+                  <div className="rounded-[18px] border border-zinc-200 bg-zinc-50/70 p-3">
+                    <div className="grid gap-2 lg:grid-cols-[minmax(140px,auto)_1fr] lg:items-center">
+                      <div className="text-sm font-medium leading-none text-zinc-900">
+                        Mercado Pago
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] lg:justify-end">
+                        <span className="inline-flex h-6 items-center rounded-full border border-zinc-200 bg-white px-2 text-zinc-700">
+                          Neto {formatPercent(mercadoPagoDefaultBreakdown.netPercent)}%
+                        </span>
+                        <span className="inline-flex h-6 items-center rounded-full border border-zinc-200 bg-white px-2 text-zinc-700">
+                          IVA {formatPercent(mercadoPagoDefaultBreakdown.ivaPercent)}%
+                        </span>
+                        <span className="inline-flex h-6 items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 font-semibold text-emerald-900">
+                          Final {formatPercent(mercadoPagoDefaultBreakdown.finalPercent)}%
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      {mercadoPagoFeeRules.map((rule) => {
+                        const breakdown = getMercadoPagoFeeBreakdown(rule.netPercent);
+                        const isDefault = rule.days === mercadoPagoDefaultFeeDays;
+
+                        return (
+                          <button
+                            key={rule.days}
+                            aria-pressed={isDefault}
+                            className={`grid min-h-[62px] grid-rows-[auto_1fr] rounded-xl border px-3 py-2 text-left transition ${
+                              isDefault
+                                ? "border-sky-200 bg-sky-50 text-sky-950"
+                                : "border-zinc-200 bg-white text-zinc-800 hover:border-sky-100 hover:bg-sky-50/40"
+                            }`}
+                            onClick={() =>
+                              setConfigForm((current) => ({
+                                ...current,
+                                mercadoPagoDefaultFeeDays: String(rule.days),
+                              }))
+                            }
+                            type="button"
+                          >
+                            <div className="flex min-h-5 items-center justify-between gap-2">
+                              <span className="truncate text-xs font-semibold">
+                                {getMercadoPagoDaysLabel(rule.days)}
+                              </span>
+                              {isDefault ? (
+                                <span className="inline-flex h-5 shrink-0 items-center rounded-full border border-sky-200 bg-white px-1.5 text-[10px] font-semibold text-sky-900">
+                                  Default
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 grid grid-cols-3 items-end gap-2 text-[11px] leading-snug text-zinc-500">
+                              <span className="truncate">Neto {formatPercent(breakdown.netPercent)}%</span>
+                              <span className="truncate text-center">IVA {formatPercent(breakdown.ivaPercent)}%</span>
+                              <span className="truncate text-right font-semibold text-emerald-800">
+                                Final {formatPercent(breakdown.finalPercent)}%
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="grid gap-5 lg:grid-cols-2">
                     <MiniToggle checked={configForm.manualBillingByDefault} onChange={() => setConfigForm((current) => ({ ...current, manualBillingByDefault: !current.manualBillingByDefault }))} label="Facturacion manual por defecto" help="Si un producto no define excepcion propia, el pedido queda en circuito manual." />
                     <div className="rounded-[18px] border border-zinc-200 bg-zinc-50/70 px-4 py-4">
@@ -1997,6 +2561,61 @@ export default function StorefrontClient({
                           ))}
                         </div>
                       </Field>
+                    </div>
+                  </div>
+
+                  <div className="rounded-[18px] border border-zinc-200 bg-zinc-50/70 px-4 py-4">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-zinc-900">
+                          Categorias de producto
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                          Opciones disponibles al editar publicaciones.
+                        </p>
+                      </div>
+                      <div className="flex w-full gap-2 lg:max-w-[360px]">
+                        <input
+                          className="input min-h-[38px] flex-1 rounded-xl border-zinc-200 px-3 text-sm placeholder:text-zinc-400"
+                          value={categoryDraft}
+                          onChange={(event) => setCategoryDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter") return;
+                            event.preventDefault();
+                            addProductCategory();
+                          }}
+                          placeholder="Nueva categoria"
+                        />
+                        <button
+                          className="btn min-h-[38px] shrink-0 rounded-xl px-3 text-sm"
+                          disabled={!normalizeProductCategoryName(categoryDraft)}
+                          onClick={addProductCategory}
+                          type="button"
+                        >
+                          <PlusIcon className="size-4" />
+                          Agregar
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {configForm.productCategories.map((category) => (
+                        <span
+                          key={category}
+                          className="inline-flex min-h-[30px] items-center gap-1 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-700"
+                        >
+                          {category}
+                          {configForm.productCategories.length > 1 ? (
+                            <button
+                              aria-label={`Quitar ${category}`}
+                              className="inline-flex size-5 items-center justify-center rounded-full text-zinc-400 transition hover:bg-zinc-100 hover:text-zinc-700"
+                              onClick={() => removeProductCategory(category)}
+                              type="button"
+                            >
+                              <XMarkIcon className="size-3.5" />
+                            </button>
+                          ) : null}
+                        </span>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -2141,7 +2760,7 @@ export default function StorefrontClient({
             {summaryPills}
           </div>
           <div className="flex">
-            <div className="flex max-w-full flex-wrap rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
+            <div className="flex max-w-full flex-wrap gap-1 rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
               {[
                 { value: "active", label: "Activas" },
                 { value: "paused", label: "Pausadas" },
@@ -2229,6 +2848,8 @@ export default function StorefrontClient({
             <PublicationEditorModal
               row={selectedPublication}
               categoryOptions={getPublicationCategoryOptions(selectedPublication)}
+              mercadoPagoFeeRules={mercadoPagoFeeRules}
+              mercadoPagoDefaultFeeDays={mercadoPagoDefaultFeeDays}
               onClose={() => setSelectedPublicationId(null)}
               onChange={(patch) => updatePublication(selectedPublication.productId, patch)}
               onSave={() => handleSavePublication(selectedPublication)}
@@ -2262,19 +2883,54 @@ export default function StorefrontClient({
                 Pedidos
               </h2>
               <p className="text-sm text-zinc-500">
-                Revisa pedidos activos. Los cancelados, expirados o rechazados se archivan automaticamente.
+                Pedidos separados por accion operativa: cobrar, entregar, revisar entregados o consultar no concretados.
               </p>
             </div>
             {summaryPills}
           </div>
           <div className="flex">
-            <div className="inline-flex rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
+            <div className="inline-flex gap-1 rounded-2xl border border-zinc-200 bg-zinc-50/80 p-1">
               {[
-                { value: "active", label: "Activos", count: activeOrders },
-                { value: "pending", label: "Pendientes", count: pendingOrders },
-                { value: "confirmed", label: "Confirmados", count: confirmedOrders },
-                { value: "archived", label: "Archivados", count: archivedOrders },
-                { value: "all", label: "Todos", count: orders.length },
+                {
+                  value: "pending",
+                  label: "Pendientes",
+                  count: countOrdersForStatus("pending"),
+                  textTone: "text-amber-800",
+                  countTone: "border-amber-200 bg-amber-50 text-amber-800",
+                  activeTone: "ring-1 ring-amber-100",
+                },
+                {
+                  value: "to-deliver",
+                  label: "A entregar",
+                  count: countOrdersForStatus("to-deliver"),
+                  textTone: "text-sky-800",
+                  countTone: "border-sky-200 bg-sky-50 text-sky-800",
+                  activeTone: "ring-1 ring-sky-100",
+                },
+                {
+                  value: "delivered",
+                  label: "Entregados",
+                  count: countOrdersForStatus("delivered"),
+                  textTone: "text-emerald-800",
+                  countTone: "border-emerald-200 bg-emerald-50 text-emerald-800",
+                  activeTone: "ring-1 ring-emerald-100",
+                },
+                {
+                  value: "closed",
+                  label: "No concretados",
+                  count: countOrdersForStatus("closed"),
+                  textTone: "text-rose-800",
+                  countTone: "border-rose-200 bg-rose-50 text-rose-800",
+                  activeTone: "ring-1 ring-rose-100",
+                },
+                {
+                  value: "all",
+                  label: "Todos",
+                  count: countOrdersForStatus("all"),
+                  textTone: "text-zinc-700",
+                  countTone: "border-zinc-200 bg-white/80 text-zinc-500",
+                  activeTone: "ring-1 ring-zinc-100",
+                },
               ].map((option) => (
                 <button
                   key={option.value}
@@ -2282,12 +2938,12 @@ export default function StorefrontClient({
                   onClick={() => setOrderStatusFilter(option.value as OrderStatusFilter)}
                   className={`rounded-[12px] px-4 py-2 text-sm font-medium transition ${
                     orderStatusFilter === option.value
-                      ? "bg-white text-zinc-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
-                      : "text-zinc-600 hover:text-zinc-900"
+                      ? `bg-white shadow-[0_1px_2px_rgba(0,0,0,0.06)] ${option.activeTone}`
+                      : "hover:bg-white/60"
                   }`}
                 >
-                  <span>{option.label}</span>
-                  <span className="ml-2 rounded-full border border-zinc-200 bg-white/80 px-1.5 py-0.5 text-[11px] leading-none text-zinc-500">
+                  <span className={option.textTone}>{option.label}</span>
+                  <span className={`ml-2 rounded-full border px-1.5 py-0.5 text-[11px] leading-none ${option.countTone}`}>
                     {option.count.toLocaleString("es-AR")}
                   </span>
                 </button>
@@ -2296,7 +2952,7 @@ export default function StorefrontClient({
           </div>
           <div className="space-y-5">
             <div className="sticky top-4 z-20 rounded-[20px] border border-zinc-200 bg-white/92 px-3 py-2.5 shadow-[0_18px_38px_-30px_rgba(24,39,75,0.32)] backdrop-blur supports-[backdrop-filter]:bg-white/82">
-              <div className="grid gap-2 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:items-center">
+              <div className="grid gap-2 lg:grid-cols-[minmax(220px,300px)_minmax(180px,220px)_minmax(0,1fr)] lg:items-center">
                 <div className="flex min-h-[38px] items-center rounded-2xl border border-zinc-200 bg-white px-1.5 shadow-[0_10px_24px_-24px_rgba(24,39,75,0.32)]">
                   <span className="shrink-0 border-r border-zinc-200 px-1.5 text-xs font-medium text-zinc-500">
                     Ordenar
@@ -2311,6 +2967,28 @@ export default function StorefrontClient({
                         { label: "Mas antiguos", value: "created-asc" },
                         { label: "Total mas alto", value: "total-desc" },
                         { label: "Total mas bajo", value: "total-asc" },
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex min-h-[38px] items-center rounded-2xl border border-zinc-200 bg-white px-1.5 shadow-[0_10px_24px_-24px_rgba(24,39,75,0.32)]">
+                  <span className="shrink-0 border-r border-zinc-200 px-1.5 text-xs font-medium text-zinc-500">
+                    Periodo
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <SelectInput
+                      embedded
+                      value={orderDateRangeFilter}
+                      onChange={(value) =>
+                        setOrderDateRangeFilter(value as OrderDateRangeFilter)
+                      }
+                      options={[
+                        { label: "Operativo", value: "operational" },
+                        { label: "Dia", value: "day" },
+                        { label: "Semana", value: "week" },
+                        { label: "Mes", value: "month" },
+                        { label: "Todos", value: "all" },
                       ]}
                     />
                   </div>

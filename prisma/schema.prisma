@@ -1414,6 +1414,10 @@ model StorefrontChannel {
   normalShippingAmount         Decimal  @default(0) @db.Decimal(12, 2)
   reserveTtlMinutes            Int      @default(30)
   manualBillingByDefault       Boolean  @default(true)
+  productCategories            Json?
+  mercadoPagoFeeRegion         String?
+  mercadoPagoFeeRules          Json?
+  mercadoPagoDefaultFeeDays    Int?
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
 
@@ -1471,33 +1475,35 @@ model StorefrontPaymentAdjustment {
 }
 
 model StorefrontPublication {
-  id                     String                      @id @default(cuid())
-  organizationId         String
-  channelId              String
-  productId              String
-  slug                   String
-  publicationStatus      StorefrontPublicationStatus @default(PAUSED)
-  publicName             String
-  shortDescription       String
-  longDescription        String
-  category               String                      @default("General")
-  featured               Boolean                     @default(false)
-  shippingType           StorefrontShippingType      @default(NORMAL)
-  hasGas                 Boolean                     @default(false)
-  hasPressure            Boolean                     @default(false)
-  isFlammable            Boolean                     @default(false)
-  hasSpecialLogistics    Boolean                     @default(false)
-  stockMode              StorefrontStockMode         @default(STRICT)
-  webStockAvailable      Int                         @default(0)
-  webStockReserved       Int                         @default(0)
-  pricingMode            StorefrontPricingMode       @default(AUTO)
-  fixedFinalPrice        Decimal?                    @db.Decimal(12, 2)
-  priceAdjustmentPercent Decimal                     @default(0) @db.Decimal(8, 4)
-  billingMode            StorefrontBillingMode       @default(DEFAULT)
-  images                 Json?
-  technicalSheet         Json?
-  createdAt              DateTime                    @default(now())
-  updatedAt              DateTime                    @updatedAt
+  id                           String                      @id @default(cuid())
+  organizationId               String
+  channelId                    String
+  productId                    String
+  slug                         String
+  publicationStatus            StorefrontPublicationStatus @default(PAUSED)
+  publicName                   String
+  shortDescription             String
+  longDescription              String
+  category                     String                      @default("General")
+  featured                     Boolean                     @default(false)
+  shippingType                 StorefrontShippingType      @default(NORMAL)
+  normalShippingOverrideAmount Decimal?                    @db.Decimal(12, 2)
+  hasGas                       Boolean                     @default(false)
+  hasPressure                  Boolean                     @default(false)
+  isFlammable                  Boolean                     @default(false)
+  hasSpecialLogistics          Boolean                     @default(false)
+  stockMode                    StorefrontStockMode         @default(STRICT)
+  webStockAvailable            Int                         @default(0)
+  webStockReserved             Int                         @default(0)
+  pricingMode                  StorefrontPricingMode       @default(AUTO)
+  fixedFinalPrice              Decimal?                    @db.Decimal(12, 2)
+  priceAdjustmentPercent       Decimal                     @default(0) @db.Decimal(8, 4)
+  mercadoPagoFeeDays           Int?
+  billingMode                  StorefrontBillingMode       @default(DEFAULT)
+  images                       Json?
+  technicalSheet               Json?
+  createdAt                    DateTime                    @default(now())
+  updatedAt                    DateTime                    @updatedAt
 
   organization Organization                 @relation(fields: [organizationId], references: [id])
   channel      StorefrontChannel            @relation(fields: [channelId], references: [id], onDelete: Cascade)

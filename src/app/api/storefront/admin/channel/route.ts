@@ -26,6 +26,15 @@ const bodySchema = z.object({
   normalShippingAmount: z.coerce.number().nonnegative(),
   reserveTtlMinutes: z.coerce.number().int().positive(),
   manualBillingByDefault: z.boolean(),
+  productCategories: z.array(z.string().trim().min(1).max(80)).max(24),
+  mercadoPagoFeeRegion: z.string().trim().min(1).max(80).optional().nullable(),
+  mercadoPagoFeeRules: z.array(
+    z.object({
+      days: z.coerce.number().int().min(0).max(90),
+      netPercent: z.coerce.number().min(0).max(100),
+    }),
+  ).max(12),
+  mercadoPagoDefaultFeeDays: z.coerce.number().int().min(0).max(90).optional().nullable(),
   paymentAdjustments: z.array(
     z.object({
       paymentMethod: z.string().min(1),
