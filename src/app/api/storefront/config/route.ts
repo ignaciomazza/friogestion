@@ -1,10 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 import { requireStorefrontAccess } from "@/lib/storefront/auth";
-import { storefrontErrorResponse } from "@/lib/storefront/http";
+import { storefrontErrorResponse, storefrontJson } from "@/lib/storefront/http";
 import { getStorefrontConfig } from "@/lib/storefront/service";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   const rateLimit = checkRateLimit(request, {
@@ -17,7 +18,7 @@ export async function GET(request: NextRequest) {
   try {
     const access = await requireStorefrontAccess(request);
     const config = await getStorefrontConfig(access.channelId);
-    return NextResponse.json(config);
+    return storefrontJson(config);
   } catch (error) {
     return storefrontErrorResponse(error);
   }

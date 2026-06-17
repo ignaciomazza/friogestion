@@ -87,6 +87,9 @@ export function rateLimitResponse(retryAfter: number) {
     {
       status: 429,
       headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0, s-maxage=0",
+        "CDN-Cache-Control": "no-store",
+        "Vercel-CDN-Cache-Control": "no-store",
         "retry-after": String(Math.max(1, retryAfter)),
       },
     },

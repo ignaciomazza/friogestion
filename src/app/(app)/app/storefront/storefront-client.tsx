@@ -101,8 +101,15 @@ type PublicationRow = {
   priceAdjustmentPercent: number;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
+  images: PublicationImage[];
   computedPriceFinal: number;
   salesCount: number;
+};
+
+type PublicationImage = {
+  url: string;
+  alt: string;
+  key?: string;
 };
 
 type OrderRow = {
@@ -310,6 +317,8 @@ const fieldClass =
 const textareaClass =
   "min-h-[118px] w-full rounded-[20px] border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-sky-200 focus:ring-2 focus:ring-sky-400/40";
 const PUBLICATIONS_PAGE_SIZE = 18;
+const MAX_PUBLICATION_IMAGE_SIZE_BYTES = 4 * 1024 * 1024;
+const PUBLICATION_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp,image/avif,image/gif";
 const MERCADOPAGO_FEE_IVA_PERCENT = 21;
 const DEFAULT_MERCADOPAGO_FEE_REGION = "ba_ch_er";
 const MERCADOPAGO_MAX_FEE_RULES = [
@@ -352,6 +361,27 @@ const createDefaultConfigForm = (): ConfigFormState => ({
   mercadoPagoDefaultFeeDays: "0",
 });
 
+const normalizePublicationImages = (
+  value: unknown,
+  fallbackAlt: string,
+): PublicationImage[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const record = item as Record<string, unknown>;
+      const url = String(record.url ?? "").trim();
+      const alt = String(record.alt ?? "").trim();
+      const key = String(record.key ?? "").trim();
+      if (!url) return null;
+      return key
+        ? { url, alt: alt || fallbackAlt, key }
+        : { url, alt: alt || fallbackAlt };
+    })
+    .filter((item): item is PublicationImage => item !== null)
+    .slice(0, 12);
+};
+
 const serializePublicationDraft = (row: PublicationRow) =>
   JSON.stringify({
     productId: row.productId,
@@ -370,6 +400,7 @@ const serializePublicationDraft = (row: PublicationRow) =>
     mercadoPagoFeeDays: row.mercadoPagoFeeDays,
     priceAdjustmentPercent: row.priceAdjustmentPercent,
     billingMode: row.billingMode,
+    images: row.images,
   });
 
 const serializeConfigForm = (form: ConfigFormState) =>
@@ -993,9 +1024,11 @@ function StorefrontLoadingCard({
 function PublicationEditorCard({
   row,
   onOpen,
+  onOpenImages,
 }: {
   row: PublicationRow;
   onOpen: () => void;
+  onOpenImages: () => void;
 }) {
   const productMeta = [
     row.sku || "Sin codigo",
@@ -1007,16 +1040,18 @@ function PublicationEditorCard({
   return (
     <article className="overflow-visible rounded-[22px] border border-dashed border-zinc-200 bg-white px-4 py-4 shadow-[0_18px_36px_-34px_rgba(24,39,75,0.34)] sm:px-5">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-        <div className="min-w-0 pl-2.5">
-          <h3 className="text-base font-semibold leading-snug text-zinc-950">
-            <span>{row.productName}</span>
-            {productMeta.map((item) => (
-              <span key={item} className="text-xs font-medium text-zinc-500">
-                <span className="px-1.5 text-zinc-300">·</span>
-                {item}
-              </span>
-            ))}
-          </h3>
+        <div className="flex min-w-0 pl-2.5">
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold leading-snug text-zinc-950">
+              <span>{row.productName}</span>
+              {productMeta.map((item) => (
+                <span key={item} className="text-xs font-medium text-zinc-500">
+                  <span className="px-1.5 text-zinc-300">·</span>
+                  {item}
+                </span>
+              ))}
+            </h3>
+          </div>
         </div>
         <div className="flex shrink-0 items-start lg:justify-end">
           <div className="pr-4 text-right text-base font-semibold text-zinc-950 sm:text-lg">
@@ -1052,14 +1087,24 @@ function PublicationEditorCard({
             Factura - {billingModeLabels[row.billingMode]}
           </InfoPill>
         </div>
-        <button
-          type="button"
-          onClick={onOpen}
-          className="btn btn-sky shrink-0 self-start gap-1.5 px-4 py-2 text-xs leading-none transition hover:-translate-y-0.5 hover:shadow-[0_10px_20px_-14px_rgba(14,165,233,0.9)] lg:self-center"
-        >
-          <PencilSquareIcon className="size-4" />
-          Editar
-        </button>
+        <div className="flex shrink-0 flex-wrap gap-2 self-start lg:self-center">
+          <button
+            type="button"
+            onClick={onOpenImages}
+            className="btn shrink-0 gap-1.5 px-4 py-2 text-xs leading-none transition hover:-translate-y-0.5 hover:shadow-[0_10px_20px_-16px_rgba(24,39,75,0.28)]"
+          >
+            <EyeIcon className="size-4" />
+            Ver imagen
+          </button>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="btn btn-sky shrink-0 gap-1.5 px-4 py-2 text-xs leading-none transition hover:-translate-y-0.5 hover:shadow-[0_10px_20px_-14px_rgba(14,165,233,0.9)]"
+          >
+            <PencilSquareIcon className="size-4" />
+            Editar
+          </button>
+        </div>
       </div>
     </article>
   );
@@ -1462,6 +1507,139 @@ function PublicationEditorModal({
   );
 }
 
+function PublicationImagesModal({
+  row,
+  onReplaceImages,
+  onRemoveImage,
+  onClose,
+  isWorking,
+}: {
+  row: PublicationRow;
+  onReplaceImages: (files: File[]) => void;
+  onRemoveImage: (image: PublicationImage) => void;
+  onClose: () => void;
+  isWorking: boolean;
+}) {
+  const replaceLabel = row.images.length
+    ? row.images.length === 1
+      ? "Reemplazar imagen"
+      : "Reemplazar imagenes"
+    : "Subir imagen";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-zinc-950/30 px-3 py-3 backdrop-blur-sm sm:px-6 sm:py-6"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="publication-images-title"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[780px] flex-col overflow-hidden rounded-[22px] border border-zinc-200 bg-white shadow-[0_24px_80px_-32px_rgba(24,39,75,0.48)] sm:max-h-[calc(100dvh-3rem)] sm:rounded-[24px]">
+        <div className="grid shrink-0 gap-3 border-b border-zinc-100 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-6">
+          <div className="min-w-0">
+            <div className="input-label">Imagen de publicacion</div>
+            <h3
+              id="publication-images-title"
+              className="mt-1 text-xl font-semibold tracking-[-0.02em] text-zinc-950 break-words"
+            >
+              {row.productName}
+            </h3>
+            <div className="mt-1 text-xs text-zinc-500">
+              {row.images.length
+                ? `${row.images.length} imagen${row.images.length === 1 ? "" : "es"}`
+                : "Sin imagen"}
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <label
+              className={`btn btn-sky cursor-pointer ${
+                isWorking ? "pointer-events-none opacity-70" : ""
+              }`}
+            >
+              <PlusIcon className="size-4" />
+              {isWorking ? "Procesando" : replaceLabel}
+              <input
+                type="file"
+                accept={PUBLICATION_IMAGE_ACCEPT}
+                multiple
+                className="sr-only"
+                disabled={isWorking}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  event.currentTarget.value = "";
+                  if (files.length) onReplaceImages(files);
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Cerrar"
+              className="inline-flex size-9 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-600 transition hover:bg-zinc-50 hover:text-zinc-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30"
+            >
+              <XMarkIcon className="size-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
+          {row.images.length ? (
+            <div className="grid gap-4">
+              {row.images.map((image, index) => (
+                <div
+                  key={`${image.key ?? image.url}-${index}`}
+                  className="overflow-hidden rounded-[20px] border border-zinc-200 bg-zinc-50/50"
+                >
+                  <div className="relative aspect-[16/10] bg-zinc-100">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={image.url}
+                      alt={image.alt}
+                      className="h-full w-full object-contain"
+                    />
+                    {index === 0 ? (
+                      <span className="absolute left-3 top-3 rounded-full border border-white/80 bg-white/90 px-2.5 py-1 text-xs font-semibold text-zinc-700 shadow-sm">
+                        Principal
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0 text-sm font-medium text-zinc-700 truncate">
+                      {image.alt || row.publicName || row.productName}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveImage(image)}
+                      disabled={isWorking}
+                      className="btn shrink-0 gap-1.5 px-3 py-2 text-xs text-rose-700 transition hover:border-rose-200 hover:bg-rose-50 disabled:pointer-events-none disabled:opacity-60"
+                    >
+                      <TrashIcon className="size-4" />
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex min-h-[300px] flex-col items-center justify-center rounded-[20px] border border-dashed border-zinc-200 bg-zinc-50/45 px-5 text-center">
+              <span className="inline-flex size-12 items-center justify-center rounded-full border border-zinc-200 bg-white text-zinc-400">
+                <CubeIcon className="size-5" />
+              </span>
+              <div className="mt-3 text-sm font-semibold text-zinc-950">
+                Sin imagen cargada
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrderCard({
   order,
   onOpen,
@@ -1784,6 +1962,7 @@ export default function StorefrontClient({
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [isCreatingKey, setIsCreatingKey] = useState(false);
+  const [uploadingPublicationId, setUploadingPublicationId] = useState<string | null>(null);
   const [newApiKey, setNewApiKey] = useState<string | null>(null);
   const [isNewApiKeyCopied, setIsNewApiKeyCopied] = useState(false);
   const [apiKeyActionId, setApiKeyActionId] = useState<string | null>(null);
@@ -1798,6 +1977,7 @@ export default function StorefrontClient({
   const [publicationStatusFilter, setPublicationStatusFilter] =
     useState<PublicationStatusFilter>("active");
   const [selectedPublicationId, setSelectedPublicationId] = useState<string | null>(null);
+  const [selectedImagePublicationId, setSelectedImagePublicationId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [publicationSort, setPublicationSort] =
     useState<PublicationSortKey>("name-asc");
@@ -1846,6 +2026,10 @@ export default function StorefrontClient({
             : toNumber(row.normalShippingOverrideAmount),
         mercadoPagoFeeDays: row.mercadoPagoFeeDays ?? null,
         mercadoPagoFeePercent: toNumber(row.mercadoPagoFeePercent),
+        images: normalizePublicationImages(
+          row.images,
+          row.publicName || row.productName,
+        ),
       }));
       setPublications(normalizedPublications);
       setOrders(ordersJson);
@@ -1972,12 +2156,13 @@ export default function StorefrontClient({
   }, []);
 
   useEffect(() => {
-    if (!selectedPublicationId && !selectedOrderId) return;
+    if (!selectedPublicationId && !selectedImagePublicationId && !selectedOrderId) return;
 
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSelectedPublicationId(null);
+        setSelectedImagePublicationId(null);
         setSelectedOrderId(null);
       }
     };
@@ -1989,7 +2174,7 @@ export default function StorefrontClient({
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [selectedOrderId, selectedPublicationId]);
+  }, [selectedImagePublicationId, selectedOrderId, selectedPublicationId]);
 
   async function handleSaveConfig() {
     setIsSavingConfig(true);
@@ -2131,7 +2316,16 @@ export default function StorefrontClient({
     }
   }
 
-  async function handleSavePublication(row: PublicationRow) {
+  async function savePublicationRow(
+    row: PublicationRow,
+    {
+      closeEditor = false,
+      successMessage = `Cambios guardados en ${row.productName}.`,
+    }: {
+      closeEditor?: boolean;
+      successMessage?: string;
+    } = {},
+  ) {
     setStatus(null);
     const response = await fetch("/api/storefront/admin/publications", {
       method: "PUT",
@@ -2154,6 +2348,7 @@ export default function StorefrontClient({
         mercadoPagoFeeDays: row.mercadoPagoFeeDays,
         priceAdjustmentPercent: row.priceAdjustmentPercent,
         billingMode: row.billingMode,
+        images: row.images,
       }),
     });
 
@@ -2161,13 +2356,153 @@ export default function StorefrontClient({
     if (!response.ok) {
       setStatus(data?.error ?? `No se pudo guardar ${row.productName}.`);
       toast.error(data?.error ?? `No se pudo guardar ${row.productName}.`);
-      return;
+      return false;
     }
 
-    setSelectedPublicationId(null);
+    if (closeEditor) setSelectedPublicationId(null);
     setStatus(`Publicacion actualizada: ${row.productName}.`);
-    toast.success(`Cambios guardados en ${row.productName}.`);
+    toast.success(successMessage);
     await loadDashboard(query);
+    return true;
+  }
+
+  async function handleSavePublication(row: PublicationRow) {
+    await savePublicationRow(row, { closeEditor: true });
+  }
+
+  async function uploadPublicationImageFiles(
+    row: PublicationRow,
+    files: File[],
+    maxCount = 12,
+  ) {
+    const validSizeFiles = files.filter(
+      (file) => file.size <= MAX_PUBLICATION_IMAGE_SIZE_BYTES,
+    );
+    const selectedFiles = validSizeFiles.slice(0, maxCount);
+
+    if (!validSizeFiles.length) {
+      throw new Error("Cada imagen debe pesar 4 MB o menos.");
+    }
+    if (validSizeFiles.length < files.length) {
+      toast.warning("Se omitieron imagenes de mas de 4 MB.");
+    }
+    if (validSizeFiles.length > selectedFiles.length) {
+      toast.info("Solo se usaron las primeras 12 imagenes.");
+    }
+
+    const uploadedImages: PublicationImage[] = [];
+    for (const file of selectedFiles) {
+      const formData = new FormData();
+      formData.append("productId", row.productId);
+      formData.append("file", file);
+
+      const response = await fetch(
+        "/api/storefront/admin/publications/images",
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(data?.error ?? "No se pudo subir la imagen.");
+      }
+      uploadedImages.push(data.image as PublicationImage);
+    }
+
+    return uploadedImages;
+  }
+
+  async function deletePublicationImageObjects(
+    row: PublicationRow,
+    images: PublicationImage[],
+  ) {
+    const imagesWithKeys = images.filter((image) => image.key);
+    for (const image of imagesWithKeys) {
+      const response = await fetch(
+        "/api/storefront/admin/publications/images",
+        {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            productId: row.productId,
+            key: image.key,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error ?? "No se pudo eliminar la imagen.");
+      }
+    }
+  }
+
+  async function handleReplacePublicationImages(row: PublicationRow, files: File[]) {
+    setUploadingPublicationId(row.productId);
+    setStatus(null);
+    try {
+      const uploadedImages = await uploadPublicationImageFiles(row, files);
+      const nextImages = normalizePublicationImages(
+        uploadedImages,
+        row.publicName || row.productName,
+      );
+      const saved = await savePublicationRow(
+        {
+          ...row,
+          images: nextImages,
+        },
+        {
+          successMessage: `${nextImages.length} imagen${
+            nextImages.length === 1 ? "" : "es"
+          } reemplazada${nextImages.length === 1 ? "" : "s"}.`,
+        },
+      );
+      if (saved) {
+        deletePublicationImageObjects(row, row.images).catch(() => {
+          toast.warning("La imagen anterior se quito de la publicacion, pero no se pudo borrar del storage.");
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "No se pudo subir la imagen.";
+      setStatus(message);
+      toast.error(message);
+    } finally {
+      setUploadingPublicationId(null);
+    }
+  }
+
+  async function handleRemovePublicationImage(
+    row: PublicationRow,
+    image: PublicationImage,
+  ) {
+    setUploadingPublicationId(row.productId);
+    setStatus(null);
+    try {
+      const imageIdentity = image.key || image.url;
+      const nextImages = row.images.filter(
+        (item) => (item.key || item.url) !== imageIdentity,
+      );
+      const saved = await savePublicationRow(
+        {
+          ...row,
+          images: nextImages,
+        },
+        { successMessage: "Imagen eliminada." },
+      );
+      if (saved && image.key) {
+        deletePublicationImageObjects(row, [image]).catch(() => {
+          toast.warning("La imagen se quito de la publicacion, pero no se pudo borrar del storage.");
+        });
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "No se pudo eliminar la imagen.";
+      setStatus(message);
+      toast.error(message);
+    } finally {
+      setUploadingPublicationId(null);
+    }
   }
 
   function updatePublication(productId: string, patch: Partial<PublicationRow>) {
@@ -2331,6 +2666,8 @@ export default function StorefrontClient({
   }, [configForm.productCategories]);
   const selectedPublication =
     publications.find((row) => row.productId === selectedPublicationId) ?? null;
+  const selectedImagePublication =
+    publications.find((row) => row.productId === selectedImagePublicationId) ?? null;
   const selectedOrder = orders.find((order) => order.id === selectedOrderId) ?? null;
   const getPublicationCategoryOptions = (row: PublicationRow) =>
     publicationCategoryOptions.some((option) => option.value === row.category)
@@ -2835,6 +3172,7 @@ export default function StorefrontClient({
                   key={row.productId}
                   row={row}
                   onOpen={() => setSelectedPublicationId(row.productId)}
+                  onOpenImages={() => setSelectedImagePublicationId(row.productId)}
                 />
               ))
             ) : (
@@ -2853,6 +3191,22 @@ export default function StorefrontClient({
               onClose={() => setSelectedPublicationId(null)}
               onChange={(patch) => updatePublication(selectedPublication.productId, patch)}
               onSave={() => handleSavePublication(selectedPublication)}
+            />
+          ) : null}
+
+          {selectedImagePublication ? (
+            <PublicationImagesModal
+              row={selectedImagePublication}
+              onClose={() => setSelectedImagePublicationId(null)}
+              onReplaceImages={(files) =>
+                handleReplacePublicationImages(selectedImagePublication, files)
+              }
+              onRemoveImage={(image) =>
+                handleRemovePublicationImage(selectedImagePublication, image)
+              }
+              isWorking={
+                uploadingPublicationId === selectedImagePublication.productId
+              }
             />
           ) : null}
 

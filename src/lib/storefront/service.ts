@@ -30,6 +30,7 @@ import type {
   StorefrontOrderDto,
   StorefrontOrderTrackingSearchInput,
   StorefrontPublicOrderSummaryDto,
+  StorefrontProductImage,
   StorefrontProductDto,
   StorefrontProductsListDto,
   StorefrontShippingQuoteDto,
@@ -152,6 +153,7 @@ type StorefrontAdminPublicationRow = {
   priceAdjustmentPercent: number;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
   featured: boolean;
+  images: StorefrontProductImage[];
   computedPriceFinal: number;
   salesCount: number;
 };
@@ -206,6 +208,7 @@ type UpsertStorefrontPublicationInput = {
   priceAdjustmentPercent: number;
   mercadoPagoFeeDays?: number | null;
   billingMode: "DEFAULT" | "MANUAL" | "AUTO";
+  images?: StorefrontProductImage[];
   flags?: {
     hasGas?: boolean;
     hasPressure?: boolean;
@@ -667,28 +670,37 @@ const parseTechnicalSheet = (
     .filter((item): item is StorefrontTechnicalSheetItem => item !== null);
 };
 
-const parseImages = (
-  value: Prisma.JsonValue | null,
-  slug: string,
+const parseStoredImages = (
+  value: Prisma.JsonValue | StorefrontProductImage[] | null | undefined,
   name: string,
-) => {
+): StorefrontProductImage[] => {
   if (Array.isArray(value)) {
-    const mapped = value
+    return value
       .map((item) => {
         if (!item || typeof item !== "object") return null;
         const url = "url" in item ? String(item.url ?? "").trim() : "";
         const alt = "alt" in item ? String(item.alt ?? "").trim() : "";
+        const key = "key" in item ? String(item.key ?? "").trim() : "";
         if (!url) return null;
-        return {
-          url,
-          alt: alt || name,
-        };
+        return key ? { url, alt: alt || name, key } : { url, alt: alt || name };
       })
-      .filter((item): item is { url: string; alt: string } => item !== null);
-    if (mapped.length) return mapped;
+      .filter((item): item is StorefrontProductImage => item !== null)
+      .slice(0, 12);
   }
 
-  return [{ url: `/products/${slug}.svg`, alt: name }];
+  return [];
+};
+
+const parseImages = (
+  value: Prisma.JsonValue | null,
+  slug: string,
+  name: string,
+): StorefrontProductImage[] => {
+  const stored = parseStoredImages(value, name).map(({ url, alt }) => ({
+    url,
+    alt,
+  }));
+  return stored.length ? stored : [{ url: `/products/${slug}.svg`, alt: name }];
 };
 
 const normalizeCartItems = (items: StorefrontCartItemInput[]) => {
@@ -2852,6 +2864,10 @@ export async function listStorefrontAdminPublications(
         ),
         billingMode: publication?.billingMode ?? "DEFAULT",
         featured: publication?.featured ?? false,
+        images: parseStoredImages(
+          publication?.images ?? null,
+          publication?.publicName ?? product.name,
+        ),
         computedPriceFinal: pricing.priceFinal,
         salesCount: salesCountByProductId.get(product.id) ?? 0,
       };
@@ -2910,6 +2926,10 @@ export async function upsertStorefrontAdminPublication(
     input.productId,
     input.slug || input.publicName || product.name,
   );
+  const normalizedImages = parseStoredImages(
+    input.images,
+    input.publicName || product.name,
+  );
 
   const data: Prisma.StorefrontPublicationUncheckedCreateInput = {
     organizationId,
@@ -2943,6 +2963,11 @@ export async function upsertStorefrontAdminPublication(
     isFlammable: Boolean(input.flags?.isFlammable),
     hasSpecialLogistics: Boolean(input.flags?.hasSpecialLogistics),
   };
+  if (input.images !== undefined) {
+    data.images = normalizedImages.length
+      ? (normalizedImages as Prisma.InputJsonValue)
+      : Prisma.JsonNull;
+  }
 
   const existing = await prisma.storefrontPublication.findFirst({
     where: {

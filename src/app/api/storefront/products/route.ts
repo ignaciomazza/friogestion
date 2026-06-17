@@ -1,14 +1,15 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest } from "next/server";
 import { z } from "zod";
 import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 import { requireStorefrontAccess } from "@/lib/storefront/auth";
-import { storefrontErrorResponse } from "@/lib/storefront/http";
+import { storefrontErrorResponse, storefrontJson } from "@/lib/storefront/http";
 import {
   listStorefrontProducts,
   STOREFRONT_MAX_PRODUCT_LIMIT,
 } from "@/lib/storefront/service";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const filtersSchema = z.object({
   q: z.string().max(120).optional(),
@@ -53,7 +54,7 @@ export async function GET(request: NextRequest) {
     });
 
     const response = await listStorefrontProducts(access.channelId, filters);
-    return NextResponse.json(response);
+    return storefrontJson(response);
   } catch (error) {
     return storefrontErrorResponse(error);
   }

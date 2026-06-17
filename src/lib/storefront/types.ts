@@ -14,6 +14,7 @@ export type ApiDeliveryMethod =
 export type StorefrontProductImage = {
   url: string;
   alt: string;
+  key?: string;
 };
 
 export type StorefrontTechnicalSheetItem = {

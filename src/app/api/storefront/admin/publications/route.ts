@@ -10,6 +10,12 @@ import {
 
 export const runtime = "nodejs";
 
+const imageSchema = z.object({
+  url: z.string().min(1).max(2048),
+  alt: z.string().max(180).default(""),
+  key: z.string().max(512).optional(),
+});
+
 const bodySchema = z.object({
   productId: z.string().min(1),
   slug: z.string().optional().nullable(),
@@ -34,6 +40,7 @@ const bodySchema = z.object({
   priceAdjustmentPercent: z.coerce.number(),
   mercadoPagoFeeDays: z.coerce.number().int().min(0).max(90).optional().nullable(),
   billingMode: z.enum(["DEFAULT", "MANUAL", "AUTO"]),
+  images: z.array(imageSchema).max(12).optional(),
   flags: z
     .object({
       hasGas: z.boolean().optional(),

@@ -1,10 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { type NextRequest } from "next/server";
 import { checkRateLimit, rateLimitResponse } from "@/lib/server/rate-limit";
 import { requireStorefrontAccess } from "@/lib/storefront/auth";
-import { storefrontErrorResponse } from "@/lib/storefront/http";
+import { storefrontErrorResponse, storefrontJson } from "@/lib/storefront/http";
 import { getStorefrontProduct } from "@/lib/storefront/service";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(
   request: NextRequest,
@@ -22,12 +23,12 @@ export async function GET(
     const { slug } = await context.params;
     const product = await getStorefrontProduct(access.channelId, slug);
     if (!product) {
-      return NextResponse.json(
+      return storefrontJson(
         { error: "Producto no encontrado" },
         { status: 404 },
       );
     }
-    return NextResponse.json(product);
+    return storefrontJson(product);
   } catch (error) {
     return storefrontErrorResponse(error);
   }
