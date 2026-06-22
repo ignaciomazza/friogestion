@@ -9,6 +9,10 @@ export type PurchaseDiscountInput = {
   value: number;
 };
 
+export type PurchaseDiscountStepInput = PurchaseDiscountInput & {
+  amount?: number;
+};
+
 export type PurchaseDiscountBases = {
   subtotal: number;
   vat: number;
@@ -41,11 +45,28 @@ export function calculatePurchaseDiscountAmount(input: {
   return roundPurchaseMoney(Math.min(Math.max(0, rawAmount), baseAmount));
 }
 
+export function normalizePurchaseDiscountSteps(
+  discounts: PurchaseDiscountStepInput[] | null | undefined,
+) {
+  return (discounts ?? [])
+    .map((discount) => ({
+      type: discount.type,
+      base: discount.base,
+      value: Math.max(0, Number(discount.value ?? 0)),
+      amount:
+        typeof discount.amount === "number" && Number.isFinite(discount.amount)
+          ? Math.max(0, discount.amount)
+          : undefined,
+    }))
+    .filter((discount) => Number.isFinite(discount.value) && discount.value > 0);
+}
+
 export function applyPurchaseItemDiscount(input: {
   grossSubtotal: number;
   taxRate: number;
   taxAmountOverride?: number | null;
-  discount: PurchaseDiscountInput;
+  discount?: PurchaseDiscountInput;
+  discounts?: PurchaseDiscountStepInput[];
 }) {
   const grossSubtotal = Math.max(0, input.grossSubtotal);
   const taxRate = Math.max(0, input.taxRate);
@@ -56,15 +77,47 @@ export function applyPurchaseItemDiscount(input: {
   const grossVat = hasTaxAmountOverride
     ? roundPurchaseMoney(input.taxAmountOverride ?? 0)
     : roundPurchaseMoney(grossSubtotal * (taxRate / 100));
-  const grossTotal = roundPurchaseMoney(grossSubtotal + grossVat);
-  const discountAmount = calculatePurchaseDiscountAmount({
-    discount: input.discount,
-    bases: {
-      subtotal: grossSubtotal,
-      vat: grossVat,
-      total: grossTotal,
-    },
-  });
+  const discountSteps = normalizePurchaseDiscountSteps(
+    input.discounts ?? (input.discount ? [input.discount] : []),
+  );
+  let subtotal = grossSubtotal;
+  let vat = grossVat;
+  let total = roundPurchaseMoney(subtotal + vat);
+  const grossTotal = total;
+  let discountAmount = 0;
+
+  for (const discount of discountSteps) {
+    const amount = calculatePurchaseDiscountAmount({
+      discount,
+      bases: {
+        subtotal,
+        vat,
+        total,
+      },
+    });
+    if (amount <= 0) continue;
+    discountAmount = roundPurchaseMoney(discountAmount + amount);
+
+    if (discount.base === "VAT") {
+      vat = roundPurchaseMoney(Math.max(0, vat - amount));
+      total = roundPurchaseMoney(subtotal + vat);
+      continue;
+    }
+
+    if (discount.base === "TOTAL") {
+      total = roundPurchaseMoney(Math.max(0, total - amount));
+      const subtotalShare = total + amount > 0 ? subtotal / (total + amount) : 1;
+      subtotal = roundPurchaseMoney(total * subtotalShare);
+      vat = roundPurchaseMoney(Math.max(0, total - subtotal));
+      continue;
+    }
+
+    subtotal = roundPurchaseMoney(Math.max(0, subtotal - amount));
+    vat = hasTaxAmountOverride
+      ? vat
+      : roundPurchaseMoney(subtotal * (taxRate / 100));
+    total = roundPurchaseMoney(subtotal + vat);
+  }
 
   if (discountAmount <= 0) {
     return {
@@ -78,39 +131,6 @@ export function applyPurchaseItemDiscount(input: {
     };
   }
 
-  if (input.discount.base === "VAT") {
-    const vat = roundPurchaseMoney(Math.max(0, grossVat - discountAmount));
-    return {
-      grossSubtotal,
-      grossVat,
-      grossTotal,
-      discountAmount,
-      subtotal: grossSubtotal,
-      vat,
-      total: roundPurchaseMoney(grossSubtotal + vat),
-    };
-  }
-
-  if (input.discount.base === "TOTAL") {
-    const total = roundPurchaseMoney(Math.max(0, grossTotal - discountAmount));
-    const subtotalShare = grossTotal > 0 ? grossSubtotal / grossTotal : 1;
-    const subtotal = roundPurchaseMoney(total * subtotalShare);
-    const vat = roundPurchaseMoney(Math.max(0, total - subtotal));
-    return {
-      grossSubtotal,
-      grossVat,
-      grossTotal,
-      discountAmount,
-      subtotal,
-      vat,
-      total,
-    };
-  }
-
-  const subtotal = roundPurchaseMoney(Math.max(0, grossSubtotal - discountAmount));
-  const vat = hasTaxAmountOverride
-    ? grossVat
-    : roundPurchaseMoney(subtotal * (taxRate / 100));
   return {
     grossSubtotal,
     grossVat,
@@ -126,19 +146,57 @@ export function calculateGlobalPurchaseDiscount(input: {
   subtotal: number;
   vat: number;
   otherTaxesTotal: number;
-  discount: PurchaseDiscountInput;
+  discount?: PurchaseDiscountInput;
+  discounts?: PurchaseDiscountStepInput[];
 }) {
   const subtotal = Math.max(0, input.subtotal);
   const vat = Math.max(0, input.vat);
-  const total = roundPurchaseMoney(
+  const otherTaxesTotal = Math.max(0, input.otherTaxesTotal);
+  const discountSteps = normalizePurchaseDiscountSteps(
+    input.discounts ?? (input.discount ? [input.discount] : []),
+  );
+  let runningSubtotal = subtotal;
+  let runningVat = vat;
+  let runningOtherTaxesTotal = otherTaxesTotal;
+  let runningTotal = roundPurchaseMoney(
     subtotal + vat + Math.max(0, input.otherTaxesTotal),
   );
-  return calculatePurchaseDiscountAmount({
-    discount: input.discount,
-    bases: {
-      subtotal,
-      vat,
-      total,
-    },
-  });
+  let discountTotal = 0;
+
+  for (const discount of discountSteps) {
+    const amount = calculatePurchaseDiscountAmount({
+      discount,
+      bases: {
+        subtotal: runningSubtotal,
+        vat: runningVat,
+        total: runningTotal,
+      },
+    });
+    if (amount <= 0) continue;
+    discountTotal = roundPurchaseMoney(discountTotal + amount);
+
+    if (discount.base === "VAT") {
+      runningVat = roundPurchaseMoney(Math.max(0, runningVat - amount));
+    } else if (discount.base === "TOTAL") {
+      const nextTotal = roundPurchaseMoney(Math.max(0, runningTotal - amount));
+      const subtotalShare =
+        runningTotal > 0 ? runningSubtotal / runningTotal : 1;
+      const vatShare = runningTotal > 0 ? runningVat / runningTotal : 0;
+      runningSubtotal = roundPurchaseMoney(nextTotal * subtotalShare);
+      runningVat = roundPurchaseMoney(nextTotal * vatShare);
+      runningOtherTaxesTotal = roundPurchaseMoney(
+        Math.max(0, nextTotal - runningSubtotal - runningVat),
+      );
+    } else {
+      runningSubtotal = roundPurchaseMoney(
+        Math.max(0, runningSubtotal - amount),
+      );
+    }
+
+    runningTotal = roundPurchaseMoney(
+      runningSubtotal + runningVat + runningOtherTaxesTotal,
+    );
+  }
+
+  return discountTotal;
 }

@@ -79,6 +79,7 @@ export async function GET(
         discountBase: true,
         discountValue: true,
         discountAmount: true,
+        discountDetails: true,
         fiscalVoucherKind: true,
         fiscalVoucherType: true,
         fiscalPointOfSale: true,
@@ -110,6 +111,7 @@ export async function GET(
             discountBase: true,
             discountValue: true,
             discountAmount: true,
+            discountDetails: true,
             stockMovement: {
               select: {
                 id: true,
@@ -209,6 +211,7 @@ export async function GET(
       discountBase: purchase.discountBase,
       discountValue: purchase.discountValue?.toString() ?? null,
       discountAmount: purchase.discountAmount.toString(),
+      discountDetails: purchase.discountDetails,
       fiscalVoucherKind: purchase.fiscalVoucherKind,
       fiscalVoucherType: purchase.fiscalVoucherType,
       authorizationCode: purchase.authorizationCode,
@@ -223,6 +226,7 @@ export async function GET(
         discountBase: item.discountBase,
         discountValue: item.discountValue?.toString() ?? null,
         discountAmount: item.discountAmount.toString(),
+        discountDetails: item.discountDetails,
         product: {
           id: item.product.id,
           name: item.product.name,

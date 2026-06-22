@@ -49,6 +49,8 @@ export function PurchaseSelect<T extends string>({
     () => options.map((option, index) => ({ option, index })).filter((item) => !item.option.disabled),
     [options],
   );
+  const defaultActiveIndex =
+    selectedIndex >= 0 ? selectedIndex : enabledOptions[0]?.index ?? 0;
 
   useEffect(() => {
     if (!open) return;
@@ -63,11 +65,10 @@ export function PurchaseSelect<T extends string>({
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
 
-  useEffect(() => {
-    if (open) {
-      setActiveIndex(selectedIndex >= 0 ? selectedIndex : enabledOptions[0]?.index ?? 0);
-    }
-  }, [enabledOptions, open, selectedIndex]);
+  const openMenu = () => {
+    setActiveIndex(defaultActiveIndex);
+    setOpen(true);
+  };
 
   const moveActive = (direction: 1 | -1) => {
     if (!enabledOptions.length) return;
@@ -103,23 +104,34 @@ export function PurchaseSelect<T extends string>({
         aria-expanded={open}
         aria-controls={`${id}-options`}
         onClick={() => {
-          if (!disabled) setOpen((current) => !current);
+          if (disabled) return;
+          if (open) {
+            setOpen(false);
+          } else {
+            openMenu();
+          }
         }}
         onKeyDown={(event) => {
           if (event.key === "ArrowDown") {
             event.preventDefault();
-            if (!open) setOpen(true);
+            if (!open) {
+              openMenu();
+              return;
+            }
             moveActive(1);
           }
           if (event.key === "ArrowUp") {
             event.preventDefault();
-            if (!open) setOpen(true);
+            if (!open) {
+              openMenu();
+              return;
+            }
             moveActive(-1);
           }
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
             if (!open) {
-              setOpen(true);
+              openMenu();
               return;
             }
             const option = options[activeIndex];

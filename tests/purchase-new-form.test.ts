@@ -45,6 +45,22 @@ test("applyPurchaseItemDiscount permite IVA fijo por item", () => {
   assert.equal(line.total, 119.8);
 });
 
+test("applyPurchaseItemDiscount aplica descuentos encadenados", () => {
+  const line = applyPurchaseItemDiscount({
+    grossSubtotal: 1396943.75,
+    taxRate: 21,
+    discounts: [
+      { type: "PERCENT", base: "SUBTOTAL", value: 8 },
+      { type: "PERCENT", base: "SUBTOTAL", value: 12 },
+    ],
+  });
+
+  assert.equal(line.discountAmount, 265978.09);
+  assert.equal(line.subtotal, 1130965.66);
+  assert.equal(line.vat, 237502.79);
+  assert.equal(line.total, 1368468.45);
+});
+
 test("compareArcaVoucherAgainstForm detecta mismatch por tipo y total", () => {
   const mismatches = compareArcaVoucherAgainstForm({
     form: {

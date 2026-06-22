@@ -10,10 +10,12 @@ import "react-toastify/dist/ReactToastify.css";
 import {
   ChevronDownIcon,
   CheckIcon,
+  Cog6ToothIcon,
   EyeIcon,
   ExclamationTriangleIcon,
   PlusIcon,
   TrashIcon,
+  XMarkIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { STOCK_ENABLED } from "@/lib/features";
@@ -22,6 +24,8 @@ import { normalizeDecimalInput } from "@/lib/input-format";
 import {
   applyPurchaseItemDiscount,
   calculateGlobalPurchaseDiscount,
+  normalizePurchaseDiscountSteps,
+  type PurchaseDiscountStepInput,
 } from "@/lib/purchases/discounts";
 import {
   PURCHASE_DOCUMENT_TYPE_LABELS,
@@ -107,9 +111,16 @@ type PurchaseProductForm = {
   discountType: PurchaseDiscountType;
   discountBase: PurchaseDiscountBase;
   discountValue: string;
+  extraDiscounts: PurchaseDiscountForm[];
   taxRate: string;
   taxAmountMode: "AUTO" | "MANUAL";
   taxAmount: string;
+};
+
+type PurchaseDiscountForm = {
+  type: PurchaseDiscountType;
+  base: PurchaseDiscountBase;
+  value: string;
 };
 
 type PurchaseFiscalLineType =
@@ -180,6 +191,7 @@ type PurchasePayload = {
     base: PurchaseDiscountBase;
     value: number;
     amount: number;
+    details?: PurchaseDiscountStepInput[];
   };
   fiscalDetail?: FiscalDetailPayload;
   impactCurrentAccount: boolean;
@@ -194,6 +206,7 @@ type PurchasePayload = {
     discountBase?: PurchaseDiscountBase;
     discountValue?: number;
     discountAmount?: number;
+    discountDetails?: PurchaseDiscountStepInput[];
   }>;
   adjustStock: boolean;
   registerCashOut: boolean;
@@ -275,6 +288,7 @@ type PurchaseEditResponse = {
   discountBase?: PurchaseDiscountBase | null;
   discountValue?: string | null;
   discountAmount?: string | null;
+  discountDetails?: PurchaseDiscountStepInput[] | null;
   fiscalVoucherKind: string | null;
   fiscalVoucherType: number | null;
   authorizationCode: string | null;
@@ -288,6 +302,7 @@ type PurchaseEditResponse = {
     discountBase?: PurchaseDiscountBase | null;
     discountValue?: string | null;
     discountAmount?: string | null;
+    discountDetails?: PurchaseDiscountStepInput[] | null;
     product: ProductOption;
   }>;
   fiscalLines: Array<{
@@ -311,15 +326,61 @@ const emptyPurchaseProduct = (): PurchaseProductForm => ({
   discountType: "PERCENT",
   discountBase: "SUBTOTAL",
   discountValue: "0",
+  extraDiscounts: [],
   taxRate: "21",
   taxAmountMode: "AUTO",
   taxAmount: "",
 });
 
-const emptyFiscalLine = (): PurchaseFiscalLineForm => ({
+const emptyPurchaseDiscount = (): PurchaseDiscountForm => ({
+  type: "PERCENT",
+  base: "SUBTOTAL",
+  value: "",
+});
+
+const purchaseProductDiscountForms = (
+  item: PurchaseProductForm,
+): PurchaseDiscountForm[] => [
+  {
+    type: item.discountType,
+    base: item.discountBase,
+    value: item.discountValue,
+  },
+  ...item.extraDiscounts,
+];
+
+const normalizeDiscountFormsForCalculation = (
+  discounts: PurchaseDiscountForm[],
+) =>
+  discounts.map((discount) => ({
+    type: discount.type,
+    base: discount.base,
+    value: Math.max(0, parseOptionalNumber(discount.value) ?? 0),
+  }));
+
+const hasVisibleDiscountValue = (discount: PurchaseDiscountForm) =>
+  (parseOptionalNumber(discount.value) ?? 0) > 0;
+
+const formatDiscountBaseShort = (base: PurchaseDiscountBase) => {
+  if (base === "VAT") return "IVA";
+  if (base === "TOTAL") return "total";
+  return "subtotal";
+};
+
+const formatDiscountStepLabel = (discount: PurchaseDiscountStepInput) =>
+  `${discount.type === "PERCENT" ? `${discount.value}%` : formatCurrencyARS(discount.value)} ${formatDiscountBaseShort(discount.base)}`;
+
+const formatDiscountStepsSummary = (
+  discounts: PurchaseDiscountStepInput[],
+) =>
+  discounts.length
+    ? discounts.map(formatDiscountStepLabel).join(" + ")
+    : "Sin descuento";
+
+const emptyFiscalLine = (baseAmount = ""): PurchaseFiscalLineForm => ({
   type: "IIBB_PERCEPTION",
   jurisdiction: "",
-  baseAmount: "",
+  baseAmount,
   rate: "",
   amount: "",
   manualAmountOverride: false,
@@ -927,6 +988,39 @@ const roundMoney = (value: number) =>
 
 const toMoneyValue = (value: number) => roundMoney(value).toFixed(2);
 
+const toDiscountFormValue = (discount: PurchaseDiscountStepInput) =>
+  discount.type === "AMOUNT"
+    ? toMoneyValue(discount.value)
+    : String(discount.value);
+
+const toDiscountForm = (
+  discount: PurchaseDiscountStepInput,
+): PurchaseDiscountForm => ({
+  type: discount.type,
+  base: discount.base,
+  value: toDiscountFormValue(discount),
+});
+
+const purchaseDiscountStepsFromSaved = (input: {
+  details?: PurchaseDiscountStepInput[] | null;
+  type?: PurchaseDiscountType | null;
+  base?: PurchaseDiscountBase | null;
+  value?: string | null;
+}) => {
+  const detailSteps = normalizePurchaseDiscountSteps(input.details ?? []);
+  if (detailSteps.length) return detailSteps;
+  const parsedValue = Number(input.value ?? 0);
+  const value = Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : 0;
+  if (value <= 0) return [];
+  return normalizePurchaseDiscountSteps([
+    {
+      type: input.type ?? "AMOUNT",
+      base: input.base ?? "SUBTOTAL",
+      value,
+    },
+  ]);
+};
+
 const paymentMethodRequiresAccount = (
   paymentMethodId: string,
   paymentMethods: PaymentMethodOption[],
@@ -1102,6 +1196,197 @@ function InlineDataNotice({
   );
 }
 
+function PurchaseModalShell({
+  title,
+  eyebrow,
+  summary,
+  children,
+  footer,
+  onClose,
+}: {
+  title: string;
+  eyebrow?: string;
+  summary?: string;
+  children: ReactNode;
+  footer?: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[180] flex items-center justify-center bg-zinc-950/30 px-3 py-5 backdrop-blur-[1px]">
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 10, scale: 0.98 }}
+        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+        className="flex max-h-[calc(100svh-2.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-[0_24px_80px_-40px_rgba(24,24,27,0.55)]"
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-zinc-200/70 px-5 py-4">
+          <div className="min-w-0">
+            {eyebrow ? (
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                {eyebrow}
+              </p>
+            ) : null}
+            <h2 className="mt-0.5 text-lg font-semibold text-zinc-900">
+              {title}
+            </h2>
+            {summary ? (
+              <p className="mt-1 truncate text-xs text-zinc-500">{summary}</p>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="btn h-9 w-9 shrink-0 justify-center p-0"
+            onClick={onClose}
+            aria-label="Cerrar"
+          >
+            <XMarkIcon className="size-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {children}
+        </div>
+        {footer ? (
+          <div className="border-t border-zinc-200/70 bg-zinc-50/70 px-5 py-3">
+            {footer}
+          </div>
+        ) : null}
+      </motion.div>
+    </div>
+  );
+}
+
+function DiscountRowsEditor({
+  primary,
+  extraDiscounts,
+  onPrimaryChange,
+  onExtraChange,
+  onAdd,
+  onRemove,
+}: {
+  primary: PurchaseDiscountForm;
+  extraDiscounts: PurchaseDiscountForm[];
+  onPrimaryChange: (field: keyof PurchaseDiscountForm, value: string) => void;
+  onExtraChange: (
+    index: number,
+    field: keyof PurchaseDiscountForm,
+    value: string,
+  ) => void;
+  onAdd: () => void;
+  onRemove: (index: number) => void;
+}) {
+  const renderValueInput = (
+    discount: PurchaseDiscountForm,
+    onValueChange: (value: string) => void,
+    className = "h-10 text-sm",
+  ) => (
+    <div className="relative min-w-0">
+      <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+        {discount.type === "PERCENT" ? "%" : "$"}
+      </span>
+      {discount.type === "PERCENT" ? (
+        <input
+          className={`input w-full min-w-0 pl-9 text-right tabular-nums ${className}`}
+          inputMode="decimal"
+          value={discount.value}
+          onChange={(event) =>
+            onValueChange(normalizeDecimalInput(event.target.value, 2))
+          }
+          placeholder="0"
+        />
+      ) : (
+        <MoneyInput
+          className={`input no-spinner w-full min-w-0 pl-9 text-right tabular-nums ${className}`}
+          value={discount.value}
+          onValueChange={onValueChange}
+          placeholder="0,00"
+          maxDecimals={2}
+        />
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="grid gap-2 sm:grid-cols-[minmax(8rem,1fr)_4.75rem_minmax(8rem,1fr)_2.5rem]">
+        <label className="field-stack min-w-0">
+          <span className="input-label">Base</span>
+          <PurchaseSelect
+            value={primary.base}
+            options={PURCHASE_DISCOUNT_BASE_OPTIONS}
+            onValueChange={(value) => onPrimaryChange("base", value)}
+            buttonClassName="text-xs"
+          />
+        </label>
+        <label className="field-stack min-w-0">
+          <span className="input-label">Tipo</span>
+          <PurchaseSelect
+            value={primary.type}
+            options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
+            onValueChange={(value) => onPrimaryChange("type", value)}
+            buttonClassName="justify-center text-xs"
+          />
+        </label>
+        <label className="field-stack min-w-0">
+          <span className="input-label">Valor</span>
+          {renderValueInput(primary, (value) => onPrimaryChange("value", value))}
+        </label>
+        <button
+          type="button"
+          className="btn h-10 w-10 justify-center self-end p-0 text-sky-700"
+          onClick={onAdd}
+          aria-label="Agregar descuento"
+          title="Agregar descuento"
+        >
+          <PlusIcon className="size-4" />
+        </button>
+      </div>
+
+      {extraDiscounts.length ? (
+        <div className="space-y-2 border-t border-zinc-200/70 pt-2">
+          {extraDiscounts.map((discount, index) => (
+            <div
+              key={`discount-row-${index}`}
+              className="grid gap-2 sm:grid-cols-[minmax(8rem,1fr)_4.75rem_minmax(8rem,1fr)_2.5rem]"
+            >
+              <PurchaseSelect
+                value={discount.base}
+                options={PURCHASE_DISCOUNT_BASE_OPTIONS}
+                onValueChange={(value) => onExtraChange(index, "base", value)}
+                compact
+                buttonClassName="text-xs"
+              />
+              <PurchaseSelect
+                value={discount.type}
+                options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
+                onValueChange={(value) => onExtraChange(index, "type", value)}
+                compact
+                buttonClassName="justify-center text-xs"
+              />
+              {renderValueInput(
+                discount,
+                (value) => onExtraChange(index, "value", value),
+                "h-9 text-xs",
+              )}
+              <button
+                type="button"
+                className="btn btn-rose h-9 w-9 justify-center p-0"
+                onClick={() => onRemove(index)}
+                aria-label="Quitar descuento"
+                title="Quitar descuento"
+              >
+                <TrashIcon className="size-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export default function PurchasesPage() {
   const [supplierMatches, setSupplierMatches] = useState<SupplierOption[]>([]);
   const [productMatchesByQuery, setProductMatchesByQuery] = useState<
@@ -1149,6 +1434,9 @@ export default function PurchasesPage() {
   const [globalDiscountBase, setGlobalDiscountBase] =
     useState<PurchaseDiscountBase>("TOTAL");
   const [globalDiscountValue, setGlobalDiscountValue] = useState("");
+  const [globalExtraDiscounts, setGlobalExtraDiscounts] = useState<
+    PurchaseDiscountForm[]
+  >([]);
   const [totalsSource, setTotalsSource] =
     useState<PurchaseTotalsSource>("AUTO_FROM_PRODUCTS");
   const [showFiscalDetail, setShowFiscalDetail] = useState(false);
@@ -1166,6 +1454,11 @@ export default function PurchasesPage() {
     emptyPurchaseProduct(),
   ]);
   const [openProductIndex, setOpenProductIndex] = useState<number | null>(null);
+  const [productAdjustmentsIndex, setProductAdjustmentsIndex] = useState<
+    number | null
+  >(null);
+  const [isGlobalDiscountModalOpen, setIsGlobalDiscountModalOpen] =
+    useState(false);
   const [productActiveIndex, setProductActiveIndex] = useState(0);
   const [openJurisdictionIndex, setOpenJurisdictionIndex] = useState<number | null>(
     null,
@@ -1934,6 +2227,88 @@ export default function PurchasesPage() {
     });
   };
 
+  const addPurchaseProductDiscount = (index: number) => {
+    setPurchaseProducts((previous) => {
+      const next = [...previous];
+      const current = next[index];
+      if (!current) return previous;
+      next[index] = {
+        ...current,
+        extraDiscounts: [...current.extraDiscounts, emptyPurchaseDiscount()],
+      };
+      return next;
+    });
+  };
+
+  const updatePurchaseProductExtraDiscount = (
+    productIndex: number,
+    discountIndex: number,
+    field: keyof PurchaseDiscountForm,
+    value: string,
+  ) => {
+    setPurchaseProducts((previous) => {
+      const next = [...previous];
+      const current = next[productIndex];
+      if (!current) return previous;
+      next[productIndex] = {
+        ...current,
+        extraDiscounts: current.extraDiscounts.map((discount, currentIndex) =>
+          currentIndex === discountIndex
+            ? { ...discount, [field]: value }
+            : discount,
+        ),
+      };
+      return next;
+    });
+  };
+
+  const removePurchaseProductExtraDiscount = (
+    productIndex: number,
+    discountIndex: number,
+  ) => {
+    setPurchaseProducts((previous) => {
+      const next = [...previous];
+      const current = next[productIndex];
+      if (!current) return previous;
+      next[productIndex] = {
+        ...current,
+        extraDiscounts: current.extraDiscounts.filter(
+          (_, currentIndex) => currentIndex !== discountIndex,
+        ),
+      };
+      return next;
+    });
+  };
+
+  const addGlobalExtraDiscount = () => {
+    setGlobalExtraDiscounts((previous) => [
+      ...previous,
+      {
+        type: globalDiscountType,
+        base: globalDiscountBase,
+        value: "",
+      },
+    ]);
+  };
+
+  const updateGlobalExtraDiscount = (
+    index: number,
+    field: keyof PurchaseDiscountForm,
+    value: string,
+  ) => {
+    setGlobalExtraDiscounts((previous) =>
+      previous.map((discount, currentIndex) =>
+        currentIndex === index ? { ...discount, [field]: value } : discount,
+      ),
+    );
+  };
+
+  const removeGlobalExtraDiscount = (index: number) => {
+    setGlobalExtraDiscounts((previous) =>
+      previous.filter((_, currentIndex) => currentIndex !== index),
+    );
+  };
+
   const handleSelectPurchaseProduct = (index: number, product: ProductOption) => {
     setPurchaseProducts((previous) => {
       const next = [...previous];
@@ -2048,6 +2423,11 @@ export default function PurchasesPage() {
       if (previous.length === 1) return previous;
       return previous.filter((_, currentIndex) => currentIndex !== index);
     });
+    setProductAdjustmentsIndex((current) => {
+      if (current === null) return current;
+      if (current === index) return null;
+      return current > index ? current - 1 : current;
+    });
   };
 
   const handleCreateProductFromPurchase = async (index: number) => {
@@ -2126,7 +2506,15 @@ export default function PurchasesPage() {
       );
       return;
     }
-    setFiscalLines((previous) => [...previous, emptyFiscalLine()]);
+    const defaultBaseAmount = showFiscalDetail
+      ? (parseOptionalNumber(netTaxedAmount) ?? 0)
+      : simpleFiscalCondition === "GRAVADO"
+        ? (parseOptionalNumber(simpleNetAmount) ?? 0)
+        : 0;
+    setFiscalLines((previous) => [
+      ...previous,
+      emptyFiscalLine(defaultBaseAmount > 0 ? toMoneyValue(defaultBaseAmount) : ""),
+    ]);
   };
 
   const removeFiscalLine = (index: number) => {
@@ -2211,6 +2599,7 @@ export default function PurchasesPage() {
       setSimpleNetAmount(toMoneyValue(totalAmount));
       setPurchaseVatAmount("0");
       setGlobalDiscountValue("");
+      setGlobalExtraDiscounts([]);
       return { usedBreakdown: false, usedFallback: true, missingBreakdown: true };
     }
 
@@ -2236,6 +2625,7 @@ export default function PurchasesPage() {
 
     setTotalsSource("MANUAL");
     setGlobalDiscountValue("");
+    setGlobalExtraDiscounts([]);
     setSimpleFiscalCondition(nextSimpleCondition);
     setSimpleNetAmount(
       toMoneyValue(roundMoney(nextNetTaxed + nextNonTaxed + nextExempt)),
@@ -2619,20 +3009,26 @@ export default function PurchasesPage() {
 
   const normalizedPurchaseProducts = useMemo(() => {
     return purchaseProducts
-      .map((item) => ({
-        productId: item.productId,
-        qty: parseOptionalNumber(item.qty),
-        unitCost: parseOptionalNumber(item.unitCost),
-        discountType: item.discountType,
-        discountBase: item.discountBase,
-        discountValue: Math.max(0, parseOptionalNumber(item.discountValue) ?? 0),
-        taxRate: parseOptionalNumber(item.taxRate) ?? 0,
-        taxAmountMode: item.taxAmountMode,
-        taxAmount:
-          item.taxAmountMode === "MANUAL"
-            ? parseOptionalNumber(item.taxAmount)
-            : null,
-      }))
+      .map((item) => {
+        const discounts = normalizeDiscountFormsForCalculation(
+          purchaseProductDiscountForms(item),
+        );
+        return {
+          productId: item.productId,
+          qty: parseOptionalNumber(item.qty),
+          unitCost: parseOptionalNumber(item.unitCost),
+          discountType: item.discountType,
+          discountBase: item.discountBase,
+          discountValue: Math.max(0, parseOptionalNumber(item.discountValue) ?? 0),
+          discounts,
+          taxRate: parseOptionalNumber(item.taxRate) ?? 0,
+          taxAmountMode: item.taxAmountMode,
+          taxAmount:
+            item.taxAmountMode === "MANUAL"
+              ? parseOptionalNumber(item.taxAmount)
+              : null,
+        };
+      })
       .filter(
         (item): item is {
           productId: string;
@@ -2641,6 +3037,7 @@ export default function PurchasesPage() {
           discountType: PurchaseDiscountType;
           discountBase: PurchaseDiscountBase;
           discountValue: number;
+          discounts: PurchaseDiscountStepInput[];
           taxRate: number;
           taxAmountMode: "AUTO" | "MANUAL";
           taxAmount: number | null;
@@ -2652,10 +3049,13 @@ export default function PurchasesPage() {
           item.unitCost !== null &&
           Number.isFinite(item.unitCost) &&
           item.unitCost >= 0 &&
-          (item.discountType === "AMOUNT" ||
-            (Number.isFinite(item.discountValue) &&
-              item.discountValue >= 0 &&
-              item.discountValue <= 100)) &&
+          item.discounts.every(
+            (discount) =>
+              discount.type === "AMOUNT" ||
+              (Number.isFinite(discount.value) &&
+                discount.value >= 0 &&
+                discount.value <= 100),
+          ) &&
           Number.isFinite(item.taxRate) &&
           item.taxRate >= 0 &&
           item.taxRate <= 100 &&
@@ -2675,11 +3075,7 @@ export default function PurchasesPage() {
           taxRate: item.taxRate,
           taxAmountOverride:
             item.taxAmountMode === "MANUAL" ? item.taxAmount : undefined,
-          discount: {
-            type: item.discountType,
-            base: item.discountBase,
-            value: item.discountValue,
-          },
+          discounts: item.discounts,
         });
         return {
           grossSubtotal: totals.grossSubtotal + grossSubtotal,
@@ -2713,10 +3109,32 @@ export default function PurchasesPage() {
     (sum, line) => sum + (line.amount ?? 0),
     0,
   );
-  const globalDiscountInputValue = Math.max(
-    parseOptionalNumber(globalDiscountValue) ?? 0,
-    0,
+  const globalDiscountForms = useMemo(
+    () => [
+      {
+        type: globalDiscountType,
+        base: globalDiscountBase,
+        value: globalDiscountValue,
+      },
+      ...globalExtraDiscounts,
+    ],
+    [
+      globalDiscountBase,
+      globalDiscountType,
+      globalDiscountValue,
+      globalExtraDiscounts,
+    ],
   );
+  const globalDiscountSteps = useMemo(
+    () =>
+      normalizePurchaseDiscountSteps(
+        normalizeDiscountFormsForCalculation(globalDiscountForms),
+      ),
+    [globalDiscountForms],
+  );
+  const globalDiscountInputValue =
+    globalDiscountSteps[0]?.value ??
+    Math.max(parseOptionalNumber(globalDiscountValue) ?? 0, 0);
   const simpleNetValue = Math.max(parseOptionalNumber(simpleNetAmount) ?? 0, 0);
   const simpleVatInputValue = Math.max(parseOptionalNumber(purchaseVatAmount) ?? 0, 0);
   const effectivePurchaseVatAmount = isInternalRecord
@@ -2746,11 +3164,7 @@ export default function PurchasesPage() {
     subtotal: simpleSubtotalBase,
     vat: simpleVatValue,
     otherTaxesTotal: fiscalOtherTotal,
-    discount: {
-      type: globalDiscountType,
-      base: globalDiscountBase,
-      value: globalDiscountInputValue,
-    },
+    discounts: globalDiscountSteps,
   });
   const simpleTotal = roundMoney(
     Math.max(
@@ -2770,11 +3184,7 @@ export default function PurchasesPage() {
     subtotal: advancedNetTaxed + advancedNetNonTaxed + advancedExempt,
     vat: simpleVatValue,
     otherTaxesTotal: fiscalOtherTotal,
-    discount: {
-      type: globalDiscountType,
-      base: globalDiscountBase,
-      value: globalDiscountInputValue,
-    },
+    discounts: globalDiscountSteps,
   });
   const globalDiscountAmount = showFiscalDetail
     ? advancedGlobalDiscountAmount
@@ -2812,6 +3222,23 @@ export default function PurchasesPage() {
     includeProductDetails &&
     hasPurchaseProductTotals &&
     Math.abs(productTotalDifference) > 0.01;
+
+  useEffect(() => {
+    if (!registerCashOut || effectiveTotalNumeric <= 0) return;
+    setCashOutLines((previous) => {
+      if (previous.length !== 1) return previous;
+      const current = previous[0];
+      if (!current) return previous;
+      const currentAmount = parseOptionalNumber(current.amount);
+      if (currentAmount !== null && currentAmount > 0) return previous;
+      return [
+        {
+          ...current,
+          amount: toMoneyValue(effectiveTotalNumeric),
+        },
+      ];
+    });
+  }, [effectiveTotalNumeric, registerCashOut]);
 
   const autoTotalsFromProducts = useMemo(
     () =>
@@ -2882,7 +3309,6 @@ export default function PurchasesPage() {
     simpleNetNonTaxed,
     simpleNetTaxed,
     simpleVatValue,
-    globalDiscountValue,
     advancedGlobalDiscountAmount,
     simpleGlobalDiscountAmount,
     showFiscalDetail,
@@ -3009,11 +3435,15 @@ export default function PurchasesPage() {
 
     if (includeProductDetails) {
       const hasIncompleteProduct = purchaseProducts.some((item) => {
+        const productDiscounts = purchaseProductDiscountForms(item);
+        const hasExtraDiscountData =
+          item.extraDiscounts.length > 0 ||
+          productDiscounts.some(hasVisibleDiscountValue);
         const hasData = Boolean(
             item.productId ||
             item.productSearch.trim() ||
             item.unitCost.trim() ||
-            item.discountValue.trim() !== "0" ||
+            hasExtraDiscountData ||
             item.qty.trim() !== "1" ||
             item.taxRate.trim() !== "21" ||
             item.taxAmountMode === "MANUAL" ||
@@ -3026,6 +3456,13 @@ export default function PurchasesPage() {
           0,
           parseOptionalNumber(item.discountValue) ?? 0,
         );
+        const hasInvalidDiscount = normalizeDiscountFormsForCalculation(
+          productDiscounts,
+        ).some(
+          (discount) =>
+            discount.type === "PERCENT" &&
+            (!Number.isFinite(discount.value) || discount.value > 100),
+        );
         const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
         const taxAmount = parseOptionalNumber(item.taxAmount);
         return (
@@ -3035,6 +3472,7 @@ export default function PurchasesPage() {
           unitCost === null ||
           unitCost < 0 ||
           (item.discountType === "PERCENT" && discountValue > 100) ||
+          hasInvalidDiscount ||
           taxRate < 0 ||
           taxRate > 100 ||
           (item.taxAmountMode === "MANUAL" &&
@@ -3226,10 +3664,11 @@ export default function PurchasesPage() {
       globalDiscount:
         globalDiscountAmount > 0
           ? {
-              type: globalDiscountType,
-              base: globalDiscountBase,
+              type: globalDiscountSteps[0]?.type ?? globalDiscountType,
+              base: globalDiscountSteps[0]?.base ?? globalDiscountBase,
               value: globalDiscountInputValue,
               amount: globalDiscountAmount,
+              details: globalDiscountSteps,
             }
           : undefined,
       fiscalDetail: fiscalDetailPayload,
@@ -3241,12 +3680,11 @@ export default function PurchasesPage() {
               taxRate: item.taxRate,
               taxAmountOverride:
                 item.taxAmountMode === "MANUAL" ? item.taxAmount : undefined,
-              discount: {
-                type: item.discountType,
-                base: item.discountBase,
-                value: item.discountValue,
-              },
+              discounts: item.discounts,
             });
+            const activeDiscounts = normalizePurchaseDiscountSteps(
+              item.discounts,
+            );
             return {
               productId: item.productId,
               qty: item.qty,
@@ -3255,12 +3693,20 @@ export default function PurchasesPage() {
               taxRate: item.taxRate,
               taxAmount: applied.vat,
               discountType:
-                applied.discountAmount > 0 ? item.discountType : undefined,
+                applied.discountAmount > 0
+                  ? (activeDiscounts[0]?.type ?? item.discountType)
+                  : undefined,
               discountBase:
-                applied.discountAmount > 0 ? item.discountBase : undefined,
+                applied.discountAmount > 0
+                  ? (activeDiscounts[0]?.base ?? item.discountBase)
+                  : undefined,
               discountValue:
-                applied.discountAmount > 0 ? item.discountValue : undefined,
+                applied.discountAmount > 0
+                  ? (activeDiscounts[0]?.value ?? item.discountValue)
+                  : undefined,
               discountAmount: applied.discountAmount,
+              discountDetails:
+                activeDiscounts.length > 1 ? activeDiscounts : undefined,
             };
           })
         : editingPurchaseId
@@ -3320,6 +3766,7 @@ export default function PurchasesPage() {
     setGlobalDiscountType("AMOUNT");
     setGlobalDiscountBase("TOTAL");
     setGlobalDiscountValue("");
+    setGlobalExtraDiscounts([]);
     setTotalsSource("AUTO_FROM_PRODUCTS");
     setShowFiscalDetail(false);
     setNetTaxedAmount("");
@@ -3330,6 +3777,8 @@ export default function PurchasesPage() {
     setIncludeProductDetails(false);
     setAdjustStock(false);
     setPurchaseProducts([emptyPurchaseProduct()]);
+    setProductAdjustmentsIndex(null);
+    setIsGlobalDiscountModalOpen(false);
     setSelectedProductsById({});
     setCashOutLines([buildCashOutLine(paymentMethods, accounts)]);
     setArcaVoucherKind("B");
@@ -3395,17 +3844,23 @@ export default function PurchasesPage() {
             const qty = toNumber(item.qty);
             const unitCost = toNumber(item.unitCost);
             const taxRate = toNumber(item.taxRate);
-            const discountType = item.discountType ?? "AMOUNT";
-            const discountBase = item.discountBase ?? "SUBTOTAL";
-            const discountValue = Math.max(0, toNumber(item.discountValue));
+            const savedDiscounts = purchaseDiscountStepsFromSaved({
+              details: item.discountDetails,
+              type: item.discountType,
+              base: item.discountBase,
+              value: item.discountValue,
+            });
+            const primaryDiscount = savedDiscounts[0] ?? {
+              type: item.discountType ?? "PERCENT",
+              base: item.discountBase ?? "SUBTOTAL",
+              value: Math.max(0, toNumber(item.discountValue)),
+            };
+            const discountType = primaryDiscount.type;
+            const discountBase = primaryDiscount.base;
             const automaticTax = applyPurchaseItemDiscount({
               grossSubtotal: qty * unitCost,
               taxRate,
-              discount: {
-                type: discountType,
-                base: discountBase,
-                value: discountValue,
-              },
+              discounts: savedDiscounts.length ? savedDiscounts : [primaryDiscount],
             }).vat;
             const storedTax =
               item.taxAmount !== null && item.taxAmount !== undefined
@@ -3419,7 +3874,8 @@ export default function PurchasesPage() {
               unitCost: toMoneyValue(unitCost),
               discountType,
               discountBase,
-              discountValue: item.discountValue ?? "",
+              discountValue: toDiscountFormValue(primaryDiscount),
+              extraDiscounts: savedDiscounts.slice(1).map(toDiscountForm),
               taxRate: String(taxRate),
               taxAmountMode: hasManualTax ? "MANUAL" : "AUTO",
               taxAmount: hasManualTax ? toMoneyValue(storedTax) : "",
@@ -3468,12 +3924,23 @@ export default function PurchasesPage() {
         ),
       );
       setPurchaseVatAmount(toMoneyValue(vatTotal));
-      setGlobalDiscountType(purchase.discountType ?? "AMOUNT");
-      setGlobalDiscountBase(purchase.discountBase ?? "TOTAL");
+      const savedGlobalDiscounts = purchaseDiscountStepsFromSaved({
+        details: purchase.discountDetails,
+        type: purchase.discountType,
+        base: purchase.discountBase,
+        value: purchase.discountValue,
+      });
+      const primaryGlobalDiscount = savedGlobalDiscounts[0];
+      setGlobalDiscountType(primaryGlobalDiscount?.type ?? "AMOUNT");
+      setGlobalDiscountBase(primaryGlobalDiscount?.base ?? "TOTAL");
       setGlobalDiscountValue(
-        purchase.discountValue ??
-          (inferredGlobalDiscount > 0.01 ? toMoneyValue(inferredGlobalDiscount) : ""),
+        primaryGlobalDiscount
+          ? toDiscountFormValue(primaryGlobalDiscount)
+          : inferredGlobalDiscount > 0.01
+            ? toMoneyValue(inferredGlobalDiscount)
+            : "",
       );
+      setGlobalExtraDiscounts(savedGlobalDiscounts.slice(1).map(toDiscountForm));
       setTotalsSource("MANUAL");
       setShowFiscalDetail(true);
       setNetTaxedAmount(toMoneyValue(netTaxed));
@@ -3492,6 +3959,8 @@ export default function PurchasesPage() {
       );
       setIncludeProductDetails(purchase.items.length > 0);
       setPurchaseProducts(purchaseProductsFromEdit);
+      setProductAdjustmentsIndex(null);
+      setIsGlobalDiscountModalOpen(false);
       setSelectedProductsById(selectedProducts);
       setAdjustStock(false);
       setPaymentMode(purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK");
@@ -3970,7 +4439,24 @@ export default function PurchasesPage() {
   };
 
   const addCashOutLine = () => {
-    setCashOutLines((prev) => [...prev, buildCashOutLine(paymentMethods, accounts)]);
+    setCashOutLines((prev) => {
+      const currentTotal = prev.reduce(
+        (sum, line) => sum + (parseOptionalNumber(line.amount) ?? 0),
+        0,
+      );
+      const remaining = Math.max(
+        0,
+        roundMoney(effectiveTotalNumeric - currentTotal),
+      );
+      return [
+        ...prev,
+        buildCashOutLine(
+          paymentMethods,
+          accounts,
+          remaining > 0 ? toMoneyValue(remaining) : "",
+        ),
+      ];
+    });
   };
 
   const removeCashOutLine = (index: number) => {
@@ -4312,6 +4798,62 @@ export default function PurchasesPage() {
       : "Registro interno · No computable fiscalmente"
     : "Registro interno";
   const purchasesTableColSpan = purchaseListMode === "finance" ? 11 : 7;
+  const productAdjustmentsItem =
+    productAdjustmentsIndex !== null
+      ? (purchaseProducts[productAdjustmentsIndex] ?? null)
+      : null;
+  const productAdjustmentsQty = productAdjustmentsItem
+    ? (parseOptionalNumber(productAdjustmentsItem.qty) ?? 0)
+    : 0;
+  const productAdjustmentsUnitCost = productAdjustmentsItem
+    ? (parseOptionalNumber(productAdjustmentsItem.unitCost) ?? 0)
+    : 0;
+  const productAdjustmentsTaxRate = productAdjustmentsItem
+    ? (parseOptionalNumber(productAdjustmentsItem.taxRate) ?? 0)
+    : 0;
+  const productAdjustmentsGrossSubtotal =
+    productAdjustmentsQty * productAdjustmentsUnitCost;
+  const productAdjustmentsDiscountSteps = productAdjustmentsItem
+    ? normalizePurchaseDiscountSteps(
+        normalizeDiscountFormsForCalculation(
+          purchaseProductDiscountForms(productAdjustmentsItem),
+        ),
+      )
+    : [];
+  const productAdjustmentsAutomaticLine = applyPurchaseItemDiscount({
+    grossSubtotal: productAdjustmentsGrossSubtotal,
+    taxRate: productAdjustmentsTaxRate,
+    discounts: productAdjustmentsDiscountSteps,
+  });
+  const productAdjustmentsManualTaxAmount = productAdjustmentsItem
+    ? parseOptionalNumber(productAdjustmentsItem.taxAmount)
+    : null;
+  const productAdjustmentsLine = productAdjustmentsItem
+    ? applyPurchaseItemDiscount({
+        grossSubtotal: productAdjustmentsGrossSubtotal,
+        taxRate: productAdjustmentsTaxRate,
+        taxAmountOverride:
+          productAdjustmentsItem.taxAmountMode === "MANUAL"
+            ? Math.max(0, productAdjustmentsManualTaxAmount ?? 0)
+            : undefined,
+        discounts: productAdjustmentsDiscountSteps,
+      })
+    : productAdjustmentsAutomaticLine;
+  const productAdjustmentsSelectedProduct = productAdjustmentsItem
+    ? productMap.get(productAdjustmentsItem.productId)
+    : null;
+  const productAdjustmentsTitle =
+    productAdjustmentsSelectedProduct
+      ? formatProductLabel(productAdjustmentsSelectedProduct)
+      : productAdjustmentsItem?.productSearch.trim() ||
+        (productAdjustmentsIndex !== null
+          ? `Producto ${productAdjustmentsIndex + 1}`
+          : "Producto");
+  const globalDiscountSummary = globalDiscountAmount > 0
+    ? `${formatCurrencyARS(globalDiscountAmount)} · ${formatDiscountStepsSummary(
+        globalDiscountSteps,
+      )}`
+    : "Sin descuento global";
 
   return (
     <div className="space-y-6">
@@ -4614,48 +5156,23 @@ export default function PurchasesPage() {
                   </label>
                   <div className="field-stack min-w-0">
                     <span className="input-label">Descuento global</span>
-                    <div className="grid w-full min-w-0 grid-cols-[max-content_max-content] gap-2">
-                      <PurchaseSelect
-                        value={globalDiscountBase}
-                        options={PURCHASE_DISCOUNT_BASE_OPTIONS}
-                        onValueChange={setGlobalDiscountBase}
-                        className="min-w-[8.25rem]"
-                        buttonClassName="text-xs"
-                      />
-                      <PurchaseSelect
-                        value={globalDiscountType}
-                        options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
-                        onValueChange={setGlobalDiscountType}
-                        className="min-w-[4.75rem]"
-                        buttonClassName="justify-center text-xs"
-                      />
-                      <div className="relative col-span-2 min-w-0">
-                        <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
-                          {globalDiscountType === "PERCENT" ? "%" : "$"}
-                        </span>
-                        {globalDiscountType === "PERCENT" ? (
-                          <input
-                            className="input w-full pl-10 text-right tabular-nums"
-                            inputMode="decimal"
-                            value={globalDiscountValue}
-                            onChange={(event) =>
-                              setGlobalDiscountValue(
-                                normalizeDecimalInput(event.target.value, 2),
-                              )
-                            }
-                            placeholder="0"
-                          />
-                        ) : (
-                          <MoneyInput
-                            className="input no-spinner w-full pl-10 text-right tabular-nums"
-                            value={globalDiscountValue}
-                            onValueChange={setGlobalDiscountValue}
-                            placeholder="0,00"
-                            maxDecimals={2}
-                          />
-                        )}
-                      </div>
-                    </div>
+                    <button
+                      type="button"
+                      className={`btn h-11 w-full justify-start px-3 text-xs ${
+                        globalDiscountAmount > 0 ? "btn-sky" : ""
+                      }`}
+                      onClick={() => setIsGlobalDiscountModalOpen(true)}
+                    >
+                      <Cog6ToothIcon className="size-3.5" />
+                      Ajustar descuento
+                    </button>
+                    <p className="truncate text-[11px] text-zinc-500">
+                      {globalDiscountAmount > 0
+                        ? `-${formatCurrencyARS(globalDiscountAmount)} · ${formatDiscountStepsSummary(
+                            globalDiscountSteps,
+                          )}`
+                        : "Sin descuento global"}
+                    </p>
                   </div>
                   <div className="field-stack min-w-0">
                     <span className="input-label text-right">Total compra</span>
@@ -4859,21 +5376,12 @@ export default function PurchasesPage() {
                       const selectedProduct = productMap.get(item.productId);
                       const qty = parseOptionalNumber(item.qty) ?? 0;
                       const unitCost = parseOptionalNumber(item.unitCost) ?? 0;
-                      const discountValue = Math.max(
-                        0,
-                        parseOptionalNumber(item.discountValue) ?? 0,
+                      const discountForms = purchaseProductDiscountForms(item);
+                      const lineDiscountSteps = normalizePurchaseDiscountSteps(
+                        normalizeDiscountFormsForCalculation(discountForms),
                       );
                       const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
                       const lineGrossSubtotal = qty * unitCost;
-                      const automaticLineApplied = applyPurchaseItemDiscount({
-                        grossSubtotal: lineGrossSubtotal,
-                        taxRate,
-                        discount: {
-                          type: item.discountType,
-                          base: item.discountBase,
-                          value: discountValue,
-                        },
-                      });
                       const manualTaxAmount = parseOptionalNumber(item.taxAmount);
                       const lineAppliedDiscount = applyPurchaseItemDiscount({
                         grossSubtotal: lineGrossSubtotal,
@@ -4882,15 +5390,21 @@ export default function PurchasesPage() {
                           item.taxAmountMode === "MANUAL"
                             ? Math.max(0, manualTaxAmount ?? 0)
                             : undefined,
-                        discount: {
-                          type: item.discountType,
-                          base: item.discountBase,
-                          value: discountValue,
-                        },
+                        discounts: lineDiscountSteps,
                       });
                       const lineDiscount = lineAppliedDiscount.discountAmount;
                       const lineTax = lineAppliedDiscount.vat;
                       const lineTotal = lineAppliedDiscount.total;
+                      const adjustmentSummary = [
+                        lineDiscount > 0
+                          ? `Desc. ${formatCurrencyARS(lineDiscount)}`
+                          : null,
+                        item.taxAmountMode === "MANUAL"
+                          ? `IVA ${formatCurrencyARS(lineTax)}`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ");
                       const searchedProductName = item.productSearch.trim();
                       const canCreateProduct =
                         searchedProductName.length >= 2 &&
@@ -5086,41 +5600,8 @@ export default function PurchasesPage() {
                             </div>
                           </label>
 
-                          <div className="w-[126px] flex-none space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="input-label mb-0 text-[10px]">IVA</span>
-                              <button
-                                type="button"
-                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none transition ${
-                                  item.taxAmountMode === "MANUAL"
-                                    ? "border-sky-200 bg-sky-50 text-sky-800"
-                                    : "border-zinc-200 bg-white text-zinc-500"
-                                }`}
-                                onClick={() => {
-                                  if (item.taxAmountMode === "MANUAL") {
-                                    handlePurchaseProductChange(
-                                      index,
-                                      "taxAmountMode",
-                                      "AUTO",
-                                    );
-                                    handlePurchaseProductChange(index, "taxAmount", "");
-                                    return;
-                                  }
-                                  handlePurchaseProductChange(
-                                    index,
-                                    "taxAmountMode",
-                                    "MANUAL",
-                                  );
-                                  handlePurchaseProductChange(
-                                    index,
-                                    "taxAmount",
-                                    toMoneyValue(automaticLineApplied.vat),
-                                  );
-                                }}
-                              >
-                                {item.taxAmountMode === "MANUAL" ? "Fijo" : "Auto"}
-                              </button>
-                            </div>
+                          <label className="w-[126px] flex-none space-y-1">
+                            <span className="input-label mb-0 text-[10px]">IVA</span>
                             <PurchaseSelect
                               value={item.taxRate}
                               options={PURCHASE_ITEM_TAX_RATE_OPTIONS}
@@ -5134,121 +5615,26 @@ export default function PurchasesPage() {
                               compact
                               buttonClassName="text-xs"
                             />
-                            <div className="relative min-w-0">
-                              <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
-                                $
-                              </span>
-                              <MoneyInput
-                                className={`input no-spinner h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums ${
-                                  item.taxAmountMode === "MANUAL"
-                                    ? ""
-                                    : "bg-zinc-50 text-zinc-500"
-                                }`}
-                                value={
-                                  item.taxAmountMode === "MANUAL"
-                                    ? item.taxAmount
-                                    : toMoneyValue(automaticLineApplied.vat)
-                                }
-                                onFocus={() => {
-                                  if (item.taxAmountMode === "AUTO") {
-                                    handlePurchaseProductChange(
-                                      index,
-                                      "taxAmountMode",
-                                      "MANUAL",
-                                    );
-                                    handlePurchaseProductChange(
-                                      index,
-                                      "taxAmount",
-                                      toMoneyValue(automaticLineApplied.vat),
-                                    );
-                                  }
-                                }}
-                                onValueChange={(value) => {
-                                  if (item.taxAmountMode !== "MANUAL") {
-                                    handlePurchaseProductChange(
-                                      index,
-                                      "taxAmountMode",
-                                      "MANUAL",
-                                    );
-                                  }
-                                  handlePurchaseProductChange(
-                                    index,
-                                    "taxAmount",
-                                    value,
-                                  );
-                                }}
-                                placeholder="0,00"
-                                maxDecimals={2}
-                              />
-                            </div>
-                          </div>
+                          </label>
 
-                          <div className="min-w-[13.75rem] flex-[0_1_13.75rem] space-y-1">
-                            <span className="input-label mb-0 text-[10px]">Descuento</span>
-                            <div className="grid w-full min-w-0 grid-cols-[max-content_max-content] gap-2">
-                              <PurchaseSelect
-                                value={item.discountBase}
-                                options={PURCHASE_DISCOUNT_BASE_OPTIONS}
-                                onValueChange={(value) =>
-                                  handlePurchaseProductChange(
-                                    index,
-                                    "discountBase",
-                                    value,
-                                  )
-                                }
-                                className="min-w-[8.25rem]"
-                                compact
-                                buttonClassName="text-xs"
-                              />
-                              <PurchaseSelect
-                                value={item.discountType}
-                                options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
-                                onValueChange={(value) =>
-                                  handlePurchaseProductChange(
-                                    index,
-                                    "discountType",
-                                    value,
-                                  )
-                                }
-                                className="min-w-[4.75rem]"
-                                compact
-                                buttonClassName="justify-center text-xs"
-                              />
-                              <div className="relative col-span-2 min-w-0">
-                                <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
-                                  {item.discountType === "PERCENT" ? "%" : "$"}
-                                </span>
-                                {item.discountType === "PERCENT" ? (
-                                  <input
-                                    className="input h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums"
-                                    inputMode="decimal"
-                                    value={item.discountValue}
-                                    onChange={(event) =>
-                                      handlePurchaseProductChange(
-                                        index,
-                                        "discountValue",
-                                        normalizeDecimalInput(event.target.value, 2),
-                                      )
-                                    }
-                                    placeholder="0"
-                                  />
-                                ) : (
-                                  <MoneyInput
-                                    className="input no-spinner h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums"
-                                    value={item.discountValue}
-                                    onValueChange={(value) =>
-                                      handlePurchaseProductChange(
-                                        index,
-                                        "discountValue",
-                                        value,
-                                      )
-                                    }
-                                    placeholder="0,00"
-                                    maxDecimals={2}
-                                  />
-                                )}
-                              </div>
-                            </div>
+                          <div className="w-[116px] flex-none space-y-1">
+                            <span className="input-label mb-0 text-[10px]">Ajustes</span>
+                            <button
+                              type="button"
+                              className={`btn h-9 w-full justify-center px-2 text-xs ${
+                                lineDiscount > 0 || item.taxAmountMode === "MANUAL"
+                                  ? "btn-sky"
+                                  : ""
+                              }`}
+                              onClick={() => setProductAdjustmentsIndex(index)}
+                              aria-label="Abrir ajustes avanzados del producto"
+                            >
+                              <Cog6ToothIcon className="size-3.5" />
+                              Ajustes
+                            </button>
+                            <span className="block truncate text-[10px] text-zinc-500">
+                              {adjustmentSummary || "Sin ajustes"}
+                            </span>
                           </div>
 
                           <div className="ml-auto flex min-w-[132px] flex-none items-end justify-end gap-2 self-end">
@@ -5777,7 +6163,17 @@ export default function PurchasesPage() {
                       onClick={() => {
                         if (isDisabled) return;
                         setPaymentMode(option.value);
-                        if (option.value !== "IMMEDIATE_CASH_OUT") {
+                        if (option.value === "IMMEDIATE_CASH_OUT") {
+                          setCashOutLines([
+                            buildCashOutLine(
+                              paymentMethods,
+                              accounts,
+                              effectiveTotalNumeric > 0
+                                ? toMoneyValue(effectiveTotalNumeric)
+                                : "",
+                            ),
+                          ]);
+                        } else {
                           setCashOutLines([
                             buildCashOutLine(paymentMethods, accounts),
                           ]);
@@ -6408,6 +6804,285 @@ export default function PurchasesPage() {
             />,
           )
         : null}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {productAdjustmentsItem && productAdjustmentsIndex !== null ? (
+            <PurchaseModalShell
+              title="Ajustes avanzados"
+              eyebrow="Producto"
+              summary={productAdjustmentsTitle}
+              onClose={() => setProductAdjustmentsIndex(null)}
+              footer={
+                <div className="grid gap-2 text-xs text-zinc-600 sm:grid-cols-4">
+                  <span>
+                    Bruto:{" "}
+                    <strong className="text-zinc-900">
+                      {formatCurrencyARS(productAdjustmentsLine.grossSubtotal)}
+                    </strong>
+                  </span>
+                  <span>
+                    Desc.:{" "}
+                    <strong className="text-zinc-900">
+                      -{formatCurrencyARS(productAdjustmentsLine.discountAmount)}
+                    </strong>
+                  </span>
+                  <span>
+                    IVA:{" "}
+                    <strong className="text-zinc-900">
+                      {formatCurrencyARS(productAdjustmentsLine.vat)}
+                    </strong>
+                  </span>
+                  <span>
+                    Total:{" "}
+                    <strong className="text-zinc-900">
+                      {formatCurrencyARS(productAdjustmentsLine.total)}
+                    </strong>
+                  </span>
+                </div>
+              }
+            >
+              <div className="space-y-5">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-900">IVA</p>
+                      <p className="text-xs text-zinc-500">
+                        Automatico usa la alicuota. Fijo permite cargar el importe exacto.
+                      </p>
+                    </div>
+                    <div className="flex rounded-xl border border-zinc-200 bg-zinc-50 p-1">
+                      <button
+                        type="button"
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                          productAdjustmentsItem.taxAmountMode === "AUTO"
+                            ? "bg-white text-zinc-900 shadow-sm"
+                            : "text-zinc-500 hover:text-zinc-800"
+                        }`}
+                        onClick={() => {
+                          handlePurchaseProductChange(
+                            productAdjustmentsIndex,
+                            "taxAmountMode",
+                            "AUTO",
+                          );
+                          handlePurchaseProductChange(
+                            productAdjustmentsIndex,
+                            "taxAmount",
+                            "",
+                          );
+                        }}
+                      >
+                        Auto
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                          productAdjustmentsItem.taxAmountMode === "MANUAL"
+                            ? "bg-white text-zinc-900 shadow-sm"
+                            : "text-zinc-500 hover:text-zinc-800"
+                        }`}
+                        onClick={() => {
+                          if (productAdjustmentsItem.taxAmountMode !== "MANUAL") {
+                            handlePurchaseProductChange(
+                              productAdjustmentsIndex,
+                              "taxAmount",
+                              toMoneyValue(productAdjustmentsAutomaticLine.vat),
+                            );
+                          }
+                          handlePurchaseProductChange(
+                            productAdjustmentsIndex,
+                            "taxAmountMode",
+                            "MANUAL",
+                          );
+                        }}
+                      >
+                        Fijo
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="field-stack min-w-0">
+                      <span className="input-label">Alicuota</span>
+                      <PurchaseSelect
+                        value={productAdjustmentsItem.taxRate}
+                        options={PURCHASE_ITEM_TAX_RATE_OPTIONS}
+                        onValueChange={(value) =>
+                          handlePurchaseProductChange(
+                            productAdjustmentsIndex,
+                            "taxRate",
+                            value,
+                          )
+                        }
+                      />
+                    </label>
+                    <label className="field-stack min-w-0">
+                      <span className="input-label">Importe IVA</span>
+                      <div className="relative min-w-0">
+                        <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                          $
+                        </span>
+                        <MoneyInput
+                          className={`input no-spinner w-full min-w-0 pl-9 text-right tabular-nums ${
+                            productAdjustmentsItem.taxAmountMode === "MANUAL"
+                              ? ""
+                              : "bg-zinc-50 text-zinc-500"
+                          }`}
+                          value={
+                            productAdjustmentsItem.taxAmountMode === "MANUAL"
+                              ? productAdjustmentsItem.taxAmount
+                              : toMoneyValue(productAdjustmentsAutomaticLine.vat)
+                          }
+                          onFocus={() => {
+                            if (productAdjustmentsItem.taxAmountMode !== "MANUAL") {
+                              handlePurchaseProductChange(
+                                productAdjustmentsIndex,
+                                "taxAmount",
+                                toMoneyValue(productAdjustmentsAutomaticLine.vat),
+                              );
+                              handlePurchaseProductChange(
+                                productAdjustmentsIndex,
+                                "taxAmountMode",
+                                "MANUAL",
+                              );
+                            }
+                          }}
+                          onValueChange={(value) => {
+                            if (productAdjustmentsItem.taxAmountMode !== "MANUAL") {
+                              handlePurchaseProductChange(
+                                productAdjustmentsIndex,
+                                "taxAmountMode",
+                                "MANUAL",
+                              );
+                            }
+                            handlePurchaseProductChange(
+                              productAdjustmentsIndex,
+                              "taxAmount",
+                              value,
+                            );
+                          }}
+                          readOnly={productAdjustmentsItem.taxAmountMode !== "MANUAL"}
+                          placeholder="0,00"
+                          maxDecimals={2}
+                        />
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="space-y-3 border-t border-zinc-200/70 pt-4">
+                  <div>
+                    <p className="text-sm font-semibold text-zinc-900">
+                      Descuentos
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      Cada tramo se aplica sobre el resultado anterior.
+                    </p>
+                  </div>
+                  <DiscountRowsEditor
+                    primary={{
+                      type: productAdjustmentsItem.discountType,
+                      base: productAdjustmentsItem.discountBase,
+                      value: productAdjustmentsItem.discountValue,
+                    }}
+                    extraDiscounts={productAdjustmentsItem.extraDiscounts}
+                    onPrimaryChange={(field, value) => {
+                      if (field === "type") {
+                        handlePurchaseProductChange(
+                          productAdjustmentsIndex,
+                          "discountType",
+                          value,
+                        );
+                      } else if (field === "base") {
+                        handlePurchaseProductChange(
+                          productAdjustmentsIndex,
+                          "discountBase",
+                          value,
+                        );
+                      } else {
+                        handlePurchaseProductChange(
+                          productAdjustmentsIndex,
+                          "discountValue",
+                          value,
+                        );
+                      }
+                    }}
+                    onExtraChange={(discountIndex, field, value) =>
+                      updatePurchaseProductExtraDiscount(
+                        productAdjustmentsIndex,
+                        discountIndex,
+                        field,
+                        value,
+                      )
+                    }
+                    onAdd={() => addPurchaseProductDiscount(productAdjustmentsIndex)}
+                    onRemove={(discountIndex) =>
+                      removePurchaseProductExtraDiscount(
+                        productAdjustmentsIndex,
+                        discountIndex,
+                      )
+                    }
+                  />
+                </div>
+              </div>
+            </PurchaseModalShell>
+          ) : null}
+        </AnimatePresence>,
+      )}
+
+      {renderModalPortal(
+        <AnimatePresence>
+          {isGlobalDiscountModalOpen ? (
+            <PurchaseModalShell
+              title="Descuento global"
+              eyebrow="Totales"
+              summary={globalDiscountSummary}
+              onClose={() => setIsGlobalDiscountModalOpen(false)}
+              footer={
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-600">
+                  <span>
+                    Descuento:{" "}
+                    <strong className="text-zinc-900">
+                      -{formatCurrencyARS(globalDiscountAmount)}
+                    </strong>
+                  </span>
+                  <span>
+                    Total compra:{" "}
+                    <strong className="text-zinc-900">
+                      {formatCurrencyARS(effectiveTotalNumeric)}
+                    </strong>
+                  </span>
+                </div>
+              }
+            >
+              <div className="space-y-3">
+                <p className="text-xs text-zinc-500">
+                  Cada tramo se aplica sobre el resultado anterior.
+                </p>
+                <DiscountRowsEditor
+                  primary={{
+                    type: globalDiscountType,
+                    base: globalDiscountBase,
+                    value: globalDiscountValue,
+                  }}
+                  extraDiscounts={globalExtraDiscounts}
+                  onPrimaryChange={(field, value) => {
+                    if (field === "type") {
+                      setGlobalDiscountType(value as PurchaseDiscountType);
+                    } else if (field === "base") {
+                      setGlobalDiscountBase(value as PurchaseDiscountBase);
+                    } else {
+                      setGlobalDiscountValue(value);
+                    }
+                  }}
+                  onExtraChange={updateGlobalExtraDiscount}
+                  onAdd={addGlobalExtraDiscount}
+                  onRemove={removeGlobalExtraDiscount}
+                />
+              </div>
+            </PurchaseModalShell>
+          ) : null}
+        </AnimatePresence>,
+      )}
 
       {renderModalPortal(
         <AnimatePresence>

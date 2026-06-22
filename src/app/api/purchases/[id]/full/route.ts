@@ -39,6 +39,16 @@ const purchaseItemSchema = z.object({
   discountBase: z.enum(PURCHASE_DISCOUNT_BASES).optional(),
   discountValue: z.coerce.number().min(0).optional(),
   discountAmount: z.coerce.number().min(0).optional(),
+  discountDetails: z
+    .array(
+      z.object({
+        type: z.enum(PURCHASE_DISCOUNT_TYPES),
+        base: z.enum(PURCHASE_DISCOUNT_BASES),
+        value: z.coerce.number().min(0),
+        amount: z.coerce.number().min(0).optional(),
+      }),
+    )
+    .optional(),
 });
 
 const purchaseDiscountSchema = z.object({
@@ -46,6 +56,16 @@ const purchaseDiscountSchema = z.object({
   base: z.enum(PURCHASE_DISCOUNT_BASES),
   value: z.coerce.number().min(0),
   amount: z.coerce.number().min(0),
+  details: z
+    .array(
+      z.object({
+        type: z.enum(PURCHASE_DISCOUNT_TYPES),
+        base: z.enum(PURCHASE_DISCOUNT_BASES),
+        value: z.coerce.number().min(0),
+        amount: z.coerce.number().min(0).optional(),
+      }),
+    )
+    .optional(),
 });
 
 const updatePurchaseSchema = z.object({
@@ -79,6 +99,27 @@ const toNullableJsonInput = (
   }
   return value as Prisma.InputJsonValue;
 };
+
+const serializeDiscountDetails = (
+  discounts:
+    | Array<{
+        type: (typeof PURCHASE_DISCOUNT_TYPES)[number];
+        base: (typeof PURCHASE_DISCOUNT_BASES)[number];
+        value: number;
+        amount?: number;
+      }>
+    | undefined,
+) =>
+  (discounts ?? [])
+    .filter((discount) => discount.value > 0)
+    .map((discount) => ({
+      type: discount.type,
+      base: discount.base,
+      value: Number(discount.value.toFixed(4)),
+      ...(discount.amount !== undefined && discount.amount > 0
+        ? { amount: Number(discount.amount.toFixed(2)) }
+        : {}),
+    }));
 
 const normalizeItemSnapshot = (input: {
   productId: string;
@@ -415,6 +456,12 @@ export async function PATCH(
               ? body.globalDiscount.value.toFixed(4)
               : null,
           discountAmount: fiscalTotals.discountAmount.toFixed(2),
+          discountDetails:
+            body.globalDiscount && body.globalDiscount.amount > 0
+              ? toNullableJsonInput(
+                  serializeDiscountDetails(body.globalDiscount.details),
+                )
+              : Prisma.DbNull,
           arcaValidationStatus: "PENDING",
           arcaValidationCheckedAt: null,
           arcaValidationMessage: fiscalComputable
@@ -463,6 +510,7 @@ export async function PATCH(
             const itemTaxRate = item.taxRate ?? 0;
             const itemTaxAmount =
               item.taxAmount ?? itemSubtotal * (itemTaxRate / 100);
+            const discountDetails = serializeDiscountDetails(item.discountDetails);
             return {
               purchaseInvoiceId: purchase.id,
               productId: item.productId,
@@ -478,6 +526,7 @@ export async function PATCH(
                   ? item.discountValue.toFixed(4)
                   : undefined,
               discountAmount: (item.discountAmount ?? 0).toFixed(2),
+              discountDetails: discountDetails.length ? discountDetails : undefined,
             };
           }),
         });

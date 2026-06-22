@@ -47,6 +47,16 @@ const purchaseItemSchema = z.object({
   discountBase: z.enum(PURCHASE_DISCOUNT_BASES).optional(),
   discountValue: z.coerce.number().min(0).optional(),
   discountAmount: z.coerce.number().min(0).optional(),
+  discountDetails: z
+    .array(
+      z.object({
+        type: z.enum(PURCHASE_DISCOUNT_TYPES),
+        base: z.enum(PURCHASE_DISCOUNT_BASES),
+        value: z.coerce.number().min(0),
+        amount: z.coerce.number().min(0).optional(),
+      }),
+    )
+    .optional(),
 });
 
 const purchaseDiscountSchema = z.object({
@@ -54,6 +64,16 @@ const purchaseDiscountSchema = z.object({
   base: z.enum(PURCHASE_DISCOUNT_BASES),
   value: z.coerce.number().min(0),
   amount: z.coerce.number().min(0),
+  details: z
+    .array(
+      z.object({
+        type: z.enum(PURCHASE_DISCOUNT_TYPES),
+        base: z.enum(PURCHASE_DISCOUNT_BASES),
+        value: z.coerce.number().min(0),
+        amount: z.coerce.number().min(0).optional(),
+      }),
+    )
+    .optional(),
 });
 
 const cashOutLineSchema = z.object({
@@ -127,6 +147,27 @@ const toNumber = (value: unknown) => {
 
 const roundToTwo = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+const serializeDiscountDetails = (
+  discounts:
+    | Array<{
+        type: (typeof PURCHASE_DISCOUNT_TYPES)[number];
+        base: (typeof PURCHASE_DISCOUNT_BASES)[number];
+        value: number;
+        amount?: number;
+      }>
+    | undefined,
+) =>
+  (discounts ?? [])
+    .filter((discount) => discount.value > 0)
+    .map((discount) => ({
+      type: discount.type,
+      base: discount.base,
+      value: Number(discount.value.toFixed(4)),
+      ...(discount.amount !== undefined && discount.amount > 0
+        ? { amount: Number(discount.amount.toFixed(2)) }
+        : {}),
+    }));
 
 const resolveImmediatePaymentMethodName = (input: {
   purchaseId: string;
@@ -784,6 +825,10 @@ export async function POST(req: NextRequest) {
               ? body.globalDiscount.value.toFixed(4)
               : undefined,
           discountAmount: fiscalTotals.discountAmount.toFixed(2),
+          discountDetails:
+            body.globalDiscount && body.globalDiscount.amount > 0
+              ? serializeDiscountDetails(body.globalDiscount.details)
+              : undefined,
           arcaValidationMessage: fiscalComputable
             ? null
             : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
@@ -797,6 +842,9 @@ export async function POST(req: NextRequest) {
                   const itemTaxRate = item.taxRate ?? 0;
                   const itemTaxAmount =
                     item.taxAmount ?? itemSubtotal * (itemTaxRate / 100);
+                  const discountDetails = serializeDiscountDetails(
+                    item.discountDetails,
+                  );
                   return {
                     productId: item.productId,
                     qty: item.qty.toFixed(3),
@@ -811,6 +859,9 @@ export async function POST(req: NextRequest) {
                         ? item.discountValue.toFixed(4)
                         : undefined,
                     discountAmount: (item.discountAmount ?? 0).toFixed(2),
+                    discountDetails: discountDetails.length
+                      ? discountDetails
+                      : undefined,
                   };
                 }),
               }
