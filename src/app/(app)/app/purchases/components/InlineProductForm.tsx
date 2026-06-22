@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { PlusIcon } from "@/components/icons";
 import { UNIT_OPTIONS } from "@/lib/units";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 type ProductFormData = {
   name: string;
@@ -82,18 +83,17 @@ export function InlineProductForm({
                 </label>
                 <label className="flex flex-col gap-2">
                   <span className="input-label">Unidad</span>
-                  <select
-                    className="input cursor-pointer"
+                  <PurchaseSelect
                     value={form.unit}
-                    onChange={(event) => onFormChange("unit", event.target.value)}
-                  >
-                    <option value="">Unidad</option>
-                    {UNIT_OPTIONS.map((unit) => (
-                      <option key={unit.value} value={unit.value}>
-                        {unit.label}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: "", label: "Unidad" },
+                      ...UNIT_OPTIONS.map((unit) => ({
+                        value: unit.value,
+                        label: unit.label,
+                      })),
+                    ]}
+                    onValueChange={(value) => onFormChange("unit", value)}
+                  />
                 </label>
               </div>
               <div className="grid gap-x-4 gap-y-4 sm:grid-cols-2">

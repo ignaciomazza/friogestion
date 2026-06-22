@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { recalcPurchaseTotals } from "@/lib/purchases";
 import { requireRole } from "@/lib/auth/tenant";
 import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { parseOptionalDate } from "@/lib/validation";
@@ -14,18 +15,27 @@ import {
 } from "@/lib/arca/purchase-validation";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  PURCHASE_DOCUMENT_TYPES,
+  PURCHASE_VOUCHER_KINDS,
   assertPurchaseVoucherVatRules,
   getPurchaseFiscalRecordType,
+  getPurchaseVoucherType,
+  mapVoucherTypeToPurchaseDocumentType,
   mapVoucherTypeToPurchaseKind,
+} from "@/lib/purchases/fiscal";
+import type {
+  PurchaseDocumentType,
+  PurchaseVoucherKind,
 } from "@/lib/purchases/fiscal";
 
 export const runtime = "nodejs";
 
 const updatePurchaseInvoiceSchema = z.object({
   hasInvoice: z.boolean().optional(),
+  documentType: z.enum(PURCHASE_DOCUMENT_TYPES).optional().nullable(),
   invoiceNumber: z.string().optional().nullable(),
   invoiceDate: z.string().optional().nullable(),
-  voucherKind: z.enum(["A", "B", "C"]).optional().nullable(),
+  voucherKind: z.enum(PURCHASE_VOUCHER_KINDS).optional().nullable(),
   authorizationCode: z.string().optional().nullable(),
 });
 
@@ -51,13 +61,6 @@ const parseInvoiceNumber = (value: string) => {
     pointOfSale: Math.trunc(pointOfSale),
     voucherNumber: Math.trunc(voucherNumber),
   };
-};
-
-const voucherTypeFromKind = (kind: "A" | "B" | "C" | null) => {
-  if (kind === "A") return 1;
-  if (kind === "B") return 6;
-  if (kind === "C") return 11;
-  return null;
 };
 
 const toNullableJsonInput = (
@@ -86,6 +89,7 @@ export async function PATCH(
       select: {
         id: true,
         status: true,
+        documentType: true,
         invoiceNumber: true,
         invoiceDate: true,
         total: true,
@@ -94,6 +98,11 @@ export async function PATCH(
         fiscalVoucherType: true,
         authorizationMode: true,
         authorizationCode: true,
+        currentAccountEntries: {
+          where: { sourceType: "PURCHASE" },
+          select: { id: true },
+          take: 1,
+        },
         supplier: {
           select: {
             taxId: true,
@@ -161,12 +170,19 @@ export async function PATCH(
     }
 
     const invoiceDate = hasInvoice ? parsedDate.date : null;
-    const voucherKind = hasInvoice
+    const documentType: PurchaseDocumentType | null = hasInvoice
+      ? body.documentType ??
+        mapVoucherTypeToPurchaseDocumentType(purchase.fiscalVoucherType) ??
+        purchase.documentType ??
+        "INVOICE"
+      : null;
+    const voucherKind: PurchaseVoucherKind | null = hasInvoice
       ? body.voucherKind ??
+        (mapVoucherTypeToPurchaseKind(purchase.fiscalVoucherType) as PurchaseVoucherKind | null) ??
         (purchase.fiscalVoucherKind === "A" ||
         purchase.fiscalVoucherKind === "B" ||
         purchase.fiscalVoucherKind === "C"
-          ? purchase.fiscalVoucherKind
+          ? (purchase.fiscalVoucherKind as PurchaseVoucherKind)
           : null)
       : null;
 
@@ -218,6 +234,7 @@ export async function PATCH(
       arcaValidationPayload = buildPurchaseValidationPayload(
         {
           voucherKind,
+          documentType,
           invoiceNumber,
           voucherDate: invoiceDateInput,
           totalAmount,
@@ -235,6 +252,7 @@ export async function PATCH(
     const updated = await prisma.purchaseInvoice.update({
       where: { id: purchase.id },
       data: {
+        documentType: documentType ?? "INVOICE",
         invoiceNumber,
         invoiceDate,
         fiscalVoucherKind: hasInvoice
@@ -243,7 +261,8 @@ export async function PATCH(
             : voucherKind
           : null,
         fiscalVoucherType: hasInvoice
-          ? arcaValidationPayload?.voucherType ?? voucherTypeFromKind(voucherKind)
+          ? arcaValidationPayload?.voucherType ??
+            getPurchaseVoucherType(documentType, voucherKind)
           : null,
         fiscalPointOfSale: hasInvoice
           ? arcaValidationPayload?.pointOfSale ?? parsedInvoiceNumber?.pointOfSale ?? null
@@ -272,6 +291,7 @@ export async function PATCH(
       },
       select: {
         id: true,
+        documentType: true,
         invoiceNumber: true,
         invoiceDate: true,
         fiscalVoucherKind: true,
@@ -282,6 +302,41 @@ export async function PATCH(
       },
     });
 
+    if (purchase.currentAccountEntries.length > 0) {
+      const isCreditNote = documentType === "CREDIT_NOTE";
+      await prisma.$transaction(async (tx) => {
+        await tx.currentAccountEntry.updateMany({
+          where: {
+            organizationId: membership.organizationId,
+            purchaseInvoiceId: purchase.id,
+            sourceType: "PURCHASE",
+          },
+          data: {
+            direction: isCreditNote ? "DEBIT" : "CREDIT",
+            note: `${
+              documentType === "CREDIT_NOTE"
+                ? "Nota de credito"
+                : documentType === "DEBIT_NOTE"
+                  ? "Nota de debito"
+                  : "Factura"
+            } ${updated.invoiceNumber ?? purchase.id}`,
+          },
+        });
+        if (isCreditNote) {
+          await tx.purchaseInvoice.update({
+            where: { id: purchase.id },
+            data: {
+              paidTotal: totalAmount.toFixed(2),
+              balance: "0.00",
+              paymentStatus: "PAID",
+            },
+          });
+        } else {
+          await recalcPurchaseTotals(tx, purchase.id);
+        }
+      });
+    }
+
     return NextResponse.json({
       message: hasInvoice
         ? arcaValidationPayload
@@ -290,6 +345,7 @@ export async function PATCH(
         : "Compra actualizada. Sin comprobante fiscal (registro interno no computable fiscalmente).",
       purchase: {
         id: updated.id,
+        documentType: updated.documentType,
         invoiceNumber: updated.invoiceNumber,
         invoiceDate: updated.invoiceDate?.toISOString().slice(0, 10) ?? null,
         fiscalVoucherKind: updated.fiscalVoucherKind,

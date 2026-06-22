@@ -9,6 +9,39 @@ export const PURCHASE_FISCAL_LINE_TYPES = [
   "OTHER",
 ] as const;
 
+export const PURCHASE_DOCUMENT_TYPES = [
+  "INVOICE",
+  "CREDIT_NOTE",
+  "DEBIT_NOTE",
+] as const;
+
+export type PurchaseDocumentType = (typeof PURCHASE_DOCUMENT_TYPES)[number];
+
+export const PURCHASE_DOCUMENT_TYPE_LABELS: Record<PurchaseDocumentType, string> = {
+  INVOICE: "Factura",
+  CREDIT_NOTE: "Nota de credito",
+  DEBIT_NOTE: "Nota de debito",
+};
+
+export const PURCHASE_VOUCHER_KINDS = ["A", "B", "C"] as const;
+
+export type PurchaseVoucherKind = (typeof PURCHASE_VOUCHER_KINDS)[number];
+
+export const PURCHASE_VOUCHER_TYPE_BY_DOCUMENT_AND_KIND: Record<
+  PurchaseDocumentType,
+  Record<PurchaseVoucherKind, number>
+> = {
+  INVOICE: { A: 1, B: 6, C: 11 },
+  DEBIT_NOTE: { A: 2, B: 7, C: 12 },
+  CREDIT_NOTE: { A: 3, B: 8, C: 13 },
+};
+
+export const PURCHASE_DISCOUNT_TYPES = ["AMOUNT", "PERCENT"] as const;
+export const PURCHASE_DISCOUNT_BASES = ["SUBTOTAL", "VAT", "TOTAL"] as const;
+
+export type PurchaseDiscountType = (typeof PURCHASE_DISCOUNT_TYPES)[number];
+export type PurchaseDiscountBase = (typeof PURCHASE_DISCOUNT_BASES)[number];
+
 export const PURCHASE_FISCAL_LINE_TYPE_LABELS: Record<
   (typeof PURCHASE_FISCAL_LINE_TYPES)[number],
   string
@@ -38,6 +71,13 @@ export const purchaseFiscalInputSchema = z.object({
   lines: z.array(purchaseFiscalLineInputSchema).optional(),
 });
 
+export const purchaseDiscountInputSchema = z.object({
+  type: z.enum(PURCHASE_DISCOUNT_TYPES),
+  base: z.enum(PURCHASE_DISCOUNT_BASES),
+  value: z.coerce.number().min(0),
+  amount: z.coerce.number().min(0),
+});
+
 export type PurchaseFiscalLineInput = z.infer<
   typeof purchaseFiscalLineInputSchema
 >;
@@ -59,6 +99,7 @@ export type NormalizedPurchaseFiscalTotals = {
   exemptAmount: number;
   vatTotal: number;
   otherTaxesTotal: number;
+  discountAmount: number;
   subtotal: number;
   taxes: number;
   total: number;
@@ -105,11 +146,14 @@ export function buildPurchaseFiscalTotals(input: {
   totalAmount: number;
   purchaseVatAmount?: number | null;
   fiscalDetail?: PurchaseFiscalInput | null;
+  discountAmount?: number | null;
   currencyCode?: string | null;
   fiscalComputable?: boolean;
 }): NormalizedPurchaseFiscalTotals {
   const total = round2(input.totalAmount);
   assertMoney(total, "PURCHASE_FISCAL_TOTAL_INVALID");
+  const discountAmount = round2(input.discountAmount ?? 0);
+  assertMoney(discountAmount, "PURCHASE_FISCAL_DISCOUNT_INVALID");
 
   const currencyCode = normalizeCurrencyCode(input.currencyCode);
   const fiscalComputable = input.fiscalComputable ?? true;
@@ -117,10 +161,11 @@ export function buildPurchaseFiscalTotals(input: {
   if (!fiscalComputable) {
     const vatTotal = round2(input.purchaseVatAmount ?? 0);
     assertMoney(vatTotal, "PURCHASE_FISCAL_VAT_INVALID");
-    if (vatTotal - total > 0.01) {
+    const grossTotal = round2(total + discountAmount);
+    if (vatTotal - grossTotal > 0.01) {
       throw new Error("PURCHASE_FISCAL_VAT_EXCEEDS_TOTAL");
     }
-    const netTaxed = round2(total - vatTotal);
+    const netTaxed = round2(grossTotal - vatTotal);
     return {
       currencyCode,
       netTaxed,
@@ -128,6 +173,7 @@ export function buildPurchaseFiscalTotals(input: {
       exemptAmount: 0,
       vatTotal,
       otherTaxesTotal: 0,
+      discountAmount,
       subtotal: netTaxed,
       taxes: vatTotal,
       total,
@@ -142,10 +188,11 @@ export function buildPurchaseFiscalTotals(input: {
   if (!parsedDetail) {
     const vatTotal = round2(input.purchaseVatAmount ?? 0);
     assertMoney(vatTotal, "PURCHASE_FISCAL_VAT_INVALID");
-    if (vatTotal - total > 0.01) {
+    const grossTotal = round2(total + discountAmount);
+    if (vatTotal - grossTotal > 0.01) {
       throw new Error("PURCHASE_FISCAL_VAT_EXCEEDS_TOTAL");
     }
-    const netTaxed = round2(total - vatTotal);
+    const netTaxed = round2(grossTotal - vatTotal);
     return {
       currencyCode,
       netTaxed,
@@ -153,6 +200,7 @@ export function buildPurchaseFiscalTotals(input: {
       exemptAmount: 0,
       vatTotal,
       otherTaxesTotal: 0,
+      discountAmount,
       subtotal: netTaxed,
       taxes: vatTotal,
       total,
@@ -192,7 +240,12 @@ export function buildPurchaseFiscalTotals(input: {
   }
 
   const fiscalTotal = round2(
-    netTaxed + netNonTaxed + exemptAmount + vatTotal + otherTaxesTotal,
+    netTaxed +
+      netNonTaxed +
+      exemptAmount +
+      vatTotal +
+      otherTaxesTotal -
+      discountAmount,
   );
   if (Math.abs(fiscalTotal - total) > 0.01) {
     throw new Error("PURCHASE_FISCAL_TOTAL_MISMATCH");
@@ -206,6 +259,7 @@ export function buildPurchaseFiscalTotals(input: {
     exemptAmount,
     vatTotal,
     otherTaxesTotal,
+    discountAmount,
     subtotal,
     taxes: vatTotal,
     total,
@@ -259,11 +313,36 @@ export function assertPurchaseVoucherVatRules(input: {
   }
 }
 
+export function getPurchaseVoucherType(
+  documentType: PurchaseDocumentType | null | undefined,
+  voucherKind: PurchaseVoucherKind | null | undefined,
+) {
+  if (!documentType || !voucherKind) return null;
+  return PURCHASE_VOUCHER_TYPE_BY_DOCUMENT_AND_KIND[documentType]?.[
+    voucherKind
+  ] ?? null;
+}
+
 export function mapVoucherTypeToPurchaseKind(type: number | null | undefined) {
-  if (type === 1) return "A";
-  if (type === 6) return "B";
-  if (type === 11) return "C";
+  if (type === 1 || type === 2 || type === 3) return "A";
+  if (type === 6 || type === 7 || type === 8) return "B";
+  if (type === 11 || type === 12 || type === 13) return "C";
   return null;
+}
+
+export function mapVoucherTypeToPurchaseDocumentType(
+  type: number | null | undefined,
+): PurchaseDocumentType | null {
+  if (type === 1 || type === 6 || type === 11) return "INVOICE";
+  if (type === 2 || type === 7 || type === 12) return "DEBIT_NOTE";
+  if (type === 3 || type === 8 || type === 13) return "CREDIT_NOTE";
+  return null;
+}
+
+export function formatPurchaseDocumentTypeLabel(
+  documentType: PurchaseDocumentType | null | undefined,
+) {
+  return documentType ? PURCHASE_DOCUMENT_TYPE_LABELS[documentType] : "Comprobante";
 }
 
 export function formatPurchaseInvoiceNumber(

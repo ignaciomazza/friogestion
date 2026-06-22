@@ -63,6 +63,8 @@ export async function GET(
       select: {
         id: true,
         supplierId: true,
+        documentType: true,
+        linkedPurchaseInvoiceId: true,
         invoiceNumber: true,
         invoiceDate: true,
         subtotal: true,
@@ -73,6 +75,10 @@ export async function GET(
         exemptAmount: true,
         vatTotal: true,
         otherTaxesTotal: true,
+        discountType: true,
+        discountBase: true,
+        discountValue: true,
+        discountAmount: true,
         fiscalVoucherKind: true,
         fiscalVoucherType: true,
         fiscalPointOfSale: true,
@@ -99,6 +105,10 @@ export async function GET(
             qty: true,
             unitCost: true,
             taxRate: true,
+            discountType: true,
+            discountBase: true,
+            discountValue: true,
+            discountAmount: true,
             stockMovement: {
               select: {
                 id: true,
@@ -183,6 +193,8 @@ export async function GET(
         arcaVerificationMessage: purchase.supplier.arcaVerificationMessage,
       },
       invoiceNumber: purchase.invoiceNumber,
+      documentType: purchase.documentType,
+      linkedPurchaseInvoiceId: purchase.linkedPurchaseInvoiceId,
       invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
       subtotal: purchase.subtotal?.toString() ?? null,
       taxes: purchase.taxes?.toString() ?? null,
@@ -192,6 +204,10 @@ export async function GET(
       exemptAmount: purchase.exemptAmount.toString(),
       vatTotal: purchase.vatTotal.toString(),
       otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+      discountType: purchase.discountType,
+      discountBase: purchase.discountBase,
+      discountValue: purchase.discountValue?.toString() ?? null,
+      discountAmount: purchase.discountAmount.toString(),
       fiscalVoucherKind: purchase.fiscalVoucherKind,
       fiscalVoucherType: purchase.fiscalVoucherType,
       authorizationCode: purchase.authorizationCode,
@@ -201,6 +217,10 @@ export async function GET(
         qty: item.qty.toString(),
         unitCost: item.unitCost.toString(),
         taxRate: item.taxRate?.toString() ?? null,
+        discountType: item.discountType,
+        discountBase: item.discountBase,
+        discountValue: item.discountValue?.toString() ?? null,
+        discountAmount: item.discountAmount.toString(),
         product: {
           id: item.product.id,
           name: item.product.name,
@@ -266,6 +286,7 @@ export async function PATCH(
         id: true,
         supplierId: true,
         status: true,
+        documentType: true,
         invoiceNumber: true,
         invoiceDate: true,
         total: true,
@@ -327,6 +348,17 @@ export async function PATCH(
     const switchingToCurrentAccount = body.paymentMode === "CURRENT_ACCOUNT";
     const switchingToImmediateCashOut =
       body.paymentMode === "IMMEDIATE_CASH_OUT";
+    const isCreditNote = purchase.documentType === "CREDIT_NOTE";
+    const purchaseEntryDirection = isCreditNote ? "DEBIT" : "CREDIT";
+
+    if (
+      isCreditNote && switchingToImmediateCashOut
+    ) {
+      return NextResponse.json(
+        { error: "Las notas de credito no registran egreso inmediato." },
+        { status: 400 },
+      );
+    }
 
     if (!switchingToCurrentAccount && hasConfirmedAllocations) {
       return NextResponse.json(
@@ -507,7 +539,7 @@ export async function PATCH(
               organizationId: membership.organizationId,
               counterpartyType: "SUPPLIER",
               supplierId: purchase.supplierId,
-              direction: "CREDIT",
+              direction: purchaseEntryDirection,
               sourceType: "PURCHASE",
               purchaseInvoiceId: purchase.id,
               amount: total.toFixed(2),
@@ -515,9 +547,23 @@ export async function PATCH(
               note: `Compra ${purchaseLabel}`,
             },
           });
+        } else {
+          await tx.currentAccountEntry.updateMany({
+            where: {
+              organizationId: membership.organizationId,
+              purchaseInvoiceId: purchase.id,
+              sourceType: "PURCHASE",
+            },
+            data: {
+              direction: purchaseEntryDirection,
+              amount: total.toFixed(2),
+              occurredAt,
+              note: `Compra ${purchaseLabel}`,
+            },
+          });
         }
 
-        if (hasConfirmedAllocations) {
+        if (hasConfirmedAllocations && !isCreditNote) {
           await tx.purchaseInvoice.update({
             where: { id: purchase.id },
             data: {
@@ -525,13 +571,23 @@ export async function PATCH(
             },
           });
           await recalcPurchaseTotals(tx, purchase.id);
-        } else {
+        } else if (!isCreditNote) {
           await tx.purchaseInvoice.update({
             where: { id: purchase.id },
             data: {
               paidTotal: "0.00",
               balance: total.toFixed(2),
               paymentStatus: "UNPAID",
+              immediatePaymentLabel: null,
+            },
+          });
+        } else {
+          await tx.purchaseInvoice.update({
+            where: { id: purchase.id },
+            data: {
+              paidTotal: total.toFixed(2),
+              balance: "0.00",
+              paymentStatus: "PAID",
               immediatePaymentLabel: null,
             },
           });

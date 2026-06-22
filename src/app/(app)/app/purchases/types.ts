@@ -1,3 +1,9 @@
+import type {
+  PurchaseDiscountBase,
+  PurchaseDiscountType,
+  PurchaseDocumentType,
+} from "@/lib/purchases/fiscal";
+
 export type ProductOption = {
   id: string;
   name: string;
@@ -27,6 +33,8 @@ export type PurchaseRow = {
   id: string;
   supplierId: string;
   supplierName: string;
+  documentType?: PurchaseDocumentType | null;
+  linkedPurchaseInvoiceId?: string | null;
   invoiceNumber: string | null;
   invoiceDate: string | null;
   createdAt: string;
@@ -45,6 +53,10 @@ export type PurchaseRow = {
   exemptAmount?: string | null;
   vatTotal?: string | null;
   otherTaxesTotal?: string | null;
+  discountType?: PurchaseDiscountType | null;
+  discountBase?: PurchaseDiscountBase | null;
+  discountValue?: string | null;
+  discountAmount?: string | null;
   fiscalLines?: Array<{
     id: string;
     type: string;

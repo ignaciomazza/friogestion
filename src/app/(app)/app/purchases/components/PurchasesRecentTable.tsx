@@ -1,6 +1,7 @@
 "use client";
 
 import { formatCurrencyARS } from "@/lib/format";
+import { PURCHASE_DOCUMENT_TYPE_LABELS } from "@/lib/purchases/fiscal";
 import {
   PURCHASE_ARCA_STATUS_LABELS,
   PURCHASE_ARCA_STATUS_STYLES,
@@ -10,6 +11,7 @@ import {
   PURCHASE_PAYMENT_STATUS_STYLES,
 } from "../constants";
 import type { PurchaseRow } from "../types";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 const formatPurchaseDate = (value: string | null | undefined) => {
   if (!value) return "-";
@@ -29,6 +31,11 @@ type PurchasesRecentTableProps = {
   onRevalidate: (purchaseId: string) => void;
   revalidatingId: string | null;
 };
+
+const SORT_OPTIONS = [
+  { value: "newest", label: "Mas recientes" },
+  { value: "oldest", label: "Mas antiguas" },
+];
 
 export function PurchasesRecentTable({
   purchases,
@@ -53,22 +60,20 @@ export function PurchasesRecentTable({
               {purchases.length} resultados
             </span>
           )}
-          <select
-            className="input cursor-pointer text-xs"
+          <PurchaseSelect
             value={sortOrder}
-            onChange={(event) => onSortOrderChange(event.target.value)}
-            aria-label="Ordenar compras"
-          >
-            <option value="newest">Mas recientes</option>
-            <option value="oldest">Mas antiguas</option>
-          </select>
+            options={SORT_OPTIONS}
+            onValueChange={onSortOrderChange}
+            buttonClassName="text-xs"
+            ariaLabel="Ordenar compras"
+          />
         </div>
       </div>
       <div className="table-scroll">
         <table className="w-full text-left text-xs">
           <thead className="text-[11px] uppercase tracking-wide text-zinc-500">
             <tr>
-              <th className="py-2 pr-4">Factura</th>
+              <th className="py-2 pr-4">Comprobante</th>
               <th className="py-2 pr-4">Proveedor</th>
               <th className="py-2 pr-4">Fecha</th>
               <th className="py-2 pr-4">Estado</th>
@@ -92,7 +97,14 @@ export function PurchasesRecentTable({
                     className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                   >
                     <td className="py-3 pr-4 whitespace-nowrap text-zinc-600">
-                      {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
+                      <span className="block text-zinc-700">
+                        {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
+                      </span>
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                        {PURCHASE_DOCUMENT_TYPE_LABELS[
+                          purchase.documentType ?? "INVOICE"
+                        ]}
+                      </span>
                     </td>
                     <td className="py-3 pr-4 text-zinc-900">
                       {purchase.supplierName}

@@ -16,8 +16,12 @@ import {
 } from "@/lib/arca/purchase-validation";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  PURCHASE_DISCOUNT_BASES,
+  PURCHASE_DISCOUNT_TYPES,
+  PURCHASE_DOCUMENT_TYPES,
   assertPurchaseVoucherVatRules,
   buildPurchaseFiscalTotals,
+  formatPurchaseDocumentTypeLabel,
   mapVoucherTypeToPurchaseKind,
   purchaseFiscalInputSchema,
 } from "@/lib/purchases/fiscal";
@@ -28,16 +32,32 @@ const purchaseItemSchema = z.object({
   productId: z.string().min(1),
   qty: z.coerce.number().positive(),
   unitCost: z.coerce.number().min(0),
+  lineSubtotal: z.coerce.number().min(0).optional(),
   taxRate: z.coerce.number().min(0).max(100).optional(),
+  taxAmount: z.coerce.number().min(0).optional(),
+  discountType: z.enum(PURCHASE_DISCOUNT_TYPES).optional(),
+  discountBase: z.enum(PURCHASE_DISCOUNT_BASES).optional(),
+  discountValue: z.coerce.number().min(0).optional(),
+  discountAmount: z.coerce.number().min(0).optional(),
+});
+
+const purchaseDiscountSchema = z.object({
+  type: z.enum(PURCHASE_DISCOUNT_TYPES),
+  base: z.enum(PURCHASE_DISCOUNT_BASES),
+  value: z.coerce.number().min(0),
+  amount: z.coerce.number().min(0),
 });
 
 const updatePurchaseSchema = z.object({
   supplierId: z.string().min(1),
+  documentType: z.enum(PURCHASE_DOCUMENT_TYPES).default("INVOICE"),
+  linkedPurchaseInvoiceId: z.string().min(1).optional(),
   hasInvoice: z.boolean().optional(),
   invoiceNumber: z.string().min(1).optional(),
   invoiceDate: z.string().min(1).optional(),
   totalAmount: z.coerce.number().positive(),
   purchaseVatAmount: z.coerce.number().min(0).optional(),
+  globalDiscount: purchaseDiscountSchema.optional(),
   currencyCode: z.string().min(1).optional(),
   fiscalDetail: purchaseFiscalInputSchema.nullish(),
   items: z.array(purchaseItemSchema).optional(),
@@ -86,6 +106,7 @@ export async function PATCH(
         id: true,
         status: true,
         supplierId: true,
+        documentType: true,
         invoiceNumber: true,
         invoiceDate: true,
         total: true,
@@ -153,6 +174,33 @@ export async function PATCH(
       );
     }
 
+    const linkedPurchaseInvoiceId =
+      body.documentType === "INVOICE"
+        ? null
+        : body.linkedPurchaseInvoiceId?.trim() || null;
+    if (linkedPurchaseInvoiceId) {
+      if (linkedPurchaseInvoiceId === purchase.id) {
+        return NextResponse.json(
+          { error: "Una nota no puede asociarse a si misma" },
+          { status: 400 },
+        );
+      }
+      const linkedPurchase = await prisma.purchaseInvoice.findFirst({
+        where: {
+          id: linkedPurchaseInvoiceId,
+          organizationId: membership.organizationId,
+          supplierId: body.supplierId,
+        },
+        select: { id: true },
+      });
+      if (!linkedPurchase) {
+        return NextResponse.json(
+          { error: "La compra asociada no pertenece al proveedor seleccionado" },
+          { status: 400 },
+        );
+      }
+    }
+
     const hasInvoice =
       body.hasInvoice ?? Boolean(body.invoiceNumber?.trim() || body.arcaValidation);
     const fiscalComputable = hasInvoice;
@@ -206,7 +254,10 @@ export async function PATCH(
       }
     }
     const purchaseItemsVatTotal = purchaseItems.reduce((sum, item) => {
-      const subtotal = item.qty * item.unitCost;
+      if (item.taxAmount !== undefined) {
+        return sum + item.taxAmount;
+      }
+      const subtotal = item.lineSubtotal ?? item.qty * item.unitCost;
       return sum + subtotal * ((item.taxRate ?? 0) / 100);
     }, 0);
 
@@ -223,6 +274,7 @@ export async function PATCH(
       totalAmount,
       purchaseVatAmount,
       fiscalDetail: fiscalComputable ? (body.fiscalDetail ?? null) : null,
+      discountAmount: body.globalDiscount?.amount ?? 0,
       currencyCode: body.currencyCode,
       fiscalComputable,
     });
@@ -297,12 +349,15 @@ export async function PATCH(
         },
       });
 
-      arcaValidationPayload = buildPurchaseValidationPayload(body.arcaValidation, {
-        issuerTaxId: supplier.taxId,
-        pointOfSale: fiscalConfig?.defaultPointOfSale ?? null,
-        receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
-        receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
-      });
+      arcaValidationPayload = buildPurchaseValidationPayload(
+        { ...body.arcaValidation, documentType: body.documentType },
+        {
+          issuerTaxId: supplier.taxId,
+          pointOfSale: fiscalConfig?.defaultPointOfSale ?? null,
+          receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
+          receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
+        },
+      );
 
       assertPurchaseVoucherVatRules({
         voucherKind: mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType),
@@ -311,12 +366,17 @@ export async function PATCH(
     }
 
     const hasCurrentAccountImpact = purchase.currentAccountEntries.length > 0;
+    const isCreditNote = body.documentType === "CREDIT_NOTE";
+    const purchaseEntryDirection = isCreditNote ? "DEBIT" : "CREDIT";
+    const leavesPayableBalance = hasCurrentAccountImpact && !isCreditNote;
 
     await prisma.$transaction(async (tx) => {
       await tx.purchaseInvoice.update({
         where: { id: purchase.id },
         data: {
           supplierId: body.supplierId,
+          documentType: body.documentType,
+          linkedPurchaseInvoiceId,
           invoiceNumber,
           invoiceDate,
           subtotal: fiscalTotals.subtotal.toFixed(2),
@@ -348,6 +408,13 @@ export async function PATCH(
           exemptAmount: fiscalTotals.exemptAmount.toFixed(2),
           vatTotal: fiscalTotals.vatTotal.toFixed(2),
           otherTaxesTotal: fiscalTotals.otherTaxesTotal.toFixed(2),
+          discountType: body.globalDiscount?.type ?? null,
+          discountBase: body.globalDiscount?.base ?? null,
+          discountValue:
+            body.globalDiscount && body.globalDiscount.amount > 0
+              ? body.globalDiscount.value.toFixed(4)
+              : null,
+          discountAmount: fiscalTotals.discountAmount.toFixed(2),
           arcaValidationStatus: "PENDING",
           arcaValidationCheckedAt: null,
           arcaValidationMessage: fiscalComputable
@@ -392,8 +459,10 @@ export async function PATCH(
       if (purchaseItems.length) {
         await tx.purchaseItem.createMany({
           data: purchaseItems.map((item) => {
-            const itemSubtotal = item.qty * item.unitCost;
+            const itemSubtotal = item.lineSubtotal ?? item.qty * item.unitCost;
             const itemTaxRate = item.taxRate ?? 0;
+            const itemTaxAmount =
+              item.taxAmount ?? itemSubtotal * (itemTaxRate / 100);
             return {
               purchaseInvoiceId: purchase.id,
               productId: item.productId,
@@ -401,7 +470,14 @@ export async function PATCH(
               unitCost: item.unitCost.toFixed(2),
               total: itemSubtotal.toFixed(2),
               taxRate: itemTaxRate.toFixed(2),
-              taxAmount: (itemSubtotal * (itemTaxRate / 100)).toFixed(2),
+              taxAmount: itemTaxAmount.toFixed(2),
+              discountType: item.discountType,
+              discountBase: item.discountBase,
+              discountValue:
+                item.discountValue !== undefined
+                  ? item.discountValue.toFixed(4)
+                  : undefined,
+              discountAmount: (item.discountAmount ?? 0).toFixed(2),
             };
           }),
         });
@@ -435,20 +511,32 @@ export async function PATCH(
           },
           data: {
             supplierId: body.supplierId,
+            direction: purchaseEntryDirection,
             amount: totalAmount.toFixed(2),
             occurredAt: invoiceDate ?? new Date(),
-            note: `Compra ${invoiceNumber ?? purchase.id}`,
+            note: `${formatPurchaseDocumentTypeLabel(body.documentType)} ${
+              invoiceNumber ?? purchase.id
+            }`,
           },
         });
-        if (allocatedTotal > 0.005) {
+        if (allocatedTotal > 0.005 && !isCreditNote) {
           await recalcPurchaseTotals(tx, purchase.id);
-        } else {
+        } else if (leavesPayableBalance) {
           await tx.purchaseInvoice.update({
             where: { id: purchase.id },
             data: {
               paidTotal: "0.00",
               balance: totalAmount.toFixed(2),
               paymentStatus: "UNPAID",
+            },
+          });
+        } else {
+          await tx.purchaseInvoice.update({
+            where: { id: purchase.id },
+            data: {
+              paidTotal: totalAmount.toFixed(2),
+              balance: "0.00",
+              paymentStatus: "PAID",
             },
           });
         }
@@ -485,6 +573,7 @@ export async function PATCH(
           "El IVA compra no puede superar el total",
         PURCHASE_FISCAL_TOTAL_MISMATCH:
           "El detalle fiscal no coincide con el total de la compra",
+        PURCHASE_FISCAL_DISCOUNT_INVALID: "Descuento global invalido",
         PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C:
           "Factura C: no genera credito fiscal de IVA",
       };

@@ -30,6 +30,7 @@ test("calculateFiscalLineAmount devuelve importe automatico", () => {
 test("compareArcaVoucherAgainstForm detecta mismatch por tipo y total", () => {
   const mismatches = compareArcaVoucherAgainstForm({
     form: {
+      documentType: "INVOICE",
       voucherKind: "B",
       pointOfSale: "2",
       invoiceNumber: "0002-00000124",

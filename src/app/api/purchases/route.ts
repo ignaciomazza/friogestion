@@ -16,8 +16,12 @@ import {
 import { validatePurchaseVoucher } from "@/lib/arca/purchase-verification";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  PURCHASE_DISCOUNT_BASES,
+  PURCHASE_DISCOUNT_TYPES,
+  PURCHASE_DOCUMENT_TYPES,
   assertPurchaseVoucherVatRules,
   buildPurchaseFiscalTotals,
+  formatPurchaseDocumentTypeLabel,
   getPurchaseFiscalRecordType,
   isPurchaseFiscalComputable,
   mapVoucherTypeToPurchaseKind,
@@ -36,7 +40,20 @@ const purchaseItemSchema = z.object({
   productId: z.string().min(1),
   qty: z.coerce.number().positive(),
   unitCost: z.coerce.number().min(0),
+  lineSubtotal: z.coerce.number().min(0).optional(),
   taxRate: z.coerce.number().min(0).max(100).optional(),
+  taxAmount: z.coerce.number().min(0).optional(),
+  discountType: z.enum(PURCHASE_DISCOUNT_TYPES).optional(),
+  discountBase: z.enum(PURCHASE_DISCOUNT_BASES).optional(),
+  discountValue: z.coerce.number().min(0).optional(),
+  discountAmount: z.coerce.number().min(0).optional(),
+});
+
+const purchaseDiscountSchema = z.object({
+  type: z.enum(PURCHASE_DISCOUNT_TYPES),
+  base: z.enum(PURCHASE_DISCOUNT_BASES),
+  value: z.coerce.number().min(0),
+  amount: z.coerce.number().min(0),
 });
 
 const cashOutLineSchema = z.object({
@@ -47,10 +64,13 @@ const cashOutLineSchema = z.object({
 
 const purchaseSchema = z.object({
   supplierId: z.string().min(1),
+  documentType: z.enum(PURCHASE_DOCUMENT_TYPES).default("INVOICE"),
+  linkedPurchaseInvoiceId: z.string().min(1).optional(),
   invoiceNumber: z.string().min(1).optional(),
   invoiceDate: z.string().min(1).optional(),
   totalAmount: z.coerce.number().positive(),
   purchaseVatAmount: z.coerce.number().min(0).optional(),
+  globalDiscount: purchaseDiscountSchema.optional(),
   currencyCode: z.string().min(1).optional(),
   fiscalDetail: purchaseFiscalInputSchema.nullish(),
   impactCurrentAccount: z.boolean().optional(),
@@ -322,6 +342,7 @@ export async function GET(req: NextRequest) {
             purchase.allocations as SupplierPaymentAllocationCandidate[],
           );
         const impactsAccount = purchase.currentAccountEntries.length > 0;
+        const isCreditNote = purchase.documentType === "CREDIT_NOTE";
         const paymentMethodName = impactsAccount
           ? supplierAllocatedPaymentMethodName ?? immediatePaymentMethodName
           : immediatePaymentMethodName ?? persistedImmediatePaymentLabel;
@@ -330,9 +351,11 @@ export async function GET(req: NextRequest) {
         const allocatedPaidTotal = (
           purchase.allocations as Array<{ amount: unknown }>
         ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
-        const effectivePaidTotal = impactsAccount
-          ? roundToTwo(allocatedPaidTotal)
-          : roundToTwo(storedPaidTotal);
+        const effectivePaidTotal = isCreditNote
+          ? totalAmount
+          : impactsAccount
+            ? roundToTwo(allocatedPaidTotal)
+            : roundToTwo(storedPaidTotal);
         const effectiveBalance = roundToTwo(
           Math.max(totalAmount - effectivePaidTotal, 0),
         );
@@ -347,6 +370,8 @@ export async function GET(req: NextRequest) {
           id: purchase.id,
           supplierId: purchase.supplierId,
           supplierName: purchase.supplier.displayName,
+          documentType: purchase.documentType,
+          linkedPurchaseInvoiceId: purchase.linkedPurchaseInvoiceId,
           invoiceNumber: purchase.invoiceNumber,
           invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
           createdAt: purchase.createdAt.toISOString(),
@@ -365,6 +390,10 @@ export async function GET(req: NextRequest) {
           exemptAmount: purchase.exemptAmount.toString(),
           vatTotal: purchase.vatTotal.toString(),
           otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+          discountType: purchase.discountType,
+          discountBase: purchase.discountBase,
+          discountValue: purchase.discountValue?.toString() ?? null,
+          discountAmount: purchase.discountAmount.toString(),
           fiscalLines: purchase.fiscalLines.map((line) => ({
             id: line.id,
             type: line.type,
@@ -415,6 +444,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const linkedPurchaseInvoiceId =
+      body.documentType === "INVOICE"
+        ? null
+        : body.linkedPurchaseInvoiceId?.trim() || null;
+    if (linkedPurchaseInvoiceId) {
+      const linkedPurchase = await prisma.purchaseInvoice.findFirst({
+        where: {
+          id: linkedPurchaseInvoiceId,
+          organizationId,
+          supplierId: body.supplierId,
+        },
+        select: { id: true },
+      });
+      if (!linkedPurchase) {
+        return NextResponse.json(
+          { error: "La compra asociada no pertenece al proveedor seleccionado" },
+          { status: 400 },
+        );
+      }
+    }
+
     const hasInvoice =
       body.hasInvoice ??
       Boolean(body.invoiceNumber?.trim() || body.arcaValidation);
@@ -454,7 +504,10 @@ export async function POST(req: NextRequest) {
       (item) => Number(item.qty) > 0,
     );
     const purchaseItemsVatTotal = purchaseItems.reduce((sum, item) => {
-      const subtotal = item.qty * item.unitCost;
+      if (item.taxAmount !== undefined) {
+        return sum + item.taxAmount;
+      }
+      const subtotal = item.lineSubtotal ?? item.qty * item.unitCost;
       return sum + subtotal * ((item.taxRate ?? 0) / 100);
     }, 0);
 
@@ -470,13 +523,15 @@ export async function POST(req: NextRequest) {
       totalAmount,
       purchaseVatAmount,
       fiscalDetail: fiscalComputable ? (body.fiscalDetail ?? null) : null,
+      discountAmount: body.globalDiscount?.amount ?? 0,
       currencyCode: body.currencyCode,
       fiscalComputable,
     });
 
     const impactCurrentAccount = body.impactCurrentAccount ?? false;
     const adjustStock = STOCK_ENABLED && (body.adjustStock ?? false);
-    const registerCashOut = body.registerCashOut ?? false;
+    const registerCashOut =
+      body.documentType === "CREDIT_NOTE" ? false : (body.registerCashOut ?? false);
 
     const stockAdjustments = (body.stockAdjustments ?? []).filter(
       (adjustment) => Number(adjustment.qty) !== 0,
@@ -629,6 +684,9 @@ export async function POST(req: NextRequest) {
           normalizedCashOutLines.map((line) => line.paymentMethodName),
         )
       : null;
+    const isCreditNote = body.documentType === "CREDIT_NOTE";
+    const purchaseEntryDirection = isCreditNote ? "DEBIT" : "CREDIT";
+    const leavesPayableBalance = impactCurrentAccount && !isCreditNote;
 
     const productIds = Array.from(
       new Set([
@@ -663,12 +721,15 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      arcaValidationPayload = buildPurchaseValidationPayload(body.arcaValidation, {
-        issuerTaxId: supplier.taxId,
-        pointOfSale: fiscalConfig?.defaultPointOfSale ?? null,
-        receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
-        receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
-      });
+      arcaValidationPayload = buildPurchaseValidationPayload(
+        { ...body.arcaValidation, documentType: body.documentType },
+        {
+          issuerTaxId: supplier.taxId,
+          pointOfSale: fiscalConfig?.defaultPointOfSale ?? null,
+          receiverDocType: fiscalConfig?.taxIdRepresentado ? "80" : null,
+          receiverDocNumber: fiscalConfig?.taxIdRepresentado ?? null,
+        },
+      );
 
       assertPurchaseVoucherVatRules({
         voucherKind: mapVoucherTypeToPurchaseKind(arcaValidationPayload.voucherType),
@@ -681,8 +742,10 @@ export async function POST(req: NextRequest) {
         data: {
           organizationId,
           supplierId: body.supplierId,
+          documentType: body.documentType,
+          linkedPurchaseInvoiceId,
           status: "CONFIRMED",
-          paymentStatus: impactCurrentAccount ? "UNPAID" : "PAID",
+          paymentStatus: leavesPayableBalance ? "UNPAID" : "PAID",
           invoiceNumber,
           invoiceDate,
           subtotal: fiscalTotals.subtotal.toFixed(2),
@@ -714,24 +777,40 @@ export async function POST(req: NextRequest) {
           exemptAmount: fiscalTotals.exemptAmount.toFixed(2),
           vatTotal: fiscalTotals.vatTotal.toFixed(2),
           otherTaxesTotal: fiscalTotals.otherTaxesTotal.toFixed(2),
+          discountType: body.globalDiscount?.type,
+          discountBase: body.globalDiscount?.base,
+          discountValue:
+            body.globalDiscount && body.globalDiscount.amount > 0
+              ? body.globalDiscount.value.toFixed(4)
+              : undefined,
+          discountAmount: fiscalTotals.discountAmount.toFixed(2),
           arcaValidationMessage: fiscalComputable
             ? null
             : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
-          paidTotal: impactCurrentAccount ? "0.00" : totalAmount.toFixed(2),
-          balance: impactCurrentAccount ? totalAmount.toFixed(2) : "0.00",
+          paidTotal: leavesPayableBalance ? "0.00" : totalAmount.toFixed(2),
+          balance: leavesPayableBalance ? totalAmount.toFixed(2) : "0.00",
           immediatePaymentLabel: impactCurrentAccount ? null : immediatePaymentLabel,
           items: purchaseItems.length
             ? {
                 create: purchaseItems.map((item) => {
-                  const itemSubtotal = item.qty * item.unitCost;
+                  const itemSubtotal = item.lineSubtotal ?? item.qty * item.unitCost;
                   const itemTaxRate = item.taxRate ?? 0;
+                  const itemTaxAmount =
+                    item.taxAmount ?? itemSubtotal * (itemTaxRate / 100);
                   return {
                     productId: item.productId,
                     qty: item.qty.toFixed(3),
                     unitCost: item.unitCost.toFixed(2),
                     total: itemSubtotal.toFixed(2),
                     taxRate: itemTaxRate.toFixed(2),
-                    taxAmount: (itemSubtotal * (itemTaxRate / 100)).toFixed(2),
+                    taxAmount: itemTaxAmount.toFixed(2),
+                    discountType: item.discountType,
+                    discountBase: item.discountBase,
+                    discountValue:
+                      item.discountValue !== undefined
+                        ? item.discountValue.toFixed(4)
+                        : undefined,
+                    discountAmount: (item.discountAmount ?? 0).toFixed(2),
                   };
                 }),
               }
@@ -779,12 +858,14 @@ export async function POST(req: NextRequest) {
             organizationId,
             counterpartyType: "SUPPLIER",
             supplierId: body.supplierId,
-            direction: "CREDIT",
+            direction: purchaseEntryDirection,
             sourceType: "PURCHASE",
             purchaseInvoiceId: purchaseInvoice.id,
             amount: totalAmount.toFixed(2),
             occurredAt: invoiceDate ?? new Date(),
-            note: `Compra ${purchaseInvoice.invoiceNumber ?? purchaseInvoice.id}`,
+            note: `${formatPurchaseDocumentTypeLabel(body.documentType)} ${
+              purchaseInvoice.invoiceNumber ?? purchaseInvoice.id
+            }`,
           },
         });
       }
@@ -859,6 +940,8 @@ export async function POST(req: NextRequest) {
       id: purchase.id,
       supplierId: purchase.supplierId,
       supplierName: purchase.supplier.displayName,
+      documentType: purchase.documentType,
+      linkedPurchaseInvoiceId: purchase.linkedPurchaseInvoiceId,
       invoiceNumber: purchase.invoiceNumber,
       invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
       createdAt: purchase.createdAt.toISOString(),
@@ -877,6 +960,10 @@ export async function POST(req: NextRequest) {
       exemptAmount: purchase.exemptAmount.toString(),
       vatTotal: purchase.vatTotal.toString(),
       otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+      discountType: purchase.discountType,
+      discountBase: purchase.discountBase,
+      discountValue: purchase.discountValue?.toString() ?? null,
+      discountAmount: purchase.discountAmount.toString(),
       fiscalLines: purchase.fiscalLines.map((line) => ({
         id: line.id,
         type: line.type,
@@ -926,6 +1013,7 @@ export async function POST(req: NextRequest) {
           "El IVA compra no puede superar el total",
         PURCHASE_FISCAL_TOTAL_MISMATCH:
           "El detalle fiscal no coincide con el total de la compra",
+        PURCHASE_FISCAL_DISCOUNT_INVALID: "Descuento global invalido",
         PURCHASE_FISCAL_VAT_NOT_ALLOWED_FOR_VOUCHER_C:
           "Factura C: no genera credito fiscal de IVA",
       };

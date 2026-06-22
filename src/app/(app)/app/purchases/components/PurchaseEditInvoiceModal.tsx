@@ -1,17 +1,43 @@
+import type {
+  PurchaseDocumentType,
+  PurchaseVoucherKind,
+} from "@/lib/purchases/fiscal";
+import { PurchaseSelect } from "./PurchaseSelect";
+
 type PurchaseSummary = {
   supplierName: string;
   invoiceNumber: string | null;
 };
 
+const DOCUMENT_TYPE_OPTIONS: Array<{
+  value: PurchaseDocumentType;
+  label: string;
+}> = [
+  { value: "INVOICE", label: "Factura" },
+  { value: "CREDIT_NOTE", label: "Nota credito" },
+  { value: "DEBIT_NOTE", label: "Nota debito" },
+];
+
+const VOUCHER_KIND_OPTIONS: Array<{
+  value: PurchaseVoucherKind;
+  label: string;
+}> = [
+  { value: "A", label: "A" },
+  { value: "B", label: "B" },
+  { value: "C", label: "C" },
+];
+
 type PurchaseEditInvoiceModalProps = {
   editingInvoicePurchase: PurchaseSummary | null;
-  editingVoucherKind: "A" | "B" | "C";
+  editingDocumentType: PurchaseDocumentType;
+  editingVoucherKind: PurchaseVoucherKind;
   editingInvoiceDate: string;
   editingInvoiceNumber: string;
   editingAuthorizationCode: string;
   isSavingInvoiceEdit: boolean;
   revalidateAfterInvoiceEdit: boolean;
-  onSetEditingVoucherKind: (value: "A" | "B" | "C") => void;
+  onSetEditingDocumentType: (value: PurchaseDocumentType) => void;
+  onSetEditingVoucherKind: (value: PurchaseVoucherKind) => void;
   onSetEditingInvoiceDate: (value: string) => void;
   onSetEditingInvoiceNumber: (value: string) => void;
   onSetEditingAuthorizationCode: (value: string) => void;
@@ -21,12 +47,14 @@ type PurchaseEditInvoiceModalProps = {
 
 export default function PurchaseEditInvoiceModal({
   editingInvoicePurchase,
+  editingDocumentType,
   editingVoucherKind,
   editingInvoiceDate,
   editingInvoiceNumber,
   editingAuthorizationCode,
   isSavingInvoiceEdit,
   revalidateAfterInvoiceEdit,
+  onSetEditingDocumentType,
   onSetEditingVoucherKind,
   onSetEditingInvoiceDate,
   onSetEditingInvoiceNumber,
@@ -57,17 +85,22 @@ export default function PurchaseEditInvoiceModal({
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <label className="field-stack">
-            <span className="input-label">Tipo de comprobante</span>
-            <select
-              className="input cursor-pointer"
-              value={editingVoucherKind}
-              onChange={(event) => onSetEditingVoucherKind(event.target.value as "A" | "B" | "C")}
+            <span className="input-label">Comprobante</span>
+            <PurchaseSelect
+              value={editingDocumentType}
+              options={DOCUMENT_TYPE_OPTIONS}
+              onValueChange={onSetEditingDocumentType}
               disabled={isSavingInvoiceEdit}
-            >
-              <option value="A">Factura A</option>
-              <option value="B">Factura B</option>
-              <option value="C">Factura C</option>
-            </select>
+            />
+          </label>
+          <label className="field-stack">
+            <span className="input-label">Tipo fiscal</span>
+            <PurchaseSelect
+              value={editingVoucherKind}
+              options={VOUCHER_KIND_OPTIONS}
+              onValueChange={onSetEditingVoucherKind}
+              disabled={isSavingInvoiceEdit}
+            />
           </label>
           <label className="field-stack">
             <span className="input-label">Fecha comprobante</span>

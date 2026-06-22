@@ -1,3 +1,9 @@
+import {
+  getPurchaseVoucherType,
+  type PurchaseDocumentType,
+  type PurchaseVoucherKind,
+} from "@/lib/purchases/fiscal";
+
 export type PurchaseTotalsSource = "AUTO_FROM_PRODUCTS" | "MANUAL";
 
 export type PurchaseArcaTributeSnapshot = {
@@ -26,7 +32,8 @@ export type PurchaseArcaVoucherSnapshot = {
 };
 
 export type PurchaseArcaFormValues = {
-  voucherKind: "A" | "B" | "C";
+  documentType: PurchaseDocumentType;
+  voucherKind: PurchaseVoucherKind;
   pointOfSale: string;
   invoiceNumber: string;
   invoiceDate: string;
@@ -76,12 +83,6 @@ export const ARGENTINA_JURISDICTIONS = [
   "Tierra del Fuego",
   "Tucuman",
 ] as const;
-
-const PURCHASE_VOUCHER_TYPE_BY_KIND: Record<"A" | "B" | "C", number> = {
-  A: 1,
-  B: 6,
-  C: 11,
-};
 
 const JURISDICTION_ALIASES: Record<string, string> = {
   CABA: "CABA",
@@ -196,7 +197,10 @@ export function compareArcaVoucherAgainstForm(input: {
   const { form, arca } = input;
   if (!arca) return [] as PurchaseArcaMismatch[];
 
-  const expectedVoucherType = PURCHASE_VOUCHER_TYPE_BY_KIND[form.voucherKind];
+  const expectedVoucherType = getPurchaseVoucherType(
+    form.documentType,
+    form.voucherKind,
+  );
   const parsedInvoice = parseInvoiceNumber(form.invoiceNumber);
   const pointOfSaleDigits = form.pointOfSale.replace(/\D/g, "");
   const expectedPointOfSale =
@@ -210,7 +214,11 @@ export function compareArcaVoucherAgainstForm(input: {
 
   const mismatches: PurchaseArcaMismatch[] = [];
 
-  if (arca.voucherType !== null && arca.voucherType !== expectedVoucherType) {
+  if (
+    arca.voucherType !== null &&
+    expectedVoucherType !== null &&
+    arca.voucherType !== expectedVoucherType
+  ) {
     mismatches.push({
       field: "invoice.voucherKind",
       label: "tipo de comprobante",

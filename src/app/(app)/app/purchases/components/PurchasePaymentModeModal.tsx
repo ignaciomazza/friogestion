@@ -1,6 +1,8 @@
 import { TrashIcon } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
+import type { PurchaseDocumentType } from "@/lib/purchases/fiscal";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 type PurchasePaymentMode = "CURRENT_ACCOUNT" | "IMMEDIATE_CASH_OUT" | "OFF_BOOK";
 
@@ -25,6 +27,7 @@ type CashOutLineForm = {
 type PurchaseSummary = {
   supplierName: string;
   invoiceNumber: string | null;
+  documentType?: PurchaseDocumentType | null;
   total: string | null;
 };
 
@@ -111,12 +114,17 @@ export default function PurchasePaymentModeModal({
             <div className="grid gap-2 sm:grid-cols-3">
               {paymentModeOptions.map((option) => {
                 const isActive = editingPaymentMode === option.value;
+                const isDisabled =
+                  editingPaymentPurchase.documentType === "CREDIT_NOTE" &&
+                  option.value === "IMMEDIATE_CASH_OUT";
                 return (
                   <button
                     key={`edit-${option.value}`}
                     type="button"
                     aria-pressed={isActive}
+                    disabled={isDisabled}
                     onClick={() => {
+                      if (isDisabled) return;
                       onSetEditingPaymentMode(option.value);
                       if (option.value !== "IMMEDIATE_CASH_OUT") {
                         onResetCashOutTargets();
@@ -126,7 +134,7 @@ export default function PurchasePaymentModeModal({
                       isActive
                         ? "border-sky-300 bg-sky-50/70 text-sky-950"
                         : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
-                    }`}
+                    } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}
                   >
                     <p className="text-sm font-semibold">{option.label}</p>
                     <p className={`mt-1 text-[11px] ${isActive ? "text-sky-700" : "text-zinc-500"}`}>
@@ -162,51 +170,47 @@ export default function PurchasePaymentModeModal({
                         >
                           <label className="field-stack min-w-0">
                             <span className="input-label">Metodo de pago</span>
-                            <select
-                              className="input w-full min-w-0 cursor-pointer"
+                            <PurchaseSelect
                               value={line.paymentMethodId}
-                              onChange={(event) =>
+                              options={[
+                                {
+                                  value: "",
+                                  label: paymentMethods.length
+                                    ? "Selecciona metodo"
+                                    : "Sin metodos activos",
+                                },
+                                ...paymentMethods.map((method) => ({
+                                  value: method.id,
+                                  label: method.name,
+                                })),
+                              ]}
+                              onValueChange={(value) =>
                                 onUpdateCashOutLine(index, {
-                                  paymentMethodId: event.target.value,
+                                  paymentMethodId: value,
                                 })
                               }
                               disabled={!paymentMethods.length}
-                            >
-                              <option value="">
-                                {paymentMethods.length
-                                  ? "Selecciona metodo"
-                                  : "Sin metodos activos"}
-                              </option>
-                              {paymentMethods.map((method) => (
-                                <option key={`edit-method-${method.id}`} value={method.id}>
-                                  {method.name}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </label>
 
                           <label className="field-stack min-w-0">
                             <span className="input-label">Cuenta de egreso</span>
                             {requiresAccount ? (
-                              <select
-                                className="input w-full min-w-0 cursor-pointer"
+                              <PurchaseSelect
                                 value={line.accountId}
-                                onChange={(event) =>
+                                options={[
+                                  { value: "", label: "Selecciona cuenta" },
+                                  ...accounts.map((account) => ({
+                                    value: account.id,
+                                    label: `${account.name} (${account.currencyCode})`,
+                                  })),
+                                ]}
+                                onValueChange={(value) =>
                                   onUpdateCashOutLine(index, {
-                                    accountId: event.target.value,
+                                    accountId: value,
                                   })
                                 }
-                              >
-                                <option value="">Selecciona cuenta</option>
-                                {accounts.map((account) => (
-                                  <option
-                                    key={`edit-account-${account.id}`}
-                                    value={account.id}
-                                  >
-                                    {account.name} ({account.currencyCode})
-                                  </option>
-                                ))}
-                              </select>
+                              />
                             ) : (
                               <input
                                 className="input w-full min-w-0"

@@ -1,4 +1,5 @@
 import type { ChangeEvent, RefObject } from "react";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 type VideoDevice = {
   id: string;
@@ -61,17 +62,14 @@ export default function PurchaseQrScannerModal({
         {qrVideoDevices.length > 1 ? (
           <label className="field-stack mt-3">
             <span className="input-label">Camara</span>
-            <select
-              className="input cursor-pointer"
+            <PurchaseSelect
               value={qrSelectedDeviceId}
-              onChange={(event) => onSetSelectedDeviceId(event.target.value)}
-            >
-              {qrVideoDevices.map((device) => (
-                <option key={`qr-device-${device.id}`} value={device.id}>
-                  {device.label}
-                </option>
-              ))}
-            </select>
+              options={qrVideoDevices.map((device) => ({
+                value: device.id,
+                label: device.label,
+              }))}
+              onValueChange={onSetSelectedDeviceId}
+            />
           </label>
         ) : null}
 

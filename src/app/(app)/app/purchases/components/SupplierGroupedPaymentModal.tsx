@@ -3,6 +3,7 @@ import { TrashIcon } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
 import type { PurchaseRow } from "../types";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 type PaymentMethodOption = {
   id: string;
@@ -391,51 +392,44 @@ export default function SupplierGroupedPaymentModal({
                   >
                     <label className="field-stack min-w-0">
                       <span className="input-label">Metodo de pago</span>
-                      <select
-                        className="input w-full min-w-0 cursor-pointer"
+                      <PurchaseSelect
                         value={line.paymentMethodId}
-                        onChange={(event) =>
+                        options={[
+                          {
+                            value: "",
+                            label: paymentMethods.length
+                              ? "Selecciona metodo"
+                              : "Sin metodos activos",
+                          },
+                          ...paymentMethods.map((method) => ({
+                            value: method.id,
+                            label: method.name,
+                          })),
+                        ]}
+                        onValueChange={(value) =>
                           updateLine(index, {
-                            paymentMethodId: event.target.value,
+                            paymentMethodId: value,
                           })
                         }
                         disabled={!paymentMethods.length}
-                      >
-                        <option value="">
-                          {paymentMethods.length
-                            ? "Selecciona metodo"
-                            : "Sin metodos activos"}
-                        </option>
-                        {paymentMethods.map((method) => (
-                          <option
-                            key={`supplier-method-${method.id}`}
-                            value={method.id}
-                          >
-                            {method.name}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     </label>
                     <label className="field-stack min-w-0">
                       <span className="input-label">Cuenta de egreso</span>
                       {requiresAccount ? (
-                        <select
-                          className="input w-full min-w-0 cursor-pointer"
+                        <PurchaseSelect
                           value={line.accountId}
-                          onChange={(event) =>
-                            updateLine(index, { accountId: event.target.value })
+                          options={[
+                            { value: "", label: "Selecciona cuenta" },
+                            ...arsAccounts.map((account) => ({
+                              value: account.id,
+                              label: `${account.name} (${account.currencyCode})`,
+                            })),
+                          ]}
+                          onValueChange={(value) =>
+                            updateLine(index, { accountId: value })
                           }
-                        >
-                          <option value="">Selecciona cuenta</option>
-                          {arsAccounts.map((account) => (
-                            <option
-                              key={`supplier-account-${account.id}`}
-                              value={account.id}
-                            >
-                              {account.name} ({account.currencyCode})
-                            </option>
-                          ))}
-                        </select>
+                        />
                       ) : (
                         <input
                           className="input w-full min-w-0"

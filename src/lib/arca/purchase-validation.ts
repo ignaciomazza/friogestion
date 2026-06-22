@@ -1,16 +1,12 @@
 import { z } from "zod";
 import type { PurchaseValidationInput } from "@/lib/arca/wscdc";
+import {
+  PURCHASE_DOCUMENT_TYPES,
+  PURCHASE_VOUCHER_KINDS,
+  getPurchaseVoucherType,
+} from "@/lib/purchases/fiscal";
 
-export const PURCHASE_VOUCHER_KIND_OPTIONS = ["A", "B", "C"] as const;
-
-export const PURCHASE_VOUCHER_TYPE_BY_KIND: Record<
-  (typeof PURCHASE_VOUCHER_KIND_OPTIONS)[number],
-  number
-> = {
-  A: 1,
-  B: 6,
-  C: 11,
-};
+export const PURCHASE_VOUCHER_KIND_OPTIONS = PURCHASE_VOUCHER_KINDS;
 
 export const purchaseValidationSchema = z.object({
   mode: z.string().min(1).default("CAE"),
@@ -31,6 +27,7 @@ export const purchaseValidationInputSchema = z.object({
   pointOfSale: z.coerce.number().int().positive().optional(),
   voucherType: z.coerce.number().int().positive().optional(),
   voucherKind: z.enum(PURCHASE_VOUCHER_KIND_OPTIONS).optional(),
+  documentType: z.enum(PURCHASE_DOCUMENT_TYPES).optional(),
   voucherNumber: z
     .union([z.coerce.number().int().positive(), z.string().min(1)])
     .optional(),
@@ -168,7 +165,7 @@ export function buildPurchaseValidationPayload(
   const voucherType =
     parsed.voucherType ??
     (parsed.voucherKind
-      ? PURCHASE_VOUCHER_TYPE_BY_KIND[parsed.voucherKind]
+      ? getPurchaseVoucherType(parsed.documentType ?? "INVOICE", parsed.voucherKind)
       : undefined);
   const pointOfSale =
     parsed.pointOfSale ??

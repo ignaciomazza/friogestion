@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
         issuerTaxId: parsed.issuerTaxId,
         pointOfSale: parsed.pointOfSale,
         voucherType: parsed.voucherType,
+        documentType: parsed.documentType ?? undefined,
         voucherKind: parsed.voucherKind ?? undefined,
         voucherNumber: parsed.voucherNumber,
         invoiceNumber: parsed.invoiceNumber,

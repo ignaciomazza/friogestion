@@ -9,7 +9,10 @@ import {
   validatePurchaseVoucherWithArca,
   type PurchaseValidationVoucherSnapshot,
 } from "@/lib/arca/wscdc";
-import { mapVoucherTypeToPurchaseKind } from "@/lib/purchases/fiscal";
+import {
+  mapVoucherTypeToPurchaseDocumentType,
+  mapVoucherTypeToPurchaseKind,
+} from "@/lib/purchases/fiscal";
 
 type PurchaseValidationStatus =
   | "PENDING"
@@ -123,6 +126,8 @@ export async function validatePurchaseVoucher(input: {
           arcaValidationMessage: message,
           arcaValidationRequest: requestPayloadJson,
           arcaValidationResponse: responsePayloadJson,
+          documentType:
+            mapVoucherTypeToPurchaseDocumentType(parsed.voucherType) ?? "INVOICE",
           fiscalVoucherKind: mapVoucherTypeToPurchaseKind(parsed.voucherType),
           fiscalVoucherType: parsed.voucherType,
           fiscalPointOfSale: parsed.pointOfSale,

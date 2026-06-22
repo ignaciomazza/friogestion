@@ -7,6 +7,7 @@ import { formatCurrencyARS, formatCurrencyUSD } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
 import type { PurchaseRow, SupplierOption } from "../types";
 import { formatSupplierLabel, normalizeQuery } from "../utils";
+import { PurchaseSelect } from "./PurchaseSelect";
 
 type PaymentMethodOption = {
   id: string;
@@ -691,54 +692,50 @@ export function SupplierPaymentsPanel({
                 >
                   <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Metodo
-                    <select
-                      className="input text-xs"
+                    <PurchaseSelect
                       value={line.paymentMethodId}
-                      onChange={(event) =>
-                        updateLine(index, { paymentMethodId: event.target.value })
+                      options={paymentMethods.map((methodOption) => ({
+                        value: methodOption.id,
+                        label: methodOption.name,
+                      }))}
+                      onValueChange={(value) =>
+                        updateLine(index, { paymentMethodId: value })
                       }
-                    >
-                      {paymentMethods.map((methodOption) => (
-                        <option key={methodOption.id} value={methodOption.id}>
-                          {methodOption.name}
-                        </option>
-                      ))}
-                    </select>
+                      buttonClassName="text-xs"
+                    />
                   </label>
                   {requiresAccount ? (
                     <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                       Cuenta
-                      <select
-                        className="input text-xs"
+                      <PurchaseSelect
                         value={line.accountId}
-                        onChange={(event) =>
-                          updateLine(index, { accountId: event.target.value })
+                        options={[
+                          { value: "", label: "Selecciona cuenta" },
+                          ...currencyAccounts.map((account) => ({
+                            value: account.id,
+                            label: account.name,
+                          })),
+                        ]}
+                        onValueChange={(value) =>
+                          updateLine(index, { accountId: value })
                         }
-                      >
-                        <option value="">Selecciona cuenta</option>
-                        {currencyAccounts.map((account) => (
-                          <option key={account.id} value={account.id}>
-                            {account.name}
-                          </option>
-                        ))}
-                      </select>
+                        buttonClassName="text-xs"
+                      />
                     </label>
                   ) : null}
                   <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Moneda
-                    <select
-                      className="input text-xs"
+                    <PurchaseSelect
                       value={line.currencyCode}
-                      onChange={(event) =>
-                        updateLine(index, { currencyCode: event.target.value })
+                      options={currencies.map((currency) => ({
+                        value: currency.code,
+                        label: currency.code,
+                      }))}
+                      onValueChange={(value) =>
+                        updateLine(index, { currencyCode: value })
                       }
-                    >
-                      {currencies.map((currency) => (
-                        <option key={currency.id} value={currency.code}>
-                          {currency.code}
-                        </option>
-                      ))}
-                    </select>
+                      buttonClassName="text-xs"
+                    />
                   </label>
                   <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Importe
@@ -799,19 +796,14 @@ export function SupplierPaymentsPanel({
                 >
                   <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Tipo
-                    <select
-                      className="input text-xs"
+                    <PurchaseSelect
                       value={retention.type}
-                      onChange={(event) =>
-                        updateRetention(index, { type: event.target.value })
+                      options={RETENTION_OPTIONS}
+                      onValueChange={(value) =>
+                        updateRetention(index, { type: value })
                       }
-                    >
-                      {RETENTION_OPTIONS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                      buttonClassName="text-xs"
+                    />
                   </label>
                   <label className="flex min-w-0 flex-col gap-2 text-[11px] text-zinc-500">
                     Base

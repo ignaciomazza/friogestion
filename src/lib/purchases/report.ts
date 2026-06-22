@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import {
   PURCHASE_FISCAL_LINE_TYPE_LABELS,
   PURCHASE_FISCAL_LINE_TYPES,
+  PURCHASE_DOCUMENT_TYPE_LABELS,
+  type PurchaseDocumentType,
   formatPurchaseInvoiceNumber,
   isPurchaseFiscalComputable,
 } from "@/lib/purchases/fiscal";
@@ -13,6 +15,7 @@ export type PurchaseReportLine = {
   date: string;
   supplierName: string;
   supplierTaxId: string | null;
+  documentType: PurchaseDocumentType;
   voucher: string | null;
   voucherKind: string | null;
   pointOfSale: number | null;
@@ -161,8 +164,10 @@ export async function buildPurchasesMonthlyReport(input: {
     )
     .map((purchase) => {
       const fiscalLineTotals = emptyFiscalLineTotals();
+      const documentType = purchase.documentType ?? "INVOICE";
+      const sign = documentType === "CREDIT_NOTE" ? -1 : 1;
       for (const line of purchase.fiscalLines) {
-        addToBucket(fiscalLineTotals, line.type, toNumber(line.amount));
+        addToBucket(fiscalLineTotals, line.type, toNumber(line.amount) * sign);
       }
 
       return {
@@ -170,6 +175,7 @@ export async function buildPurchasesMonthlyReport(input: {
         date: isoDate(purchase.invoiceDate ?? purchase.createdAt),
         supplierName: purchase.supplier.displayName,
         supplierTaxId: purchase.supplier.taxId,
+        documentType,
         voucher:
           purchase.invoiceNumber ??
           formatPurchaseInvoiceNumber(
@@ -180,12 +186,12 @@ export async function buildPurchasesMonthlyReport(input: {
         pointOfSale: purchase.fiscalPointOfSale,
         voucherNumber: purchase.fiscalVoucherNumber,
         currencyCode: purchase.currencyCode,
-        netTaxed: toNumber(purchase.netTaxed),
-        netNonTaxed: toNumber(purchase.netNonTaxed),
-        exemptAmount: toNumber(purchase.exemptAmount),
-        vatTotal: toNumber(purchase.vatTotal),
-        otherTaxesTotal: toNumber(purchase.otherTaxesTotal),
-        total: toNumber(purchase.total),
+        netTaxed: toNumber(purchase.netTaxed) * sign,
+        netNonTaxed: toNumber(purchase.netNonTaxed) * sign,
+        exemptAmount: toNumber(purchase.exemptAmount) * sign,
+        vatTotal: toNumber(purchase.vatTotal) * sign,
+        otherTaxesTotal: toNumber(purchase.otherTaxesTotal) * sign,
+        total: toNumber(purchase.total) * sign,
         fiscalLineTotals,
         arcaValidationStatus: purchase.arcaValidationStatus,
       };
@@ -269,6 +275,7 @@ export function buildPurchasesReportCsv(report: PurchasesMonthlyReport) {
     "Fecha",
     "Proveedor",
     "CUIT proveedor",
+    "Documento",
     "Comprobante",
     "Tipo",
     "Punto de venta",
@@ -306,6 +313,7 @@ export function buildPurchasesReportCsv(report: PurchasesMonthlyReport) {
         purchase.date,
         purchase.supplierName,
         purchase.supplierTaxId,
+        PURCHASE_DOCUMENT_TYPE_LABELS[purchase.documentType],
         purchase.voucher,
         purchase.voucherKind,
         purchase.pointOfSale,

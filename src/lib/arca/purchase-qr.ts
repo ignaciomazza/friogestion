@@ -1,8 +1,10 @@
 import { z } from "zod";
 import {
   formatPurchaseInvoiceNumber,
+  mapVoucherTypeToPurchaseDocumentType,
   mapVoucherTypeToPurchaseKind,
 } from "@/lib/purchases/fiscal";
+import type { PurchaseDocumentType } from "@/lib/purchases/fiscal";
 
 const arcaQrPayloadSchema = z.object({
   ver: z.union([z.string(), z.number()]).optional(),
@@ -29,6 +31,7 @@ export type ParsedArcaPurchaseQr = {
   issuerTaxId: string;
   pointOfSale: number;
   voucherType: number;
+  documentType: PurchaseDocumentType | null;
   voucherKind: "A" | "B" | "C" | null;
   voucherNumber: number;
   invoiceNumber: string;
@@ -112,6 +115,7 @@ export function parseArcaPurchaseQr(value: string): ParsedArcaPurchaseQr {
   }
 
   const voucherKind = mapVoucherTypeToPurchaseKind(payload.tipoCmp);
+  const documentType = mapVoucherTypeToPurchaseDocumentType(payload.tipoCmp);
   const invoiceNumber =
     formatPurchaseInvoiceNumber(payload.ptoVta, payload.nroCmp) ??
     String(payload.nroCmp);
@@ -121,6 +125,7 @@ export function parseArcaPurchaseQr(value: string): ParsedArcaPurchaseQr {
     issuerTaxId,
     pointOfSale: payload.ptoVta,
     voucherType: payload.tipoCmp,
+    documentType,
     voucherKind,
     voucherNumber: payload.nroCmp,
     invoiceNumber,

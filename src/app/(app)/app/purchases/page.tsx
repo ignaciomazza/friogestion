@@ -20,6 +20,20 @@ import { STOCK_ENABLED } from "@/lib/features";
 import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
 import {
+  applyPurchaseItemDiscount,
+  calculateGlobalPurchaseDiscount,
+} from "@/lib/purchases/discounts";
+import {
+  PURCHASE_DOCUMENT_TYPE_LABELS,
+  type PurchaseDiscountBase,
+  type PurchaseDiscountType,
+  type PurchaseDocumentType,
+  type PurchaseVoucherKind,
+  formatPurchaseDocumentTypeLabel,
+  mapVoucherTypeToPurchaseDocumentType,
+  mapVoucherTypeToPurchaseKind,
+} from "@/lib/purchases/fiscal";
+import {
   calculateAutoTotalsFromProducts,
   calculateFiscalLineAmount,
   compareArcaVoucherAgainstForm,
@@ -31,6 +45,7 @@ import {
   type PurchaseTotalsSource,
 } from "@/lib/purchases/new-purchase";
 import type { ProductOption, PurchaseRow, SupplierOption } from "./types";
+import { PurchaseSelect } from "./components/PurchaseSelect";
 import {
   formatProductLabel,
   formatSupplierLabel,
@@ -89,7 +104,9 @@ type PurchaseProductForm = {
   productSearch: string;
   qty: string;
   unitCost: string;
-  discountPercent: string;
+  discountType: PurchaseDiscountType;
+  discountBase: PurchaseDiscountBase;
+  discountValue: string;
   taxRate: string;
 };
 
@@ -149,18 +166,32 @@ type FiscalDetailPayload = {
 
 type PurchasePayload = {
   supplierId: string;
+  documentType: PurchaseDocumentType;
+  linkedPurchaseInvoiceId?: string;
   hasInvoice: boolean;
   invoiceNumber?: string;
   invoiceDate?: string;
   totalAmount: number;
   purchaseVatAmount?: number;
+  globalDiscount?: {
+    type: PurchaseDiscountType;
+    base: PurchaseDiscountBase;
+    value: number;
+    amount: number;
+  };
   fiscalDetail?: FiscalDetailPayload;
   impactCurrentAccount: boolean;
   items?: Array<{
     productId: string;
     qty: number;
     unitCost: number;
+    lineSubtotal?: number;
     taxRate: number;
+    taxAmount?: number;
+    discountType?: PurchaseDiscountType;
+    discountBase?: PurchaseDiscountBase;
+    discountValue?: number;
+    discountAmount?: number;
   }>;
   adjustStock: boolean;
   registerCashOut: boolean;
@@ -191,7 +222,8 @@ type PurchaseQrImportResponse = {
   issuerTaxId: string;
   pointOfSale: number;
   voucherType: number;
-  voucherKind: "A" | "B" | "C" | null;
+  documentType: PurchaseDocumentType | null;
+  voucherKind: PurchaseVoucherKind | null;
   voucherNumber: number;
   invoiceNumber: string;
   voucherDate: string;
@@ -223,6 +255,8 @@ type PurchaseArcaRevalidationFeedback = {
 type PurchaseEditResponse = {
   id: string;
   supplier: SupplierOption;
+  documentType?: PurchaseDocumentType | null;
+  linkedPurchaseInvoiceId?: string | null;
   hasInvoice?: boolean;
   fiscalComputable?: boolean;
   fiscalRecordType?: "FISCAL_COMPUTABLE" | "INTERNAL_NON_COMPUTABLE";
@@ -235,6 +269,10 @@ type PurchaseEditResponse = {
   exemptAmount: string | null;
   vatTotal: string | null;
   otherTaxesTotal: string | null;
+  discountType?: PurchaseDiscountType | null;
+  discountBase?: PurchaseDiscountBase | null;
+  discountValue?: string | null;
+  discountAmount?: string | null;
   fiscalVoucherKind: string | null;
   fiscalVoucherType: number | null;
   authorizationCode: string | null;
@@ -243,6 +281,10 @@ type PurchaseEditResponse = {
     qty: string;
     unitCost: string;
     taxRate: string | null;
+    discountType?: PurchaseDiscountType | null;
+    discountBase?: PurchaseDiscountBase | null;
+    discountValue?: string | null;
+    discountAmount?: string | null;
     product: ProductOption;
   }>;
   fiscalLines: Array<{
@@ -263,7 +305,9 @@ const emptyPurchaseProduct = (): PurchaseProductForm => ({
   productSearch: "",
   qty: "1",
   unitCost: "",
-  discountPercent: "0",
+  discountType: "PERCENT",
+  discountBase: "SUBTOTAL",
+  discountValue: "0",
   taxRate: "21",
 });
 
@@ -727,6 +771,12 @@ const formatArcaVoucherTypeLabel = (value: unknown) => {
   if (numeric === 1) return "Factura A (1)";
   if (numeric === 6) return "Factura B (6)";
   if (numeric === 11) return "Factura C (11)";
+  if (numeric === 2) return "Nota debito A (2)";
+  if (numeric === 7) return "Nota debito B (7)";
+  if (numeric === 12) return "Nota debito C (12)";
+  if (numeric === 3) return "Nota credito A (3)";
+  if (numeric === 8) return "Nota credito B (8)";
+  if (numeric === 13) return "Nota credito C (13)";
   return `Tipo ${numeric}`;
 };
 
@@ -763,12 +813,7 @@ const normalizeCalendarDateForCompare = (value: string | null | undefined) => {
 
 const purchaseVoucherKindFromFiscalType = (
   voucherType: number | null | undefined,
-): "A" | "B" | "C" => {
-  if (voucherType === 1) return "A";
-  if (voucherType === 6) return "B";
-  if (voucherType === 11) return "C";
-  return "B";
-};
+): PurchaseVoucherKind => mapVoucherTypeToPurchaseKind(voucherType) ?? "B";
 
 const extractPointOfSaleFromInvoiceNumber = (value: string) => {
   const trimmed = value.trim();
@@ -803,14 +848,49 @@ const PURCHASE_PAYMENT_MODE_OPTIONS: Array<{
   },
   {
     value: "IMMEDIATE_CASH_OUT",
-    label: "Pago inmediato",
-    description: "Registra egreso ahora y no deja deuda.",
+    label: "Pago",
+    description: "Registra el egreso ahora y no deja deuda.",
   },
   {
     value: "OFF_BOOK",
     label: "Sin impacto",
     description: "No impacta cuenta corriente ni egreso.",
   },
+];
+
+const PURCHASE_DOCUMENT_TYPE_OPTIONS: Array<{
+  value: PurchaseDocumentType;
+  label: string;
+}> = [
+  { value: "INVOICE", label: "Factura" },
+  { value: "CREDIT_NOTE", label: "Nota credito" },
+  { value: "DEBIT_NOTE", label: "Nota debito" },
+];
+
+const PURCHASE_VOUCHER_KIND_OPTIONS: Array<{
+  value: PurchaseVoucherKind;
+  label: string;
+}> = [
+  { value: "A", label: "A" },
+  { value: "B", label: "B" },
+  { value: "C", label: "C" },
+];
+
+const PURCHASE_DISCOUNT_TYPE_OPTIONS: Array<{
+  value: PurchaseDiscountType;
+  label: string;
+}> = [
+  { value: "PERCENT", label: "%" },
+  { value: "AMOUNT", label: "$" },
+];
+
+const PURCHASE_DISCOUNT_BASE_OPTIONS: Array<{
+  value: PurchaseDiscountBase;
+  label: string;
+}> = [
+  { value: "SUBTOTAL", label: "Subtotal" },
+  { value: "VAT", label: "IVA" },
+  { value: "TOTAL", label: "Total" },
 ];
 
 const PURCHASE_ITEM_TAX_RATE_OPTIONS = [
@@ -827,6 +907,14 @@ const SIMPLE_FISCAL_CONDITION_OPTIONS: Array<{
   { value: "GRAVADO", label: "Gravado" },
   { value: "NO_GRAVADO", label: "No gravado" },
   { value: "EXENTO", label: "Exento" },
+];
+
+const PURCHASE_SORT_OPTIONS: Array<{
+  value: "newest" | "oldest";
+  label: string;
+}> = [
+  { value: "newest", label: "Mas recientes" },
+  { value: "oldest", label: "Mas antiguas" },
 ];
 
 const roundMoney = (value: number) =>
@@ -1040,6 +1128,9 @@ export default function PurchasesPage() {
   const [isSupplierOpen, setIsSupplierOpen] = useState(false);
   const [supplierActiveIndex, setSupplierActiveIndex] = useState(0);
 
+  const [documentType, setDocumentType] =
+    useState<PurchaseDocumentType>("INVOICE");
+  const [linkedPurchaseInvoiceId, setLinkedPurchaseInvoiceId] = useState("");
   const [hasInvoice, setHasInvoice] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(() => toDateInputValue(new Date()));
@@ -1048,7 +1139,11 @@ export default function PurchasesPage() {
   const [simpleFiscalCondition, setSimpleFiscalCondition] =
     useState<SimpleFiscalCondition>("GRAVADO");
   const [purchaseVatAmount, setPurchaseVatAmount] = useState("");
-  const [globalDiscountAmount, setGlobalDiscountAmount] = useState("");
+  const [globalDiscountType, setGlobalDiscountType] =
+    useState<PurchaseDiscountType>("AMOUNT");
+  const [globalDiscountBase, setGlobalDiscountBase] =
+    useState<PurchaseDiscountBase>("TOTAL");
+  const [globalDiscountValue, setGlobalDiscountValue] = useState("");
   const [totalsSource, setTotalsSource] =
     useState<PurchaseTotalsSource>("AUTO_FROM_PRODUCTS");
   const [showFiscalDetail, setShowFiscalDetail] = useState(false);
@@ -1077,7 +1172,7 @@ export default function PurchasesPage() {
 
   const [cashOutLines, setCashOutLines] = useState<CashOutLineForm[]>([]);
 
-  const [arcaVoucherKind, setArcaVoucherKind] = useState<"A" | "B" | "C">(
+  const [arcaVoucherKind, setArcaVoucherKind] = useState<PurchaseVoucherKind>(
     "B",
   );
   const [arcaAuthorizationCode, setArcaAuthorizationCode] = useState("");
@@ -1128,7 +1223,9 @@ export default function PurchasesPage() {
   const [editingInvoiceDate, setEditingInvoiceDate] = useState(() =>
     toDateInputValue(new Date()),
   );
-  const [editingVoucherKind, setEditingVoucherKind] = useState<"A" | "B" | "C">(
+  const [editingDocumentType, setEditingDocumentType] =
+    useState<PurchaseDocumentType>("INVOICE");
+  const [editingVoucherKind, setEditingVoucherKind] = useState<PurchaseVoucherKind>(
     "B",
   );
   const [editingAuthorizationCode, setEditingAuthorizationCode] = useState("");
@@ -1200,8 +1297,11 @@ export default function PurchasesPage() {
 
   const arcaEnabled = hasInvoice;
   const isInternalRecord = !hasInvoice;
+  const isCreditNote = documentType === "CREDIT_NOTE";
+  const isPurchaseNote = documentType !== "INVOICE";
   const impactCurrentAccount = paymentMode === "CURRENT_ACCOUNT";
-  const registerCashOut = paymentMode === "IMMEDIATE_CASH_OUT";
+  const registerCashOut =
+    paymentMode === "IMMEDIATE_CASH_OUT" && !isCreditNote;
   const paymentModeLabel =
     PURCHASE_PAYMENT_MODE_OPTIONS.find((option) => option.value === paymentMode)
       ?.label ?? "Sin impacto";
@@ -1211,11 +1311,26 @@ export default function PurchasesPage() {
     hasInvoice && invoiceNumber.trim() && !hasInvoiceNumberDashFormat
       ? "Formato requerido: 0001-00001234 (con guion)."
       : null;
+  const linkedPurchaseOptions = purchases.filter(
+    (purchase) =>
+      purchase.id !== editingPurchaseId &&
+      purchase.supplierId === supplierId &&
+      purchase.documentType !== "CREDIT_NOTE",
+  );
 
   const renderModalPortal = (content: ReactNode) => {
     if (!isPortalReady) return null;
     return createPortal(content, document.body);
   };
+
+  useEffect(() => {
+    if (documentType === "INVOICE" && linkedPurchaseInvoiceId) {
+      setLinkedPurchaseInvoiceId("");
+    }
+    if (documentType === "CREDIT_NOTE" && paymentMode === "IMMEDIATE_CASH_OUT") {
+      setPaymentMode("CURRENT_ACCOUNT");
+    }
+  }, [documentType, linkedPurchaseInvoiceId, paymentMode]);
 
   const highlightFields = (
     fields: Array<PurchaseArcaMismatchField | "totals.vatAmount" | "totals.netTaxed">,
@@ -1572,6 +1687,7 @@ export default function PurchasesPage() {
     setSelectedSupplier(null);
     setSelectedSupplierTaxId("");
     setSupplierDataStatus(null);
+    setLinkedPurchaseInvoiceId("");
     setIsSupplierOpen(true);
     setSupplierActiveIndex(0);
   };
@@ -1582,6 +1698,7 @@ export default function PurchasesPage() {
     setSelectedSupplierTaxId(normalizeTaxId(supplier.taxId ?? ""));
     setSupplierDataStatus(null);
     setSupplierSearch(formatSupplierLabel(supplier));
+    setLinkedPurchaseInvoiceId("");
     setIsSupplierOpen(false);
   };
 
@@ -2023,6 +2140,7 @@ export default function PurchasesPage() {
     if (!inferredPointOfSale) return null;
 
     const payload: Record<string, string | number> = {
+      documentType,
       voucherKind: arcaVoucherKind,
       invoiceNumber: normalizedInvoiceNumber,
       voucherDate: invoiceDate,
@@ -2087,7 +2205,7 @@ export default function PurchasesPage() {
       setFiscalLines([]);
       setSimpleNetAmount(toMoneyValue(totalAmount));
       setPurchaseVatAmount("0");
-      setGlobalDiscountAmount("");
+      setGlobalDiscountValue("");
       return { usedBreakdown: false, usedFallback: true, missingBreakdown: true };
     }
 
@@ -2112,7 +2230,7 @@ export default function PurchasesPage() {
             : "GRAVADO";
 
     setTotalsSource("MANUAL");
-    setGlobalDiscountAmount("");
+    setGlobalDiscountValue("");
     setSimpleFiscalCondition(nextSimpleCondition);
     setSimpleNetAmount(
       toMoneyValue(roundMoney(nextNetTaxed + nextNonTaxed + nextExempt)),
@@ -2266,10 +2384,6 @@ export default function PurchasesPage() {
     }
   };
 
-  const handleValidateArcaOnly = async () => {
-    await validateArcaFromForm("manual");
-  };
-
   const findSupplierByTaxId = async (taxId: string) => {
     const normalizedTaxId = normalizeTaxId(taxId);
     if (!normalizedTaxId) return null;
@@ -2321,6 +2435,9 @@ export default function PurchasesPage() {
 
       const parsedQr = qrData as PurchaseQrImportResponse;
       setHasInvoice(true);
+      if (parsedQr.documentType) {
+        setDocumentType(parsedQr.documentType);
+      }
       if (parsedQr.voucherKind === "A" || parsedQr.voucherKind === "B" || parsedQr.voucherKind === "C") {
         setArcaVoucherKind(parsedQr.voucherKind);
       }
@@ -2501,10 +2618,9 @@ export default function PurchasesPage() {
         productId: item.productId,
         qty: parseOptionalNumber(item.qty),
         unitCost: parseOptionalNumber(item.unitCost),
-        discountPercent: Math.max(
-          0,
-          parseOptionalNumber(item.discountPercent) ?? 0,
-        ),
+        discountType: item.discountType,
+        discountBase: item.discountBase,
+        discountValue: Math.max(0, parseOptionalNumber(item.discountValue) ?? 0),
         taxRate: parseOptionalNumber(item.taxRate) ?? 0,
       }))
       .filter(
@@ -2512,7 +2628,9 @@ export default function PurchasesPage() {
           productId: string;
           qty: number;
           unitCost: number;
-          discountPercent: number;
+          discountType: PurchaseDiscountType;
+          discountBase: PurchaseDiscountBase;
+          discountValue: number;
           taxRate: number;
         } =>
           Boolean(item.productId) &&
@@ -2522,9 +2640,10 @@ export default function PurchasesPage() {
           item.unitCost !== null &&
           Number.isFinite(item.unitCost) &&
           item.unitCost >= 0 &&
-          Number.isFinite(item.discountPercent) &&
-          item.discountPercent >= 0 &&
-          item.discountPercent <= 100 &&
+          (item.discountType === "AMOUNT" ||
+            (Number.isFinite(item.discountValue) &&
+              item.discountValue >= 0 &&
+              item.discountValue <= 100)) &&
           Number.isFinite(item.taxRate) &&
           item.taxRate >= 0 &&
           item.taxRate <= 100,
@@ -2535,17 +2654,21 @@ export default function PurchasesPage() {
     return normalizedPurchaseProducts.reduce(
       (totals, item) => {
         const grossSubtotal = item.qty * item.unitCost;
-        const discountAmount = roundMoney(
-          grossSubtotal * (item.discountPercent / 100),
-        );
-        const subtotal = Math.max(0, grossSubtotal - discountAmount);
-        const tax = subtotal * (item.taxRate / 100);
+        const applied = applyPurchaseItemDiscount({
+          grossSubtotal,
+          taxRate: item.taxRate,
+          discount: {
+            type: item.discountType,
+            base: item.discountBase,
+            value: item.discountValue,
+          },
+        });
         return {
           grossSubtotal: totals.grossSubtotal + grossSubtotal,
-          discountTotal: totals.discountTotal + discountAmount,
-          subtotal: totals.subtotal + subtotal,
-          tax: totals.tax + tax,
-          total: totals.total + subtotal + tax,
+          discountTotal: totals.discountTotal + applied.discountAmount,
+          subtotal: totals.subtotal + applied.subtotal,
+          tax: totals.tax + applied.vat,
+          total: totals.total + applied.total,
         };
       },
       { grossSubtotal: 0, discountTotal: 0, subtotal: 0, tax: 0, total: 0 },
@@ -2572,8 +2695,8 @@ export default function PurchasesPage() {
     (sum, line) => sum + (line.amount ?? 0),
     0,
   );
-  const globalDiscountValue = Math.max(
-    parseOptionalNumber(globalDiscountAmount) ?? 0,
+  const globalDiscountInputValue = Math.max(
+    parseOptionalNumber(globalDiscountValue) ?? 0,
     0,
   );
   const simpleNetValue = Math.max(parseOptionalNumber(simpleNetAmount) ?? 0, 0);
@@ -2599,6 +2722,18 @@ export default function PurchasesPage() {
       : 0;
   const simpleExempt =
     !isInternalRecord && simpleFiscalCondition === "EXENTO" ? simpleNetValue : 0;
+  const simpleSubtotalBase =
+    simpleNetTaxed + simpleNetNonTaxed + simpleExempt;
+  const simpleGlobalDiscountAmount = calculateGlobalPurchaseDiscount({
+    subtotal: simpleSubtotalBase,
+    vat: simpleVatValue,
+    otherTaxesTotal: fiscalOtherTotal,
+    discount: {
+      type: globalDiscountType,
+      base: globalDiscountBase,
+      value: globalDiscountInputValue,
+    },
+  });
   const simpleTotal = roundMoney(
     Math.max(
       0,
@@ -2607,12 +2742,25 @@ export default function PurchasesPage() {
         simpleExempt +
         simpleVatValue +
         fiscalOtherTotal -
-        globalDiscountValue,
+        simpleGlobalDiscountAmount,
     ),
   );
   const advancedNetTaxed = Math.max(parseOptionalNumber(netTaxedAmount) ?? 0, 0);
   const advancedNetNonTaxed = Math.max(parseOptionalNumber(netNonTaxedAmount) ?? 0, 0);
   const advancedExempt = Math.max(parseOptionalNumber(exemptAmount) ?? 0, 0);
+  const advancedGlobalDiscountAmount = calculateGlobalPurchaseDiscount({
+    subtotal: advancedNetTaxed + advancedNetNonTaxed + advancedExempt,
+    vat: simpleVatValue,
+    otherTaxesTotal: fiscalOtherTotal,
+    discount: {
+      type: globalDiscountType,
+      base: globalDiscountBase,
+      value: globalDiscountInputValue,
+    },
+  });
+  const globalDiscountAmount = showFiscalDetail
+    ? advancedGlobalDiscountAmount
+    : simpleGlobalDiscountAmount;
   const advancedTotal = roundMoney(
     Math.max(
       0,
@@ -2621,22 +2769,22 @@ export default function PurchasesPage() {
         advancedExempt +
         simpleVatValue +
         fiscalOtherTotal -
-        globalDiscountValue,
+        advancedGlobalDiscountAmount,
     ),
   );
   const hasAdvancedData =
     netTaxedAmount.trim() || netNonTaxedAmount.trim() || exemptAmount.trim();
   const effectiveTotalAmount = showFiscalDetail
-    ? hasAdvancedData || fiscalOtherTotal > 0 || globalDiscountValue > 0
+    ? hasAdvancedData || fiscalOtherTotal > 0 || globalDiscountAmount > 0
       ? toMoneyValue(advancedTotal)
       : ""
-    : simpleNetAmount.trim() || fiscalOtherTotal > 0 || globalDiscountValue > 0
+    : simpleNetAmount.trim() || fiscalOtherTotal > 0 || globalDiscountAmount > 0
       ? toMoneyValue(simpleTotal)
       : "";
   const effectiveTotalNumeric = parseOptionalNumber(effectiveTotalAmount) ?? 0;
   const expectedTotalFromProducts = Math.max(
     0,
-    roundMoney(productTotals.total - globalDiscountValue),
+    roundMoney(productTotals.total - globalDiscountAmount),
   );
   const productTotalDifference =
     includeProductDetails && hasPurchaseProductTotals
@@ -2691,8 +2839,11 @@ export default function PurchasesPage() {
     const exempt = showFiscalDetail
       ? (parseOptionalNumber(exemptAmount) ?? 0)
       : simpleExempt;
+    const activeGlobalDiscount = showFiscalDetail
+      ? advancedGlobalDiscountAmount
+      : simpleGlobalDiscountAmount;
     const fiscalTotal =
-      netTaxed + netNonTaxed + exempt + vat + fiscalOtherTotal - globalDiscountValue;
+      netTaxed + netNonTaxed + exempt + vat + fiscalOtherTotal - activeGlobalDiscount;
     return {
       total,
       vat,
@@ -2714,6 +2865,8 @@ export default function PurchasesPage() {
     simpleNetTaxed,
     simpleVatValue,
     globalDiscountValue,
+    advancedGlobalDiscountAmount,
+    simpleGlobalDiscountAmount,
     showFiscalDetail,
   ]);
   const fiscalDifferenceOk = Math.abs(fiscalPreview.difference) <= 0.01;
@@ -2721,7 +2874,7 @@ export default function PurchasesPage() {
     { label: "Neto", value: fiscalPreview.netTaxed },
     { label: "IVA", value: fiscalPreview.vat },
     { label: "Perc./otros", value: fiscalOtherTotal },
-    { label: "Desc.", value: -globalDiscountValue },
+    { label: "Desc.", value: -globalDiscountAmount },
     { label: "Total fiscal", value: fiscalPreview.fiscalTotal },
     { label: "Diferencia", value: fiscalPreview.difference },
   ];
@@ -2752,6 +2905,7 @@ export default function PurchasesPage() {
     if (!arcaEnabled || !comprobante) return true;
     const mismatches = compareArcaVoucherAgainstForm({
       form: {
+        documentType,
         voucherKind: arcaVoucherKind,
         pointOfSale: inferredPointOfSale,
         invoiceNumber,
@@ -2782,8 +2936,8 @@ export default function PurchasesPage() {
     : `Sin proveedor · ${formatDateInputLabel(invoiceDate)}`;
   const invoiceSectionSummary = hasInvoice
     ? invoiceNumber.trim()
-      ? `Comprobante ${arcaVoucherKind} · ${invoiceNumber.trim()}`
-      : `Comprobante ${arcaVoucherKind} pendiente`
+      ? `${formatPurchaseDocumentTypeLabel(documentType)} ${arcaVoucherKind} · ${invoiceNumber.trim()}`
+      : `${formatPurchaseDocumentTypeLabel(documentType)} ${arcaVoucherKind} pendiente`
     : "Sin comprobante fiscal · Registro interno";
   const productsSectionSummary = includeProductDetails
     ? `${normalizedPurchaseProducts.length} items · ${formatCurrencyARS(
@@ -2838,19 +2992,19 @@ export default function PurchasesPage() {
     if (includeProductDetails) {
       const hasIncompleteProduct = purchaseProducts.some((item) => {
         const hasData = Boolean(
-          item.productId ||
+            item.productId ||
             item.productSearch.trim() ||
             item.unitCost.trim() ||
-            item.discountPercent.trim() !== "0" ||
+            item.discountValue.trim() !== "0" ||
             item.qty.trim() !== "1" ||
             item.taxRate.trim() !== "21",
         );
         if (!hasData) return false;
         const qty = parseOptionalNumber(item.qty);
         const unitCost = parseOptionalNumber(item.unitCost);
-        const discountPercent = Math.max(
+        const discountValue = Math.max(
           0,
-          parseOptionalNumber(item.discountPercent) ?? 0,
+          parseOptionalNumber(item.discountValue) ?? 0,
         );
         const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
         return (
@@ -2859,8 +3013,7 @@ export default function PurchasesPage() {
           qty <= 0 ||
           unitCost === null ||
           unitCost < 0 ||
-          discountPercent < 0 ||
-          discountPercent > 100 ||
+          (item.discountType === "PERCENT" && discountValue > 100) ||
           taxRate < 0 ||
           taxRate > 100
         );
@@ -2926,7 +3079,7 @@ export default function PurchasesPage() {
         exempt +
         (vatAmount ?? 0) +
         fiscalOtherTotal -
-        globalDiscountValue;
+        globalDiscountAmount;
       if (Math.abs(total - fiscalTotal) > 0.01) {
         setStatus("El detalle fiscal no coincide con el total de la compra");
         setOpenPurchaseSection("totals");
@@ -3037,25 +3190,54 @@ export default function PurchasesPage() {
 
     const payload: PurchasePayload = {
       supplierId,
+      documentType,
+      linkedPurchaseInvoiceId:
+        isPurchaseNote && linkedPurchaseInvoiceId
+          ? linkedPurchaseInvoiceId
+          : undefined,
       hasInvoice: arcaEnabled,
       invoiceNumber: arcaEnabled ? invoiceNumber || undefined : undefined,
       invoiceDate: invoiceDate || undefined,
       totalAmount: total,
       purchaseVatAmount: vatAmount ?? undefined,
+      globalDiscount:
+        globalDiscountAmount > 0
+          ? {
+              type: globalDiscountType,
+              base: globalDiscountBase,
+              value: globalDiscountInputValue,
+              amount: globalDiscountAmount,
+            }
+          : undefined,
       fiscalDetail: fiscalDetailPayload,
       impactCurrentAccount,
       items: includeProductDetails
-        ? normalizedPurchaseProducts.map((item) => ({
-            productId: item.productId,
-            qty: item.qty,
-            unitCost: roundMoney(
-              Math.max(
-                0,
-                item.unitCost * (1 - item.discountPercent / 100),
-              ),
-            ),
-            taxRate: item.taxRate,
-          }))
+        ? normalizedPurchaseProducts.map((item) => {
+            const applied = applyPurchaseItemDiscount({
+              grossSubtotal: item.qty * item.unitCost,
+              taxRate: item.taxRate,
+              discount: {
+                type: item.discountType,
+                base: item.discountBase,
+                value: item.discountValue,
+              },
+            });
+            return {
+              productId: item.productId,
+              qty: item.qty,
+              unitCost: item.unitCost,
+              lineSubtotal: applied.subtotal,
+              taxRate: item.taxRate,
+              taxAmount: applied.vat,
+              discountType:
+                applied.discountAmount > 0 ? item.discountType : undefined,
+              discountBase:
+                applied.discountAmount > 0 ? item.discountBase : undefined,
+              discountValue:
+                applied.discountAmount > 0 ? item.discountValue : undefined,
+              discountAmount: applied.discountAmount,
+            };
+          })
         : editingPurchaseId
           ? []
           : undefined,
@@ -3078,7 +3260,7 @@ export default function PurchasesPage() {
         : paymentMethods.find(
             (method) =>
               method.id === normalizedCashOutLines[0]?.paymentMethodId,
-          )?.name ?? "Pago inmediato"
+          )?.name ?? "Pago"
       : paymentModeLabel;
 
     return {
@@ -3102,13 +3284,17 @@ export default function PurchasesPage() {
     setSelectedSupplier(null);
     setSelectedSupplierTaxId("");
     setSupplierDataStatus(null);
+    setDocumentType("INVOICE");
+    setLinkedPurchaseInvoiceId("");
     setHasInvoice(false);
     setInvoiceNumber("");
     setInvoiceDate(toDateInputValue(new Date()));
     setSimpleNetAmount("");
     setSimpleFiscalCondition("GRAVADO");
     setPurchaseVatAmount("");
-    setGlobalDiscountAmount("");
+    setGlobalDiscountType("AMOUNT");
+    setGlobalDiscountBase("TOTAL");
+    setGlobalDiscountValue("");
     setTotalsSource("AUTO_FROM_PRODUCTS");
     setShowFiscalDetail(false);
     setNetTaxedAmount("");
@@ -3185,7 +3371,9 @@ export default function PurchasesPage() {
             productSearch: formatProductLabel(item.product),
             qty: String(toNumber(item.qty)),
             unitCost: toMoneyValue(toNumber(item.unitCost)),
-            discountPercent: "0",
+            discountType: item.discountType ?? "AMOUNT",
+            discountBase: item.discountBase ?? "SUBTOTAL",
+            discountValue: item.discountValue ?? "",
             taxRate: String(toNumber(item.taxRate)),
           }))
         : [emptyPurchaseProduct()];
@@ -3209,6 +3397,12 @@ export default function PurchasesPage() {
       setSelectedSupplier(supplier);
       setSupplierSearch(formatSupplierLabel(supplier));
       setSelectedSupplierTaxId(normalizeTaxId(supplier.taxId ?? ""));
+      setDocumentType(
+        purchase.documentType ??
+          mapVoucherTypeToPurchaseDocumentType(purchase.fiscalVoucherType) ??
+          "INVOICE",
+      );
+      setLinkedPurchaseInvoiceId(purchase.linkedPurchaseInvoiceId ?? "");
       setHasInvoice(Boolean(purchase.hasInvoice ?? purchase.invoiceNumber));
       setInvoiceNumber(purchase.invoiceNumber ?? "");
       setInvoiceDate(
@@ -3225,8 +3419,11 @@ export default function PurchasesPage() {
         ),
       );
       setPurchaseVatAmount(toMoneyValue(vatTotal));
-      setGlobalDiscountAmount(
-        inferredGlobalDiscount > 0.01 ? toMoneyValue(inferredGlobalDiscount) : "",
+      setGlobalDiscountType(purchase.discountType ?? "AMOUNT");
+      setGlobalDiscountBase(purchase.discountBase ?? "TOTAL");
+      setGlobalDiscountValue(
+        purchase.discountValue ??
+          (inferredGlobalDiscount > 0.01 ? toMoneyValue(inferredGlobalDiscount) : ""),
       );
       setTotalsSource("MANUAL");
       setShowFiscalDetail(true);
@@ -3518,6 +3715,11 @@ export default function PurchasesPage() {
       purchase.fiscalVoucherKind === "C"
         ? purchase.fiscalVoucherKind
         : purchaseVoucherKindFromFiscalType(purchase.fiscalVoucherType);
+    setEditingDocumentType(
+      purchase.documentType ??
+        mapVoucherTypeToPurchaseDocumentType(purchase.fiscalVoucherType) ??
+        "INVOICE",
+    );
     setEditingVoucherKind(voucherKind);
     setEditingAuthorizationCode(purchase.authorizationCode ?? "");
     setRevalidateAfterInvoiceEdit(Boolean(options?.revalidateAfterSave));
@@ -3565,6 +3767,7 @@ export default function PurchasesPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             hasInvoice: true,
+            documentType: editingDocumentType,
             invoiceNumber: normalizedInvoiceNumber,
             invoiceDate: editingInvoiceDate,
             voucherKind: editingVoucherKind,
@@ -3785,6 +3988,15 @@ export default function PurchasesPage() {
 
   const handleUpdatePurchasePaymentMode = async () => {
     if (!editingPaymentPurchase) return;
+    if (
+      editingPaymentPurchase.documentType === "CREDIT_NOTE" &&
+      editingPaymentMode === "IMMEDIATE_CASH_OUT"
+    ) {
+      const message = "Las notas de credito no registran egreso inmediato.";
+      setStatus(message);
+      toast.error(message);
+      return;
+    }
     setIsUpdatingPaymentMode(true);
     setStatus(null);
     try {
@@ -4297,11 +4509,10 @@ export default function PurchasesPage() {
                         readOnly
                       />
                     ) : (
-                      <select
-                        className="input w-full min-w-0 cursor-pointer"
+                      <PurchaseSelect
                         value={simpleFiscalCondition}
-                        onChange={(event) => {
-                          const next = event.target.value as SimpleFiscalCondition;
+                        options={SIMPLE_FISCAL_CONDITION_OPTIONS}
+                        onValueChange={(next) => {
                           setSimpleFiscalCondition(next);
                           if (next !== "GRAVADO") {
                             setPurchaseVatAmount("0");
@@ -4310,13 +4521,7 @@ export default function PurchasesPage() {
                             setTotalsSource("MANUAL");
                           }
                         }}
-                      >
-                        {SIMPLE_FISCAL_CONDITION_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     )}
                   </label>
                   <label className="field-stack min-w-0">
@@ -4358,21 +4563,51 @@ export default function PurchasesPage() {
                       </p>
                     ) : null}
                   </label>
-                  <label className="field-stack min-w-0">
+                  <div className="field-stack min-w-0">
                     <span className="input-label">Descuento global</span>
-                    <div className="relative">
-                      <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
-                        $
-                      </span>
-                      <MoneyInput
-                        className="input no-spinner w-full pl-10 text-right tabular-nums"
-                        value={globalDiscountAmount}
-                        onValueChange={setGlobalDiscountAmount}
-                        placeholder="0,00"
-                        maxDecimals={2}
+                    <div className="grid w-full min-w-0 grid-cols-[max-content_max-content] gap-2">
+                      <PurchaseSelect
+                        value={globalDiscountBase}
+                        options={PURCHASE_DISCOUNT_BASE_OPTIONS}
+                        onValueChange={setGlobalDiscountBase}
+                        className="min-w-[8.25rem]"
+                        buttonClassName="text-xs"
                       />
+                      <PurchaseSelect
+                        value={globalDiscountType}
+                        options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
+                        onValueChange={setGlobalDiscountType}
+                        className="min-w-[4.75rem]"
+                        buttonClassName="justify-center text-xs"
+                      />
+                      <div className="relative col-span-2 min-w-0">
+                        <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
+                          {globalDiscountType === "PERCENT" ? "%" : "$"}
+                        </span>
+                        {globalDiscountType === "PERCENT" ? (
+                          <input
+                            className="input w-full pl-10 text-right tabular-nums"
+                            inputMode="decimal"
+                            value={globalDiscountValue}
+                            onChange={(event) =>
+                              setGlobalDiscountValue(
+                                normalizeDecimalInput(event.target.value, 2),
+                              )
+                            }
+                            placeholder="0"
+                          />
+                        ) : (
+                          <MoneyInput
+                            className="input no-spinner w-full pl-10 text-right tabular-nums"
+                            value={globalDiscountValue}
+                            onValueChange={setGlobalDiscountValue}
+                            placeholder="0,00"
+                            maxDecimals={2}
+                          />
+                        )}
+                      </div>
                     </div>
-                  </label>
+                  </div>
                   <div className="field-stack min-w-0">
                     <span className="input-label text-right">Total compra</span>
                     <div className="flex min-h-11 w-full items-center justify-end text-right text-lg font-semibold tabular-nums text-zinc-900">
@@ -4575,24 +4810,24 @@ export default function PurchasesPage() {
                       const selectedProduct = productMap.get(item.productId);
                       const qty = parseOptionalNumber(item.qty) ?? 0;
                       const unitCost = parseOptionalNumber(item.unitCost) ?? 0;
-                      const discountPercent = Math.max(
+                      const discountValue = Math.max(
                         0,
-                        Math.min(
-                          100,
-                          parseOptionalNumber(item.discountPercent) ?? 0,
-                        ),
+                        parseOptionalNumber(item.discountValue) ?? 0,
                       );
                       const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
                       const lineGrossSubtotal = qty * unitCost;
-                      const lineDiscount = roundMoney(
-                        lineGrossSubtotal * (discountPercent / 100),
-                      );
-                      const lineSubtotal = Math.max(
-                        0,
-                        lineGrossSubtotal - lineDiscount,
-                      );
-                      const lineTax = lineSubtotal * (taxRate / 100);
-                      const lineTotal = lineSubtotal + lineTax;
+                      const lineAppliedDiscount = applyPurchaseItemDiscount({
+                        grossSubtotal: lineGrossSubtotal,
+                        taxRate,
+                        discount: {
+                          type: item.discountType,
+                          base: item.discountBase,
+                          value: discountValue,
+                        },
+                      });
+                      const lineDiscount = lineAppliedDiscount.discountAmount;
+                      const lineTax = lineAppliedDiscount.vat;
+                      const lineTotal = lineAppliedDiscount.total;
                       const searchedProductName = item.productSearch.trim();
                       const canCreateProduct =
                         searchedProductName.length >= 2 &&
@@ -4606,13 +4841,19 @@ export default function PurchasesPage() {
                       return (
                         <div
                           key={`purchase-product-${index}`}
-                          className="grid gap-4 border-t border-zinc-200/70 py-3 first:border-t-0 lg:grid-cols-[minmax(220px,1fr)_96px_136px_108px_112px_104px_40px] lg:items-start xl:grid-cols-[minmax(280px,1fr)_100px_144px_112px_120px_112px_40px]"
+                          className="flex flex-wrap items-start gap-2 rounded-xl border border-zinc-200/70 bg-white/60 p-2.5"
                         >
-                          <label className="field-stack min-w-0">
-                            <span className="input-label">Producto</span>
+                          <label
+                            className={`space-y-1 transition-[flex-basis,min-width] duration-150 ${
+                              isOpen
+                                ? "z-[90] min-w-[min(560px,calc(100vw-9rem))] flex-[8_1_560px]"
+                                : "min-w-[220px] flex-[1_1_280px]"
+                            }`}
+                          >
+                            <span className="input-label mb-0 text-[10px]">Producto</span>
                             <div className="relative">
                               <input
-                                className="input w-full"
+                                className="input h-9 w-full py-1.5 text-sm transition-[min-width] duration-150"
                                 value={item.productSearch}
                                 onChange={(event) => {
                                   handlePurchaseProductChange(
@@ -4670,7 +4911,7 @@ export default function PurchasesPage() {
                                       duration: 0.18,
                                       ease: [0.22, 1, 0.36, 1],
                                     }}
-                                    className="absolute z-[90] mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_14px_24px_-18px_rgba(82,82,91,0.45)] backdrop-blur-xl"
+                                    className="absolute z-[90] mt-2 max-h-64 w-full min-w-[min(560px,calc(100vw-9rem))] overflow-y-auto rounded-xl border border-zinc-200/70 bg-white/95 p-2 shadow-[0_14px_24px_-18px_rgba(82,82,91,0.45)] backdrop-blur-xl"
                                   >
                                     {matches.length ? (
                                       matches.map((product, matchIndex) => {
@@ -4743,10 +4984,10 @@ export default function PurchasesPage() {
                             ) : null}
                           </label>
 
-                          <label className="field-stack min-w-0">
-                            <span className="input-label">Cantidad</span>
+                          <label className="w-[72px] flex-none space-y-1">
+                            <span className="input-label mb-0 text-[10px]">Cantidad</span>
                             <input
-                              className="input w-full min-w-0 text-right tabular-nums"
+                              className="input h-9 w-full min-w-0 py-1.5 text-right text-sm tabular-nums"
                               inputMode="decimal"
                               value={item.qty}
                               onChange={(event) =>
@@ -4760,14 +5001,14 @@ export default function PurchasesPage() {
                             />
                           </label>
 
-                          <label className="field-stack min-w-0">
-                            <span className="input-label">Costo unit.</span>
+                          <label className="w-[124px] flex-none space-y-1">
+                            <span className="input-label mb-0 text-[10px]">Costo unit.</span>
                             <div className="relative min-w-0">
                               <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-xs font-semibold text-zinc-500">
                                 $
                               </span>
                               <MoneyInput
-                                className="input no-spinner w-full min-w-0 pl-10 text-right tabular-nums"
+                                className="input no-spinner h-9 w-full min-w-0 py-1.5 pl-9 text-right text-sm tabular-nums"
                                 value={item.unitCost}
                                 onValueChange={(value) =>
                                   handlePurchaseProductChange(
@@ -4782,69 +5023,114 @@ export default function PurchasesPage() {
                             </div>
                           </label>
 
-                          <label className="field-stack min-w-0">
-                            <span className="input-label">IVA</span>
-                            <select
-                              className="input w-full min-w-0 cursor-pointer text-right"
+                          <label className="w-[108px] flex-none space-y-1">
+                            <span className="input-label mb-0 text-[10px]">IVA</span>
+                            <PurchaseSelect
                               value={item.taxRate}
-                              onChange={(event) =>
+                              options={PURCHASE_ITEM_TAX_RATE_OPTIONS}
+                              onValueChange={(value) =>
                                 handlePurchaseProductChange(
                                   index,
                                   "taxRate",
-                                  event.target.value,
+                                  value,
                                 )
                               }
-                            >
-                              {PURCHASE_ITEM_TAX_RATE_OPTIONS.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
+                              compact
+                              buttonClassName="text-xs"
+                            />
                           </label>
 
-                          <label className="field-stack min-w-0">
-                            <span className="input-label">Desc. %</span>
-                            <div className="relative min-w-0">
-                              <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
-                                %
-                              </span>
-                              <input
-                                className="input w-full min-w-0 pl-8 text-right text-xs tabular-nums"
-                                inputMode="decimal"
-                                value={item.discountPercent}
-                                onChange={(event) =>
+                          <div className="min-w-[13.75rem] flex-[0_1_13.75rem] space-y-1">
+                            <span className="input-label mb-0 text-[10px]">Descuento</span>
+                            <div className="grid w-full min-w-0 grid-cols-[max-content_max-content] gap-2">
+                              <PurchaseSelect
+                                value={item.discountBase}
+                                options={PURCHASE_DISCOUNT_BASE_OPTIONS}
+                                onValueChange={(value) =>
                                   handlePurchaseProductChange(
                                     index,
-                                    "discountPercent",
-                                    normalizeDecimalInput(event.target.value, 2),
+                                    "discountBase",
+                                    value,
                                   )
                                 }
-                                placeholder="0"
+                                className="min-w-[8.25rem]"
+                                compact
+                                buttonClassName="text-xs"
                               />
+                              <PurchaseSelect
+                                value={item.discountType}
+                                options={PURCHASE_DISCOUNT_TYPE_OPTIONS}
+                                onValueChange={(value) =>
+                                  handlePurchaseProductChange(
+                                    index,
+                                    "discountType",
+                                    value,
+                                  )
+                                }
+                                className="min-w-[4.75rem]"
+                                compact
+                                buttonClassName="justify-center text-xs"
+                              />
+                              <div className="relative col-span-2 min-w-0">
+                                <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                                  {item.discountType === "PERCENT" ? "%" : "$"}
+                                </span>
+                                {item.discountType === "PERCENT" ? (
+                                  <input
+                                    className="input h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums"
+                                    inputMode="decimal"
+                                    value={item.discountValue}
+                                    onChange={(event) =>
+                                      handlePurchaseProductChange(
+                                        index,
+                                        "discountValue",
+                                        normalizeDecimalInput(event.target.value, 2),
+                                      )
+                                    }
+                                    placeholder="0"
+                                  />
+                                ) : (
+                                  <MoneyInput
+                                    className="input no-spinner h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums"
+                                    value={item.discountValue}
+                                    onValueChange={(value) =>
+                                      handlePurchaseProductChange(
+                                        index,
+                                        "discountValue",
+                                        value,
+                                      )
+                                    }
+                                    placeholder="0,00"
+                                    maxDecimals={2}
+                                  />
+                                )}
+                              </div>
                             </div>
-                          </label>
-
-                          <div className="field-stack min-w-0">
-                            <span className="input-label">Total item</span>
-                            <div className="flex h-10 items-center justify-end text-sm font-semibold tabular-nums text-zinc-900">
-                              {formatCurrencyARS(lineTotal)}
-                            </div>
-                            <span className="text-right text-[11px] text-zinc-500">
-                              Desc. {formatCurrencyARS(lineDiscount)} · IVA{" "}
-                              {formatCurrencyARS(lineTax)}
-                            </span>
                           </div>
 
-                          <button
-                            type="button"
-                            className="btn btn-rose h-10 w-10 justify-center self-end p-0 text-xs"
-                            onClick={() => removePurchaseProduct(index)}
-                            disabled={purchaseProducts.length <= 1}
-                            aria-label="Quitar producto"
-                          >
-                            <TrashIcon className="size-4" />
-                          </button>
+                          <div className="ml-auto flex min-w-[132px] flex-none items-end justify-end gap-2 self-end">
+                            <div className="min-w-0 text-right">
+                              <span className="input-label mb-0 block text-[10px]">
+                                Total item
+                              </span>
+                              <div className="text-sm font-semibold tabular-nums text-zinc-900">
+                                {formatCurrencyARS(lineTotal)}
+                              </div>
+                              <span className="block text-[10px] text-zinc-500">
+                                Desc. {formatCurrencyARS(lineDiscount)} · IVA{" "}
+                                {formatCurrencyARS(lineTax)}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-rose h-9 w-9 shrink-0 justify-center p-0 text-xs"
+                              onClick={() => removePurchaseProduct(index)}
+                              disabled={purchaseProducts.length <= 1}
+                              aria-label="Quitar producto"
+                            >
+                              <TrashIcon className="size-4" />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -4946,23 +5232,18 @@ export default function PurchasesPage() {
                       >
                         <label className="field-stack min-w-0 w-full">
                           <span className="input-label">Tipo</span>
-                          <select
-                            className="input w-full min-w-0 cursor-pointer text-xs"
+                          <PurchaseSelect
                             value={line.type}
-                            onChange={(event) =>
+                            options={PURCHASE_FISCAL_LINE_OPTIONS}
+                            onValueChange={(value) =>
                               handleFiscalLineChange(
                                 index,
                                 "type",
-                                event.target.value,
+                                value,
                               )
                             }
-                          >
-                            {PURCHASE_FISCAL_LINE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
+                            buttonClassName="text-xs"
+                          />
                         </label>
                         <label className="field-stack min-w-0 w-full">
                           <span className="input-label">Jurisdiccion</span>
@@ -5185,6 +5466,8 @@ export default function PurchasesPage() {
                   onChange={(next) => {
                     setHasInvoice(next);
                     if (!next) {
+                      setDocumentType("INVOICE");
+                      setLinkedPurchaseInvoiceId("");
                       setInvoiceNumber("");
                       setArcaAuthorizationCode("");
                       setArcaValidationResult(null);
@@ -5196,20 +5479,28 @@ export default function PurchasesPage() {
 
               {hasInvoice ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                     <label className="field-stack min-w-0 w-full">
-                      <span className="input-label">Tipo</span>
-                      <select
-                        className={`input w-full min-w-0 cursor-pointer ${getHighlightClass("invoice.voucherKind")}`}
+                      <span className="input-label">Comprobante</span>
+                      <PurchaseSelect
+                        value={documentType}
+                        options={PURCHASE_DOCUMENT_TYPE_OPTIONS}
+                        onValueChange={(next) => {
+                          setDocumentType(next);
+                          if (next === "INVOICE") {
+                            setLinkedPurchaseInvoiceId("");
+                          }
+                        }}
+                      />
+                    </label>
+                    <label className="field-stack min-w-0 w-full">
+                      <span className="input-label">Tipo fiscal</span>
+                      <PurchaseSelect
                         value={arcaVoucherKind}
-                        onChange={(event) =>
-                          setArcaVoucherKind(event.target.value as "A" | "B" | "C")
-                        }
-                      >
-                        <option value="A">Factura A</option>
-                        <option value="B">Factura B</option>
-                        <option value="C">Factura C</option>
-                      </select>
+                        options={PURCHASE_VOUCHER_KIND_OPTIONS}
+                        onValueChange={setArcaVoucherKind}
+                        buttonClassName={getHighlightClass("invoice.voucherKind")}
+                      />
                       {arcaVoucherKind === "C" ? (
                         <p className="text-[11px] text-zinc-500">
                           Factura C: no genera credito fiscal de IVA.
@@ -5249,6 +5540,27 @@ export default function PurchasesPage() {
                       />
                     </label>
                   </div>
+                  {isPurchaseNote ? (
+                    <label className="field-stack min-w-0 w-full">
+                      <span className="input-label">Compra asociada (opcional)</span>
+                      <PurchaseSelect
+                        value={linkedPurchaseInvoiceId}
+                        options={[
+                          { value: "", label: "Sin asociar" },
+                          ...linkedPurchaseOptions.map((purchase) => ({
+                            value: purchase.id,
+                            label: `${purchase.invoiceNumber ?? purchase.id} - ${formatCurrencyARS(
+                              purchase.total ?? 0,
+                            )}`,
+                          })),
+                        ]}
+                        onValueChange={setLinkedPurchaseInvoiceId}
+                      />
+                      <p className="text-[11px] text-zinc-500">
+                        Puedes asociarla a una compra existente del mismo proveedor o cargarla suelta.
+                      </p>
+                    </label>
+                  ) : null}
 
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="grid w-full grid-cols-2 gap-2 sm:w-auto">
@@ -5269,14 +5581,6 @@ export default function PurchasesPage() {
                         Pegar texto QR
                       </button>
                     </div>
-                    <button
-                      type="button"
-                      className="btn text-xs"
-                      onClick={handleValidateArcaOnly}
-                      disabled={isArcaValidating || isImportingQr}
-                    >
-                      {isArcaValidating ? "Validando..." : "Validar ARCA"}
-                    </button>
                     {arcaValidationResult ? (
                       <span className="pill border border-zinc-200 bg-white px-3 py-1.5 text-[11px] font-semibold uppercase text-zinc-700">
                         {arcaStatusLabel(arcaValidationResult.status)}
@@ -5319,12 +5623,16 @@ export default function PurchasesPage() {
               <div className="grid gap-2 sm:grid-cols-3">
                 {PURCHASE_PAYMENT_MODE_OPTIONS.map((option) => {
                   const isActive = paymentMode === option.value;
+                  const isDisabled =
+                    isCreditNote && option.value === "IMMEDIATE_CASH_OUT";
                   return (
                     <button
                       key={option.value}
                       type="button"
                       aria-pressed={isActive}
+                      disabled={isDisabled}
                       onClick={() => {
+                        if (isDisabled) return;
                         setPaymentMode(option.value);
                         if (option.value !== "IMMEDIATE_CASH_OUT") {
                           setCashOutLines([
@@ -5336,7 +5644,7 @@ export default function PurchasesPage() {
                         isActive
                           ? "border-sky-300 bg-sky-50/70 text-sky-950"
                           : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300"
-                      }`}
+                      } ${isDisabled ? "cursor-not-allowed opacity-50" : ""}`}
                     >
                       <p className="text-sm font-semibold">{option.label}</p>
                       <p
@@ -5366,47 +5674,46 @@ export default function PurchasesPage() {
                         >
                           <label className="field-stack">
                             <span className="input-label">Metodo de pago</span>
-                            <select
-                              className="input cursor-pointer"
+                            <PurchaseSelect
                               value={line.paymentMethodId}
-                              onChange={(event) =>
+                              options={[
+                                {
+                                  value: "",
+                                  label: paymentMethods.length
+                                    ? "Selecciona metodo"
+                                    : "Sin metodos activos",
+                                },
+                                ...paymentMethods.map((method) => ({
+                                  value: method.id,
+                                  label: method.name,
+                                })),
+                              ]}
+                              onValueChange={(value) =>
                                 updateCashOutLine(index, {
-                                  paymentMethodId: event.target.value,
+                                  paymentMethodId: value,
                                 })
                               }
                               disabled={!paymentMethods.length}
-                            >
-                              <option value="">
-                                {paymentMethods.length
-                                  ? "Selecciona metodo"
-                                  : "Sin metodos activos"}
-                              </option>
-                              {paymentMethods.map((method) => (
-                                <option key={method.id} value={method.id}>
-                                  {method.name}
-                                </option>
-                              ))}
-                            </select>
+                            />
                           </label>
                           <label className="field-stack">
                             <span className="input-label">Cuenta de egreso</span>
                             {requiresAccount ? (
-                              <select
-                                className="input cursor-pointer"
+                              <PurchaseSelect
                                 value={line.accountId}
-                                onChange={(event) =>
+                                options={[
+                                  { value: "", label: "Selecciona cuenta" },
+                                  ...accounts.map((account) => ({
+                                    value: account.id,
+                                    label: `${account.name} (${account.currencyCode})`,
+                                  })),
+                                ]}
+                                onValueChange={(value) =>
                                   updateCashOutLine(index, {
-                                    accountId: event.target.value,
+                                    accountId: value,
                                   })
                                 }
-                              >
-                                <option value="">Selecciona cuenta</option>
-                                {accounts.map((account) => (
-                                  <option key={account.id} value={account.id}>
-                                    {account.name} ({account.currencyCode})
-                                  </option>
-                                ))}
-                              </select>
+                              />
                             ) : (
                               <input
                                 className="input"
@@ -5615,16 +5922,14 @@ export default function PurchasesPage() {
                   onChange={(event) => setQuery(event.target.value)}
                   placeholder="Buscar proveedor o comprobante"
                 />
-                <select
-                  className="input w-full cursor-pointer text-xs sm:col-span-2 lg:col-span-1"
+                <PurchaseSelect
                   value={sortOrder}
-                  onChange={(event) =>
-                    setSortOrder(event.target.value as "newest" | "oldest")
-                  }
-                >
-                  <option value="newest">Mas recientes</option>
-                  <option value="oldest">Mas antiguas</option>
-                </select>
+                  options={PURCHASE_SORT_OPTIONS}
+                  onValueChange={setSortOrder}
+                  className="w-full sm:col-span-2 lg:col-span-1"
+                  buttonClassName="text-xs"
+                  ariaLabel="Ordenar compras"
+                />
               </div>
             </div>
             <div className="space-y-2 md:hidden">
@@ -5646,6 +5951,11 @@ export default function PurchasesPage() {
                         <p className="mt-0.5 text-[11px] text-zinc-500">
                           {purchase.invoiceNumber ?? "Sin comprobante fiscal"} -{" "}
                           {formatPurchaseDateLabel(purchase)}
+                        </p>
+                        <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          {PURCHASE_DOCUMENT_TYPE_LABELS[
+                            purchase.documentType ?? "INVOICE"
+                          ]}
                         </p>
                       </div>
                       <p className="shrink-0 text-sm font-semibold tabular-nums text-zinc-900">
@@ -5768,7 +6078,16 @@ export default function PurchasesPage() {
                           className="border-t border-zinc-200/60 transition-colors hover:bg-white/60"
                         >
                         <td className="py-3 pr-3 text-zinc-700">
-                          {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
+                          <div className="flex flex-col gap-1">
+                            <span>
+                              {purchase.invoiceNumber ?? "Sin comprobante fiscal"}
+                            </span>
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                              {PURCHASE_DOCUMENT_TYPE_LABELS[
+                                purchase.documentType ?? "INVOICE"
+                              ]}
+                            </span>
+                          </div>
                         </td>
                         <td className="py-3 pr-3 text-zinc-900">
                           {purchase.supplierName}
@@ -6146,12 +6465,14 @@ export default function PurchasesPage() {
         ? renderModalPortal(
             <PurchaseEditInvoiceModal
               editingInvoicePurchase={editingInvoicePurchase}
+              editingDocumentType={editingDocumentType}
               editingVoucherKind={editingVoucherKind}
               editingInvoiceDate={editingInvoiceDate}
               editingInvoiceNumber={editingInvoiceNumber}
               editingAuthorizationCode={editingAuthorizationCode}
               isSavingInvoiceEdit={isSavingInvoiceEdit}
               revalidateAfterInvoiceEdit={revalidateAfterInvoiceEdit}
+              onSetEditingDocumentType={setEditingDocumentType}
               onSetEditingVoucherKind={setEditingVoucherKind}
               onSetEditingInvoiceDate={setEditingInvoiceDate}
               onSetEditingInvoiceNumber={setEditingInvoiceNumber}
