@@ -108,6 +108,8 @@ type PurchaseProductForm = {
   discountBase: PurchaseDiscountBase;
   discountValue: string;
   taxRate: string;
+  taxAmountMode: "AUTO" | "MANUAL";
+  taxAmount: string;
 };
 
 type PurchaseFiscalLineType =
@@ -281,6 +283,7 @@ type PurchaseEditResponse = {
     qty: string;
     unitCost: string;
     taxRate: string | null;
+    taxAmount?: string | null;
     discountType?: PurchaseDiscountType | null;
     discountBase?: PurchaseDiscountBase | null;
     discountValue?: string | null;
@@ -309,6 +312,8 @@ const emptyPurchaseProduct = (): PurchaseProductForm => ({
   discountBase: "SUBTOTAL",
   discountValue: "0",
   taxRate: "21",
+  taxAmountMode: "AUTO",
+  taxAmount: "",
 });
 
 const emptyFiscalLine = (): PurchaseFiscalLineForm => ({
@@ -2622,6 +2627,11 @@ export default function PurchasesPage() {
         discountBase: item.discountBase,
         discountValue: Math.max(0, parseOptionalNumber(item.discountValue) ?? 0),
         taxRate: parseOptionalNumber(item.taxRate) ?? 0,
+        taxAmountMode: item.taxAmountMode,
+        taxAmount:
+          item.taxAmountMode === "MANUAL"
+            ? parseOptionalNumber(item.taxAmount)
+            : null,
       }))
       .filter(
         (item): item is {
@@ -2632,6 +2642,8 @@ export default function PurchasesPage() {
           discountBase: PurchaseDiscountBase;
           discountValue: number;
           taxRate: number;
+          taxAmountMode: "AUTO" | "MANUAL";
+          taxAmount: number | null;
         } =>
           Boolean(item.productId) &&
           item.qty !== null &&
@@ -2646,7 +2658,11 @@ export default function PurchasesPage() {
               item.discountValue <= 100)) &&
           Number.isFinite(item.taxRate) &&
           item.taxRate >= 0 &&
-          item.taxRate <= 100,
+          item.taxRate <= 100 &&
+          (item.taxAmountMode === "AUTO" ||
+            (item.taxAmount !== null &&
+              Number.isFinite(item.taxAmount) &&
+              item.taxAmount >= 0)),
       );
   }, [purchaseProducts]);
 
@@ -2657,6 +2673,8 @@ export default function PurchasesPage() {
         const applied = applyPurchaseItemDiscount({
           grossSubtotal,
           taxRate: item.taxRate,
+          taxAmountOverride:
+            item.taxAmountMode === "MANUAL" ? item.taxAmount : undefined,
           discount: {
             type: item.discountType,
             base: item.discountBase,
@@ -2997,7 +3015,9 @@ export default function PurchasesPage() {
             item.unitCost.trim() ||
             item.discountValue.trim() !== "0" ||
             item.qty.trim() !== "1" ||
-            item.taxRate.trim() !== "21",
+            item.taxRate.trim() !== "21" ||
+            item.taxAmountMode === "MANUAL" ||
+            item.taxAmount.trim(),
         );
         if (!hasData) return false;
         const qty = parseOptionalNumber(item.qty);
@@ -3007,6 +3027,7 @@ export default function PurchasesPage() {
           parseOptionalNumber(item.discountValue) ?? 0,
         );
         const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
+        const taxAmount = parseOptionalNumber(item.taxAmount);
         return (
           !item.productId ||
           qty === null ||
@@ -3015,7 +3036,9 @@ export default function PurchasesPage() {
           unitCost < 0 ||
           (item.discountType === "PERCENT" && discountValue > 100) ||
           taxRate < 0 ||
-          taxRate > 100
+          taxRate > 100 ||
+          (item.taxAmountMode === "MANUAL" &&
+            (taxAmount === null || taxAmount < 0))
         );
       });
 
@@ -3216,6 +3239,8 @@ export default function PurchasesPage() {
             const applied = applyPurchaseItemDiscount({
               grossSubtotal: item.qty * item.unitCost,
               taxRate: item.taxRate,
+              taxAmountOverride:
+                item.taxAmountMode === "MANUAL" ? item.taxAmount : undefined,
               discount: {
                 type: item.discountType,
                 base: item.discountBase,
@@ -3365,17 +3390,41 @@ export default function PurchasesPage() {
               ? "EXENTO"
               : "GRAVADO";
 
-      const purchaseProductsFromEdit = purchase.items.length
-        ? purchase.items.map((item) => ({
-            productId: item.productId,
-            productSearch: formatProductLabel(item.product),
-            qty: String(toNumber(item.qty)),
-            unitCost: toMoneyValue(toNumber(item.unitCost)),
-            discountType: item.discountType ?? "AMOUNT",
-            discountBase: item.discountBase ?? "SUBTOTAL",
-            discountValue: item.discountValue ?? "",
-            taxRate: String(toNumber(item.taxRate)),
-          }))
+      const purchaseProductsFromEdit: PurchaseProductForm[] = purchase.items.length
+        ? purchase.items.map((item) => {
+            const qty = toNumber(item.qty);
+            const unitCost = toNumber(item.unitCost);
+            const taxRate = toNumber(item.taxRate);
+            const discountType = item.discountType ?? "AMOUNT";
+            const discountBase = item.discountBase ?? "SUBTOTAL";
+            const discountValue = Math.max(0, toNumber(item.discountValue));
+            const automaticTax = applyPurchaseItemDiscount({
+              grossSubtotal: qty * unitCost,
+              taxRate,
+              discount: {
+                type: discountType,
+                base: discountBase,
+                value: discountValue,
+              },
+            }).vat;
+            const storedTax =
+              item.taxAmount !== null && item.taxAmount !== undefined
+                ? toNumber(item.taxAmount)
+                : automaticTax;
+            const hasManualTax = Math.abs(storedTax - automaticTax) > 0.01;
+            return {
+              productId: item.productId,
+              productSearch: formatProductLabel(item.product),
+              qty: String(qty),
+              unitCost: toMoneyValue(unitCost),
+              discountType,
+              discountBase,
+              discountValue: item.discountValue ?? "",
+              taxRate: String(taxRate),
+              taxAmountMode: hasManualTax ? "MANUAL" : "AUTO",
+              taxAmount: hasManualTax ? toMoneyValue(storedTax) : "",
+            };
+          })
         : [emptyPurchaseProduct()];
 
       const selectedProducts = purchase.items.reduce(
@@ -4816,9 +4865,23 @@ export default function PurchasesPage() {
                       );
                       const taxRate = parseOptionalNumber(item.taxRate) ?? 0;
                       const lineGrossSubtotal = qty * unitCost;
+                      const automaticLineApplied = applyPurchaseItemDiscount({
+                        grossSubtotal: lineGrossSubtotal,
+                        taxRate,
+                        discount: {
+                          type: item.discountType,
+                          base: item.discountBase,
+                          value: discountValue,
+                        },
+                      });
+                      const manualTaxAmount = parseOptionalNumber(item.taxAmount);
                       const lineAppliedDiscount = applyPurchaseItemDiscount({
                         grossSubtotal: lineGrossSubtotal,
                         taxRate,
+                        taxAmountOverride:
+                          item.taxAmountMode === "MANUAL"
+                            ? Math.max(0, manualTaxAmount ?? 0)
+                            : undefined,
                         discount: {
                           type: item.discountType,
                           base: item.discountBase,
@@ -5023,8 +5086,41 @@ export default function PurchasesPage() {
                             </div>
                           </label>
 
-                          <label className="w-[108px] flex-none space-y-1">
-                            <span className="input-label mb-0 text-[10px]">IVA</span>
+                          <div className="w-[126px] flex-none space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="input-label mb-0 text-[10px]">IVA</span>
+                              <button
+                                type="button"
+                                className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none transition ${
+                                  item.taxAmountMode === "MANUAL"
+                                    ? "border-sky-200 bg-sky-50 text-sky-800"
+                                    : "border-zinc-200 bg-white text-zinc-500"
+                                }`}
+                                onClick={() => {
+                                  if (item.taxAmountMode === "MANUAL") {
+                                    handlePurchaseProductChange(
+                                      index,
+                                      "taxAmountMode",
+                                      "AUTO",
+                                    );
+                                    handlePurchaseProductChange(index, "taxAmount", "");
+                                    return;
+                                  }
+                                  handlePurchaseProductChange(
+                                    index,
+                                    "taxAmountMode",
+                                    "MANUAL",
+                                  );
+                                  handlePurchaseProductChange(
+                                    index,
+                                    "taxAmount",
+                                    toMoneyValue(automaticLineApplied.vat),
+                                  );
+                                }}
+                              >
+                                {item.taxAmountMode === "MANUAL" ? "Fijo" : "Auto"}
+                              </button>
+                            </div>
                             <PurchaseSelect
                               value={item.taxRate}
                               options={PURCHASE_ITEM_TAX_RATE_OPTIONS}
@@ -5038,7 +5134,54 @@ export default function PurchasesPage() {
                               compact
                               buttonClassName="text-xs"
                             />
-                          </label>
+                            <div className="relative min-w-0">
+                              <span className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-[10px] font-semibold text-zinc-500">
+                                $
+                              </span>
+                              <MoneyInput
+                                className={`input no-spinner h-9 w-full min-w-0 py-1.5 pl-8 text-right text-xs tabular-nums ${
+                                  item.taxAmountMode === "MANUAL"
+                                    ? ""
+                                    : "bg-zinc-50 text-zinc-500"
+                                }`}
+                                value={
+                                  item.taxAmountMode === "MANUAL"
+                                    ? item.taxAmount
+                                    : toMoneyValue(automaticLineApplied.vat)
+                                }
+                                onFocus={() => {
+                                  if (item.taxAmountMode === "AUTO") {
+                                    handlePurchaseProductChange(
+                                      index,
+                                      "taxAmountMode",
+                                      "MANUAL",
+                                    );
+                                    handlePurchaseProductChange(
+                                      index,
+                                      "taxAmount",
+                                      toMoneyValue(automaticLineApplied.vat),
+                                    );
+                                  }
+                                }}
+                                onValueChange={(value) => {
+                                  if (item.taxAmountMode !== "MANUAL") {
+                                    handlePurchaseProductChange(
+                                      index,
+                                      "taxAmountMode",
+                                      "MANUAL",
+                                    );
+                                  }
+                                  handlePurchaseProductChange(
+                                    index,
+                                    "taxAmount",
+                                    value,
+                                  );
+                                }}
+                                placeholder="0,00"
+                                maxDecimals={2}
+                              />
+                            </div>
+                          </div>
 
                           <div className="min-w-[13.75rem] flex-[0_1_13.75rem] space-y-1">
                             <span className="input-label mb-0 text-[10px]">Descuento</span>

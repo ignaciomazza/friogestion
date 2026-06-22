@@ -44,11 +44,18 @@ export function calculatePurchaseDiscountAmount(input: {
 export function applyPurchaseItemDiscount(input: {
   grossSubtotal: number;
   taxRate: number;
+  taxAmountOverride?: number | null;
   discount: PurchaseDiscountInput;
 }) {
   const grossSubtotal = Math.max(0, input.grossSubtotal);
   const taxRate = Math.max(0, input.taxRate);
-  const grossVat = roundPurchaseMoney(grossSubtotal * (taxRate / 100));
+  const hasTaxAmountOverride =
+    typeof input.taxAmountOverride === "number" &&
+    Number.isFinite(input.taxAmountOverride) &&
+    input.taxAmountOverride >= 0;
+  const grossVat = hasTaxAmountOverride
+    ? roundPurchaseMoney(input.taxAmountOverride ?? 0)
+    : roundPurchaseMoney(grossSubtotal * (taxRate / 100));
   const grossTotal = roundPurchaseMoney(grossSubtotal + grossVat);
   const discountAmount = calculatePurchaseDiscountAmount({
     discount: input.discount,
@@ -101,7 +108,9 @@ export function applyPurchaseItemDiscount(input: {
   }
 
   const subtotal = roundPurchaseMoney(Math.max(0, grossSubtotal - discountAmount));
-  const vat = roundPurchaseMoney(subtotal * (taxRate / 100));
+  const vat = hasTaxAmountOverride
+    ? grossVat
+    : roundPurchaseMoney(subtotal * (taxRate / 100));
   return {
     grossSubtotal,
     grossVat,

@@ -7,6 +7,7 @@ import {
   normalizeJurisdiction,
   summarizeArcaMismatches,
 } from "../src/lib/purchases/new-purchase";
+import { applyPurchaseItemDiscount } from "../src/lib/purchases/discounts";
 
 test("calculateAutoTotalsFromProducts incluye percepciones en total", () => {
   const totals = calculateAutoTotalsFromProducts({
@@ -25,6 +26,23 @@ test("calculateAutoTotalsFromProducts incluye percepciones en total", () => {
 test("calculateFiscalLineAmount devuelve importe automatico", () => {
   assert.equal(calculateFiscalLineAmount(1000, 3), 30);
   assert.equal(calculateFiscalLineAmount(1000, null), null);
+});
+
+test("applyPurchaseItemDiscount permite IVA fijo por item", () => {
+  const line = applyPurchaseItemDiscount({
+    grossSubtotal: 100,
+    taxRate: 21,
+    taxAmountOverride: 19.8,
+    discount: {
+      type: "PERCENT",
+      base: "SUBTOTAL",
+      value: 0,
+    },
+  });
+
+  assert.equal(line.subtotal, 100);
+  assert.equal(line.vat, 19.8);
+  assert.equal(line.total, 119.8);
 });
 
 test("compareArcaVoucherAgainstForm detecta mismatch por tipo y total", () => {
