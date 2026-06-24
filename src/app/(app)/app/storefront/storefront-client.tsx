@@ -1312,6 +1312,11 @@ function PublicationEditorModal({
   const seoPreviewTitle = resolveSeoTitlePreview(row);
   const seoPreviewDescription = resolveMetaDescriptionPreview(row);
   const seoPreviewPriority = calculateSeoPriorityPreview(row);
+  const [isSeoOpen, setIsSeoOpen] = useState(false);
+  const hasSeoOverrides = Boolean(
+    compactPublicationText(row.seoTitle) ||
+      compactPublicationText(row.metaDescription),
+  );
   const handleSuggestSeo = () => {
     const suggestion = buildSeoSuggestion(row);
     if (Object.keys(suggestion).length) {
@@ -1403,104 +1408,137 @@ function PublicationEditorModal({
               </div>
             </div>
 
-            <section className="rounded-[20px] border border-sky-100 bg-sky-50/35 px-4 py-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <section className="overflow-hidden rounded-[20px] border border-sky-100 bg-sky-50/35">
+              <button
+                type="button"
+                onClick={() => setIsSeoOpen((current) => !current)}
+                aria-expanded={isSeoOpen}
+                className="flex w-full flex-col gap-3 px-4 py-4 text-left transition hover:bg-white/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30 sm:flex-row sm:items-center sm:justify-between"
+              >
                 <div className="min-w-0">
-                  <h4 className="text-sm font-semibold text-zinc-950">
-                    SEO y publicacion web
-                  </h4>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h4 className="text-sm font-semibold text-zinc-950">
+                      SEO y publicacion web
+                    </h4>
+                    <span className="rounded-full border border-sky-100 bg-white px-2.5 py-1 text-[11px] font-semibold text-sky-800">
+                      {hasSeoOverrides ? "Con overrides" : "SEO automatico"}
+                    </span>
+                  </div>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-                    La web arma el SEO desde los datos reales del producto. Usa estos campos solo como overrides editoriales.
+                    La web arma el SEO automaticamente. Abri esta seccion solo si queres ajustar titulo, descripcion, URL o indexacion.
                   </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleSuggestSeo}
-                  className="btn shrink-0 gap-1.5 px-3 py-2 text-xs"
-                >
-                  <DocumentTextIcon className="size-4" />
-                  Sugerir con datos reales
-                </button>
-              </div>
-
-              <div className="mt-4 grid gap-4 lg:grid-cols-3">
-                <div className="lg:col-span-2">
-                  <Field
-                    label="Titulo SEO"
-                    helper={`Claro y buscable. ${seoTitleLength}/70 caracteres.`}
-                  >
-                    <input
-                      className={fieldClass}
-                      maxLength={70}
-                      placeholder="Ej. Aire acondicionado split inverter Electra 4500 frigorias"
-                      value={row.seoTitle ?? ""}
-                      onChange={(event) =>
-                        onChange({ seoTitle: event.target.value || null })
-                      }
-                    />
-                  </Field>
-                </div>
-                <Field
-                  label="Slug"
-                  helper="Corto, legible y unico. Se normaliza al guardar."
-                >
-                  <input
-                    className={fieldClass}
-                    placeholder="aire-split-electra-4500"
-                    value={row.slug}
-                    onChange={(event) =>
-                      onChange({ slug: normalizeSlugText(event.target.value) })
-                    }
-                  />
-                </Field>
-
-                <div className="lg:col-span-3">
-                  <Field
-                    label="Meta description"
-                    helper={`Explica el producto en una frase util. ${metaDescriptionLength}/180 caracteres.`}
-                  >
-                    <textarea
-                      className={`${textareaClass} min-h-[88px]`}
-                      maxLength={180}
-                      placeholder="Descripcion breve para resultados de busqueda y asistentes."
-                      value={row.metaDescription ?? ""}
-                      onChange={(event) =>
-                        onChange({
-                          metaDescription: event.target.value || null,
-                        })
-                      }
-                    />
-                  </Field>
-                </div>
-
-                <div className="lg:col-span-2">
-                  <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3">
-                    <div className="text-xs font-semibold uppercase tracking-[0.04em] text-sky-800">
-                      Vista previa generada
-                    </div>
-                    <div className="mt-2 text-sm font-semibold text-zinc-950">
-                      {seoPreviewTitle}
-                    </div>
-                    <p className="mt-1 text-xs leading-relaxed text-zinc-600">
-                      {seoPreviewDescription}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                      <span className="rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-sky-900">
-                        Prioridad calculada: {seoPreviewPriority.toFixed(2)}
-                      </span>
-                      <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-zinc-700">
-                        {row.indexable ? "Indexable" : "No indexable"}
-                      </span>
-                    </div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-zinc-700">
+                      {row.indexable ? "Indexable" : "No indexable"}
+                    </span>
+                    <span className="rounded-full border border-sky-100 bg-white px-2.5 py-1 text-sky-900">
+                      Prioridad calculada: {seoPreviewPriority.toFixed(2)}
+                    </span>
                   </div>
                 </div>
-                <MiniToggle
-                  checked={row.indexable}
-                  onChange={() => onChange({ indexable: !row.indexable })}
-                  label="Indexable"
-                  help="Control editorial para indicar si este producto debe aparecer en buscadores."
-                />
-              </div>
+                <span className="inline-flex shrink-0 items-center gap-2 self-start rounded-full border border-sky-100 bg-white px-3 py-2 text-xs font-semibold text-sky-900 sm:self-center">
+                  {isSeoOpen ? "Ocultar" : "Ajustar"}
+                  <ChevronDownSmallIcon
+                    className={`size-4 transition-transform ${
+                      isSeoOpen ? "rotate-180" : ""
+                    }`}
+                  />
+                </span>
+              </button>
+
+              {isSeoOpen ? (
+                <div className="border-t border-sky-100 px-4 py-4">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleSuggestSeo}
+                      className="btn shrink-0 gap-1.5 px-3 py-2 text-xs"
+                    >
+                      <DocumentTextIcon className="size-4" />
+                      Sugerir con datos reales
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                    <div className="lg:col-span-2">
+                      <Field
+                        label="Titulo SEO"
+                        helper={`Claro y buscable. ${seoTitleLength}/70 caracteres.`}
+                      >
+                        <input
+                          className={fieldClass}
+                          maxLength={70}
+                          placeholder="Ej. Aire acondicionado split inverter Electra 4500 frigorias"
+                          value={row.seoTitle ?? ""}
+                          onChange={(event) =>
+                            onChange({ seoTitle: event.target.value || null })
+                          }
+                        />
+                      </Field>
+                    </div>
+                    <Field
+                      label="Slug"
+                      helper="Corto, legible y unico. Se normaliza al guardar."
+                    >
+                      <input
+                        className={fieldClass}
+                        placeholder="aire-split-electra-4500"
+                        value={row.slug}
+                        onChange={(event) =>
+                          onChange({ slug: normalizeSlugText(event.target.value) })
+                        }
+                      />
+                    </Field>
+
+                    <div className="lg:col-span-3">
+                      <Field
+                        label="Meta description"
+                        helper={`Explica el producto en una frase util. ${metaDescriptionLength}/180 caracteres.`}
+                      >
+                        <textarea
+                          className={`${textareaClass} min-h-[88px]`}
+                          maxLength={180}
+                          placeholder="Descripcion breve para resultados de busqueda y asistentes."
+                          value={row.metaDescription ?? ""}
+                          onChange={(event) =>
+                            onChange({
+                              metaDescription: event.target.value || null,
+                            })
+                          }
+                        />
+                      </Field>
+                    </div>
+
+                    <div className="lg:col-span-2">
+                      <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3">
+                        <div className="text-xs font-semibold uppercase tracking-[0.04em] text-sky-800">
+                          Vista previa generada
+                        </div>
+                        <div className="mt-2 text-sm font-semibold text-zinc-950">
+                          {seoPreviewTitle}
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-zinc-600">
+                          {seoPreviewDescription}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-sky-900">
+                            Prioridad calculada: {seoPreviewPriority.toFixed(2)}
+                          </span>
+                          <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-zinc-700">
+                            {row.indexable ? "Indexable" : "No indexable"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <MiniToggle
+                      checked={row.indexable}
+                      onChange={() => onChange({ indexable: !row.indexable })}
+                      label="Indexable"
+                      help="Control editorial para indicar si este producto debe aparecer en buscadores."
+                    />
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <div className="pb-4">
