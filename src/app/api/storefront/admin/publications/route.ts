@@ -16,8 +16,6 @@ const imageSchema = z.object({
   key: z.string().max(512).optional(),
 });
 
-const relatedTermSchema = z.string().max(80);
-
 const bodySchema = z.object({
   productId: z.string().min(1),
   slug: z.string().optional().nullable(),
@@ -28,15 +26,7 @@ const bodySchema = z.object({
   category: z.string().min(1),
   seoTitle: z.string().max(70).optional().nullable(),
   metaDescription: z.string().max(180).optional().nullable(),
-  subcategory: z.string().max(120).optional().nullable(),
-  productType: z.string().max(120).optional().nullable(),
-  capacity: z.string().max(80).optional().nullable(),
-  energyEfficiency: z.string().max(80).optional().nullable(),
-  warranty: z.string().max(120).optional().nullable(),
-  origin: z.string().max(120).optional().nullable(),
-  relatedTerms: z.array(relatedTermSchema).max(24).optional(),
   indexable: z.boolean().optional(),
-  priority: z.coerce.number().min(0).max(1).optional().nullable(),
   featured: z.boolean(),
   shippingType: z.enum([
     "NORMAL",

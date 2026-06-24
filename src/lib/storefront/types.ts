@@ -38,13 +38,6 @@ export type StorefrontProductDto = {
   metaDescription?: string | null;
   images: StorefrontProductImage[];
   category: string;
-  subcategory?: string | null;
-  productType?: string | null;
-  capacity?: string | null;
-  energyEfficiency?: string | null;
-  warranty?: string | null;
-  origin?: string | null;
-  relatedTerms?: string[];
   indexable: boolean;
   priority: number;
   brand?: string | null;

@@ -91,15 +91,20 @@ type PublicationRow = {
   category: string;
   seoTitle: string | null;
   metaDescription: string | null;
-  subcategory: string | null;
-  productType: string | null;
-  capacity: string | null;
-  energyEfficiency: string | null;
-  warranty: string | null;
-  origin: string | null;
-  relatedTerms: string[];
   indexable: boolean;
-  priority: number;
+  resolvedSeoTitle: string;
+  resolvedMetaDescription: string;
+  seoPriority: number;
+  seoSignals: {
+    featured: boolean;
+    published: boolean;
+    hasStock: boolean;
+    hasShortDescription: boolean;
+    hasLongDescription: boolean;
+    hasImages: boolean;
+    hasTechnicalSheet: boolean;
+    hasSales: boolean;
+  };
   publicationStatus: "PUBLISHED" | "PAUSED";
   stockMode: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
   webStockAvailable: number;
@@ -411,29 +416,6 @@ const normalizeSlugText = (value: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 120);
 
-const normalizeRelatedTermsList = (value: unknown): string[] => {
-  const rawItems = Array.isArray(value)
-    ? value
-    : String(value ?? "")
-        .split(/[,;\n]/)
-        .map((item) => item.trim());
-  const terms = rawItems
-    .map((item) => compactPublicationText(String(item ?? "")).slice(0, 80))
-    .filter(Boolean);
-
-  return Array.from(
-    new Map(
-      terms.map((term) => [term.toLocaleLowerCase("es-AR"), term]),
-    ).values(),
-  ).slice(0, 24);
-};
-
-const normalizeSeoPriority = (value: number | string | null | undefined) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0.5;
-  return Math.max(0, Math.min(1, Number(parsed.toFixed(2))));
-};
-
 const trimSentence = (value: string, maxLength: number) => {
   const normalized = compactPublicationText(value);
   if (normalized.length <= maxLength) return normalized;
@@ -471,14 +453,66 @@ const appendUniqueSeoPart = (parts: string[], value: string | null | undefined) 
   parts.push(normalized);
 };
 
+const buildSeoIdentityParts = (row: PublicationRow) => {
+  const parts: string[] = [];
+  appendUniqueSeoPart(parts, row.publicName || row.productName);
+  appendUniqueSeoPart(parts, row.brand);
+  appendUniqueSeoPart(parts, row.model);
+  appendUniqueSeoPart(parts, row.category);
+  return parts;
+};
+
+const resolveSeoTitlePreview = (row: PublicationRow) => {
+  const override = compactPublicationText(row.seoTitle);
+  if (override) return trimSentence(override, 70).replace(/\.$/, "");
+  const rawTitle = compactPublicationText(buildSeoIdentityParts(row).join(" "));
+  const title = isGenericSeoTitleCandidate(rawTitle)
+    ? compactPublicationText(row.resolvedSeoTitle)
+    : rawTitle;
+  return trimSentence(title || row.productName, 70).replace(/\.$/, "");
+};
+
+const resolveMetaDescriptionPreview = (row: PublicationRow) => {
+  const override = compactPublicationText(row.metaDescription);
+  if (override) return trimSentence(override, 180);
+  const shortDescription = compactPublicationText(row.shortDescription);
+  if (shortDescription) return trimSentence(shortDescription, 180);
+  const longDescription = compactPublicationText(row.longDescription);
+  if (longDescription) {
+    const firstSentence = longDescription.split(/[.!?]/)[0]?.trim();
+    return trimSentence(firstSentence || longDescription, 180);
+  }
+  return trimSentence(
+    buildSeoIdentityParts(row).join(". ") ||
+      row.resolvedMetaDescription ||
+      row.productName,
+    180,
+  );
+};
+
+const calculateSeoPriorityPreview = (row: PublicationRow) => {
+  let score = row.publicationStatus === "PUBLISHED" ? 0.35 : 0.15;
+  if (row.featured) score += 0.15;
+  if (
+    row.stockMode !== "OUT_OF_STOCK" &&
+    Math.max(0, row.webStockAvailable - row.webStockReserved) > 0
+  ) {
+    score += 0.12;
+  }
+  if (compactPublicationText(row.shortDescription)) score += 0.1;
+  if (compactPublicationText(row.longDescription)) score += 0.1;
+  if (row.images.length > 0) score += 0.08;
+  if (row.seoSignals?.hasTechnicalSheet) score += 0.07;
+  if (row.salesCount > 0) score += 0.03;
+  return Math.max(0, Math.min(1, Number(score.toFixed(2))));
+};
+
 const buildSeoSuggestion = (row: PublicationRow): Partial<PublicationRow> => {
   const titleParts: string[] = [];
-  appendUniqueSeoPart(titleParts, row.productType);
   appendUniqueSeoPart(titleParts, row.publicName || row.productName);
   appendUniqueSeoPart(titleParts, row.brand);
   appendUniqueSeoPart(titleParts, row.model);
-  appendUniqueSeoPart(titleParts, row.capacity);
-  appendUniqueSeoPart(titleParts, row.energyEfficiency);
+  appendUniqueSeoPart(titleParts, row.category);
 
   const rawTitle = compactPublicationText(titleParts.join(" "));
   const suggestedTitle = isGenericSeoTitleCandidate(rawTitle)
@@ -488,16 +522,6 @@ const buildSeoSuggestion = (row: PublicationRow): Partial<PublicationRow> => {
     compactPublicationText(row.shortDescription) ||
     compactPublicationText(row.longDescription).split(/[.!?]/)[0] ||
     "";
-  const suggestedTerms = normalizeRelatedTermsList([
-    row.category,
-    row.subcategory,
-    row.productType,
-    row.brand,
-    row.model,
-    row.capacity,
-    row.energyEfficiency,
-    row.origin,
-  ]);
   const slugSource = suggestedTitle || row.publicName || row.productName;
   const suggestedSlug = normalizeSlugText(slugSource);
 
@@ -507,9 +531,6 @@ const buildSeoSuggestion = (row: PublicationRow): Partial<PublicationRow> => {
       ? { metaDescription: trimSentence(descriptionSource, 160) }
       : {}),
     ...(suggestedSlug ? { slug: suggestedSlug } : {}),
-    ...(!row.relatedTerms.length && suggestedTerms.length
-      ? { relatedTerms: suggestedTerms }
-      : {}),
   };
 };
 
@@ -524,15 +545,7 @@ const serializePublicationDraft = (row: PublicationRow) =>
     category: row.category,
     seoTitle: row.seoTitle,
     metaDescription: row.metaDescription,
-    subcategory: row.subcategory,
-    productType: row.productType,
-    capacity: row.capacity,
-    energyEfficiency: row.energyEfficiency,
-    warranty: row.warranty,
-    origin: row.origin,
-    relatedTerms: row.relatedTerms,
     indexable: row.indexable,
-    priority: row.priority,
     featured: row.featured,
     shippingType: row.shippingType,
     normalShippingOverrideAmount: row.normalShippingOverrideAmount,
@@ -1254,26 +1267,6 @@ function PublicationEditorCard({
   );
 }
 
-function RelatedTermsTextarea({
-  terms,
-  onCommit,
-}: {
-  terms: string[];
-  onCommit: (terms: string[]) => void;
-}) {
-  const [draft, setDraft] = useState(terms.join(", "));
-
-  return (
-    <textarea
-      className={`${textareaClass} min-h-[88px]`}
-      placeholder="Separados por coma o salto de linea"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => onCommit(normalizeRelatedTermsList(draft))}
-    />
-  );
-}
-
 function PublicationEditorModal({
   row,
   onChange,
@@ -1316,7 +1309,9 @@ function PublicationEditorModal({
   ];
   const seoTitleLength = row.seoTitle?.length ?? 0;
   const metaDescriptionLength = row.metaDescription?.length ?? 0;
-  const relatedTermsKey = row.relatedTerms.join("\n");
+  const seoPreviewTitle = resolveSeoTitlePreview(row);
+  const seoPreviewDescription = resolveMetaDescriptionPreview(row);
+  const seoPreviewPriority = calculateSeoPriorityPreview(row);
   const handleSuggestSeo = () => {
     const suggestion = buildSeoSuggestion(row);
     if (Object.keys(suggestion).length) {
@@ -1415,7 +1410,7 @@ function PublicationEditorModal({
                     SEO y publicacion web
                   </h4>
                   <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-                    Datos opcionales para que la web tenga mejores titulos, descripcion y atributos publicos.
+                    La web arma el SEO desde los datos reales del producto. Usa estos campos solo como overrides editoriales.
                   </p>
                 </div>
                 <button
@@ -1478,106 +1473,33 @@ function PublicationEditorModal({
                   </Field>
                 </div>
 
-                <Field label="Subcategoria">
-                  <input
-                    className={fieldClass}
-                    placeholder="Split inverter"
-                    value={row.subcategory ?? ""}
-                    onChange={(event) =>
-                      onChange({ subcategory: event.target.value || null })
-                    }
-                  />
-                </Field>
-                <Field label="Tipo de producto">
-                  <input
-                    className={fieldClass}
-                    placeholder="Aire acondicionado"
-                    value={row.productType ?? ""}
-                    onChange={(event) =>
-                      onChange({ productType: event.target.value || null })
-                    }
-                  />
-                </Field>
-                <Field label="Capacidad">
-                  <input
-                    className={fieldClass}
-                    placeholder="4500 frigorias"
-                    value={row.capacity ?? ""}
-                    onChange={(event) =>
-                      onChange({ capacity: event.target.value || null })
-                    }
-                  />
-                </Field>
-                <Field label="Eficiencia energetica">
-                  <input
-                    className={fieldClass}
-                    placeholder="A++"
-                    value={row.energyEfficiency ?? ""}
-                    onChange={(event) =>
-                      onChange({
-                        energyEfficiency: event.target.value || null,
-                      })
-                    }
-                  />
-                </Field>
-                <Field label="Garantia">
-                  <input
-                    className={fieldClass}
-                    placeholder="12 meses"
-                    value={row.warranty ?? ""}
-                    onChange={(event) =>
-                      onChange({ warranty: event.target.value || null })
-                    }
-                  />
-                </Field>
-                <Field label="Origen / linea">
-                  <input
-                    className={fieldClass}
-                    placeholder="Linea residencial"
-                    value={row.origin ?? ""}
-                    onChange={(event) =>
-                      onChange({ origin: event.target.value || null })
-                    }
-                  />
-                </Field>
-
                 <div className="lg:col-span-2">
-                  <Field
-                    label="Terminos relacionados"
-                    helper="Son internos para busqueda y contexto; no son meta keywords."
-                  >
-                    <RelatedTermsTextarea
-                      key={`${row.productId}-${relatedTermsKey}`}
-                      terms={row.relatedTerms}
-                      onCommit={(terms) =>
-                        onChange({
-                          relatedTerms: terms,
-                        })
-                      }
-                    />
-                  </Field>
+                  <div className="rounded-[18px] border border-sky-100 bg-white px-4 py-3">
+                    <div className="text-xs font-semibold uppercase tracking-[0.04em] text-sky-800">
+                      Vista previa generada
+                    </div>
+                    <div className="mt-2 text-sm font-semibold text-zinc-950">
+                      {seoPreviewTitle}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-zinc-600">
+                      {seoPreviewDescription}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <span className="rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-sky-900">
+                        Prioridad calculada: {seoPreviewPriority.toFixed(2)}
+                      </span>
+                      <span className="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-zinc-700">
+                        {row.indexable ? "Indexable" : "No indexable"}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <div className="grid gap-4">
-                  <MiniToggle
-                    checked={row.indexable}
-                    onChange={() => onChange({ indexable: !row.indexable })}
-                    label="Indexable"
-                    help="Permite que la web indique si este producto debe aparecer en buscadores."
-                  />
-                  <Field
-                    label="Prioridad SEO / sitemap"
-                    helper="Valor entre 0 y 1. Usar mas alto solo en productos importantes."
-                  >
-                    <input
-                      className={fieldClass}
-                      inputMode="decimal"
-                      value={row.priority}
-                      onChange={(event) =>
-                        onChange({ priority: normalizeSeoPriority(event.target.value) })
-                      }
-                    />
-                  </Field>
-                </div>
+                <MiniToggle
+                  checked={row.indexable}
+                  onChange={() => onChange({ indexable: !row.indexable })}
+                  label="Indexable"
+                  help="Control editorial para indicar si este producto debe aparecer en buscadores."
+                />
               </div>
             </section>
 
@@ -2404,15 +2326,29 @@ export default function StorefrontClient({
         ),
         seoTitle: optionalPublicationText(row.seoTitle),
         metaDescription: optionalPublicationText(row.metaDescription),
-        subcategory: optionalPublicationText(row.subcategory),
-        productType: optionalPublicationText(row.productType),
-        capacity: optionalPublicationText(row.capacity),
-        energyEfficiency: optionalPublicationText(row.energyEfficiency),
-        warranty: optionalPublicationText(row.warranty),
-        origin: optionalPublicationText(row.origin),
-        relatedTerms: normalizeRelatedTermsList(row.relatedTerms),
         indexable: row.indexable ?? true,
-        priority: normalizeSeoPriority(row.priority),
+        resolvedSeoTitle:
+          row.resolvedSeoTitle || row.publicName || row.productName,
+        resolvedMetaDescription:
+          row.resolvedMetaDescription ||
+          row.shortDescription ||
+          row.longDescription ||
+          row.publicName ||
+          row.productName,
+        seoPriority:
+          Number.isFinite(Number(row.seoPriority))
+            ? Math.max(0, Math.min(1, Number(row.seoPriority)))
+            : calculateSeoPriorityPreview(row),
+        seoSignals: {
+          featured: Boolean(row.seoSignals?.featured),
+          published: Boolean(row.seoSignals?.published),
+          hasStock: Boolean(row.seoSignals?.hasStock),
+          hasShortDescription: Boolean(row.seoSignals?.hasShortDescription),
+          hasLongDescription: Boolean(row.seoSignals?.hasLongDescription),
+          hasImages: Boolean(row.seoSignals?.hasImages),
+          hasTechnicalSheet: Boolean(row.seoSignals?.hasTechnicalSheet),
+          hasSales: Boolean(row.seoSignals?.hasSales),
+        },
       }));
       setPublications(normalizedPublications);
       setOrders(ordersJson);
@@ -2723,15 +2659,7 @@ export default function StorefrontClient({
         category: row.category,
         seoTitle: row.seoTitle,
         metaDescription: row.metaDescription,
-        subcategory: row.subcategory,
-        productType: row.productType,
-        capacity: row.capacity,
-        energyEfficiency: row.energyEfficiency,
-        warranty: row.warranty,
-        origin: row.origin,
-        relatedTerms: row.relatedTerms,
         indexable: row.indexable,
-        priority: row.priority,
         featured: row.featured,
         shippingType: row.shippingType,
         normalShippingOverrideAmount: row.normalShippingOverrideAmount,

@@ -143,15 +143,20 @@ type StorefrontAdminPublicationRow = {
   category: string;
   seoTitle: string | null;
   metaDescription: string | null;
-  subcategory: string | null;
-  productType: string | null;
-  capacity: string | null;
-  energyEfficiency: string | null;
-  warranty: string | null;
-  origin: string | null;
-  relatedTerms: string[];
   indexable: boolean;
-  priority: number;
+  resolvedSeoTitle: string;
+  resolvedMetaDescription: string;
+  seoPriority: number;
+  seoSignals: {
+    featured: boolean;
+    published: boolean;
+    hasStock: boolean;
+    hasShortDescription: boolean;
+    hasLongDescription: boolean;
+    hasImages: boolean;
+    hasTechnicalSheet: boolean;
+    hasSales: boolean;
+  };
   publicationStatus: "PUBLISHED" | "PAUSED";
   stockMode: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
   webStockAvailable: number;
@@ -212,15 +217,7 @@ type UpsertStorefrontPublicationInput = {
   category: string;
   seoTitle?: string | null;
   metaDescription?: string | null;
-  subcategory?: string | null;
-  productType?: string | null;
-  capacity?: string | null;
-  energyEfficiency?: string | null;
-  warranty?: string | null;
-  origin?: string | null;
-  relatedTerms?: string[];
   indexable?: boolean;
-  priority?: number | null;
   featured: boolean;
   shippingType: "NORMAL" | "PICKUP" | "OWN_DELIVERY" | "QUOTE" | "RESTRICTED";
   normalShippingOverrideAmount?: number | null;
@@ -698,26 +695,127 @@ const normalizeOptionalPublicationText = (value: string | null | undefined) => {
   return normalized || null;
 };
 
-const normalizeRelatedTerms = (
-  value: Prisma.JsonValue | string[] | null | undefined,
-): string[] => {
-  if (!Array.isArray(value)) return [];
-
-  const terms = value
-    .map((item) => compactSpaces(String(item ?? "")).slice(0, 80))
-    .filter(Boolean);
-
-  return Array.from(
-    new Map(
-      terms.map((term) => [term.toLocaleLowerCase("es-AR"), term]),
-    ).values(),
-  ).slice(0, 24);
+const trimSeoText = (value: string, maxLength: number) => {
+  const normalized = compactSpaces(value);
+  if (normalized.length <= maxLength) return normalized;
+  const sliced = normalized.slice(0, maxLength + 1);
+  const lastSpace = sliced.lastIndexOf(" ");
+  return sliced.slice(0, lastSpace > 40 ? lastSpace : maxLength).trim();
 };
 
-const normalizeSeoPriority = (value: number | null | undefined) => {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return 0.5;
-  return Math.max(0, Math.min(1, Number(parsed.toFixed(2))));
+const normalizeComparableText = (value: string) =>
+  compactSpaces(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es-AR");
+
+const appendUniqueSeoPart = (
+  parts: string[],
+  value: string | null | undefined,
+) => {
+  const normalized = compactSpaces(value ?? "");
+  if (!normalized) return;
+  const comparable = normalizeComparableText(normalized);
+  if (
+    parts.some((part) => {
+      const existing = normalizeComparableText(part);
+      return existing.includes(comparable) || comparable.includes(existing);
+    })
+  ) {
+    return;
+  }
+  parts.push(normalized);
+};
+
+type StorefrontSeoSource = {
+  publicName: string;
+  shortDescription?: string | null;
+  longDescription?: string | null;
+  category?: string | null;
+  seoTitle?: string | null;
+  metaDescription?: string | null;
+  publicationStatus?: "PUBLISHED" | "PAUSED";
+  stockMode?: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
+  webStockAvailable?: number | null;
+  webStockReserved?: number | null;
+  featured?: boolean;
+  images?: Prisma.JsonValue | StorefrontProductImage[] | null;
+  technicalSheet?: Prisma.JsonValue | null;
+  product: {
+    name: string;
+    brand?: string | null;
+    model?: string | null;
+  };
+  salesCount?: number;
+};
+
+const buildSeoIdentityParts = (source: StorefrontSeoSource) => {
+  const parts: string[] = [];
+  appendUniqueSeoPart(parts, source.publicName || source.product.name);
+  appendUniqueSeoPart(parts, source.product.brand);
+  appendUniqueSeoPart(parts, source.product.model);
+  appendUniqueSeoPart(parts, source.category);
+  return parts;
+};
+
+const resolveStorefrontSeoTitle = (source: StorefrontSeoSource) => {
+  const override = normalizeOptionalPublicationText(source.seoTitle);
+  if (override) return trimSeoText(override, 70);
+  const title = buildSeoIdentityParts(source).join(" ");
+  return trimSeoText(title || source.product.name || source.publicName, 70);
+};
+
+const resolveStorefrontMetaDescription = (source: StorefrontSeoSource) => {
+  const override = normalizeOptionalPublicationText(source.metaDescription);
+  if (override) return trimSeoText(override, 180);
+  const shortDescription = normalizeOptionalPublicationText(source.shortDescription);
+  if (shortDescription) return trimSeoText(shortDescription, 180);
+
+  const longDescription = normalizeOptionalPublicationText(source.longDescription);
+  if (longDescription) {
+    const firstSentence = longDescription.split(/[.!?]/)[0]?.trim();
+    return trimSeoText(firstSentence || longDescription, 180);
+  }
+
+  return trimSeoText(buildSeoIdentityParts(source).join(". "), 180);
+};
+
+const suggestStorefrontImageAlt = (source: StorefrontSeoSource) =>
+  trimSeoText(buildSeoIdentityParts(source).join(" "), 180) ||
+  source.product.name ||
+  source.publicName;
+
+const getStorefrontSeoSignals = (source: StorefrontSeoSource) => {
+  const imageCount = parseStoredImages(
+    source.images,
+    source.publicName || source.product.name,
+  ).length;
+  return {
+    featured: Boolean(source.featured),
+    published: source.publicationStatus === "PUBLISHED",
+    hasStock:
+      source.stockMode !== "OUT_OF_STOCK" &&
+      Math.max(0, toNumber(source.webStockAvailable) - toNumber(source.webStockReserved)) > 0,
+    hasShortDescription: Boolean(normalizeOptionalPublicationText(source.shortDescription)),
+    hasLongDescription: Boolean(normalizeOptionalPublicationText(source.longDescription)),
+    hasImages: imageCount > 0,
+    hasTechnicalSheet: parseTechnicalSheet(source.technicalSheet ?? null).length > 0,
+    hasSales: (source.salesCount ?? 0) > 0,
+  };
+};
+
+const calculateStorefrontSeoPriority = (source: StorefrontSeoSource) => {
+  const signals = getStorefrontSeoSignals(source);
+  let score = signals.published ? 0.35 : 0.15;
+  if (signals.featured) score += 0.15;
+  if (signals.hasStock) score += 0.12;
+  if (signals.hasShortDescription) score += 0.1;
+  if (signals.hasLongDescription) score += 0.1;
+  if (signals.hasImages) score += 0.08;
+  if (signals.hasTechnicalSheet) score += 0.07;
+  if (signals.hasSales) score += 0.03;
+
+  return Math.max(0, Math.min(1, Number(score.toFixed(2))));
 };
 
 const parseStoredImages = (
@@ -981,14 +1079,10 @@ const publicationMatchesSearch = (
     [
       publication.seoTitle,
       publication.metaDescription,
+      publication.publicName,
+      publication.shortDescription,
+      publication.longDescription,
       publication.category,
-      publication.subcategory,
-      publication.productType,
-      publication.capacity,
-      publication.energyEfficiency,
-      publication.warranty,
-      publication.origin,
-      ...normalizeRelatedTerms(publication.relatedTerms),
     ]
       .filter(Boolean)
       .join(" "),
@@ -1031,12 +1125,6 @@ const buildPublicationSearchWhere = (
       { category: { contains: term, mode: "insensitive" } },
       { seoTitle: { contains: term, mode: "insensitive" } },
       { metaDescription: { contains: term, mode: "insensitive" } },
-      { subcategory: { contains: term, mode: "insensitive" } },
-      { productType: { contains: term, mode: "insensitive" } },
-      { capacity: { contains: term, mode: "insensitive" } },
-      { energyEfficiency: { contains: term, mode: "insensitive" } },
-      { warranty: { contains: term, mode: "insensitive" } },
-      { origin: { contains: term, mode: "insensitive" } },
       {
         product: {
           is: {
@@ -1092,6 +1180,10 @@ const storefrontProductFromPublication = (
     mercadoPagoFeeConfig,
   );
   const slug = publication.slug || normalizeSlug(publication.publicName || publication.product.name);
+  const seoSource = {
+    ...publication,
+    salesCount: 0,
+  };
 
   return {
     id: publication.productId,
@@ -1108,19 +1200,12 @@ const storefrontProductFromPublication = (
     publicName: publication.publicName,
     shortDescription: publication.shortDescription,
     longDescription: publication.longDescription,
-    seoTitle: publication.seoTitle,
-    metaDescription: publication.metaDescription,
-    images: parseImages(publication.images, slug, publication.publicName),
+    seoTitle: resolveStorefrontSeoTitle(seoSource),
+    metaDescription: resolveStorefrontMetaDescription(seoSource),
+    images: parseImages(publication.images, slug, suggestStorefrontImageAlt(seoSource)),
     category: publication.category,
-    subcategory: publication.subcategory,
-    productType: publication.productType,
-    capacity: publication.capacity,
-    energyEfficiency: publication.energyEfficiency,
-    warranty: publication.warranty,
-    origin: publication.origin,
-    relatedTerms: normalizeRelatedTerms(publication.relatedTerms),
     indexable: publication.indexable,
-    priority: normalizeSeoPriority(toNumber(publication.priority)),
+    priority: calculateStorefrontSeoPriority(seoSource),
     brand: publication.product.brand,
     model: publication.product.model,
     technicalSheet: parseTechnicalSheet(publication.technicalSheet),
@@ -2882,6 +2967,7 @@ export async function listStorefrontAdminPublications(
   return products
     .filter((product) => {
       if (!rawQuery) return true;
+      const publication = publicationWithFeeByProductId.get(product.id);
       return (
         scoreProductSearchMatch(
           {
@@ -2893,12 +2979,40 @@ export async function listStorefrontAdminPublications(
             purchaseCode: product.purchaseCode,
           },
           rawQuery,
-        ) !== null
+        ) !== null ||
+        (publication ? publicationMatchesSearch(publication, rawQuery) : false)
       );
     })
     .map((product) => {
       const publication = publicationWithFeeByProductId.get(product.id) ?? null;
       const derivedSlug = normalizeSlug(publication?.publicName || product.name);
+      const publicName = publication?.publicName ?? product.name;
+      const shortDescription =
+        publication?.shortDescription ?? (product.model ? compactSpaces(product.model) : "");
+      const longDescription = publication?.longDescription ?? "";
+      const category = publication?.category ?? "General";
+      const images = parseStoredImages(
+        publication?.images ?? null,
+        publication?.publicName ?? product.name,
+      );
+      const salesCount = salesCountByProductId.get(product.id) ?? 0;
+      const seoSource: StorefrontSeoSource = {
+        publicName,
+        shortDescription,
+        longDescription,
+        category,
+        seoTitle: publication?.seoTitle ?? null,
+        metaDescription: publication?.metaDescription ?? null,
+        publicationStatus: publication?.publicationStatus ?? "PAUSED",
+        stockMode: publication?.stockMode ?? "STRICT",
+        webStockAvailable: publication?.webStockAvailable ?? 0,
+        webStockReserved: publication?.webStockReserved ?? 0,
+        featured: publication?.featured ?? false,
+        images,
+        technicalSheet: publication?.technicalSheet ?? null,
+        product,
+        salesCount,
+      };
       const pricing =
         publication === null
           ? {
@@ -2924,22 +3038,17 @@ export async function listStorefrontAdminPublications(
         model: product.model,
         unit: product.unit,
         slug: publication?.slug ?? derivedSlug,
-        publicName: publication?.publicName ?? product.name,
-        shortDescription:
-          publication?.shortDescription ?? (product.model ? compactSpaces(product.model) : ""),
-        longDescription: publication?.longDescription ?? "",
-        category: publication?.category ?? "General",
+        publicName,
+        shortDescription,
+        longDescription,
+        category,
         seoTitle: publication?.seoTitle ?? null,
         metaDescription: publication?.metaDescription ?? null,
-        subcategory: publication?.subcategory ?? null,
-        productType: publication?.productType ?? null,
-        capacity: publication?.capacity ?? null,
-        energyEfficiency: publication?.energyEfficiency ?? null,
-        warranty: publication?.warranty ?? null,
-        origin: publication?.origin ?? null,
-        relatedTerms: normalizeRelatedTerms(publication?.relatedTerms ?? null),
         indexable: publication?.indexable ?? true,
-        priority: normalizeSeoPriority(toNumber(publication?.priority ?? 0.5)),
+        resolvedSeoTitle: resolveStorefrontSeoTitle(seoSource),
+        resolvedMetaDescription: resolveStorefrontMetaDescription(seoSource),
+        seoPriority: calculateStorefrontSeoPriority(seoSource),
+        seoSignals: getStorefrontSeoSignals(seoSource),
         publicationStatus: publication?.publicationStatus ?? "PAUSED",
         stockMode: publication?.stockMode ?? "STRICT",
         webStockAvailable: publication?.webStockAvailable ?? 0,
@@ -2962,12 +3071,9 @@ export async function listStorefrontAdminPublications(
         ),
         billingMode: publication?.billingMode ?? "DEFAULT",
         featured: publication?.featured ?? false,
-        images: parseStoredImages(
-          publication?.images ?? null,
-          publication?.publicName ?? product.name,
-        ),
+        images,
         computedPriceFinal: pricing.priceFinal,
-        salesCount: salesCountByProductId.get(product.id) ?? 0,
+        salesCount,
       };
     });
 }
@@ -3028,7 +3134,6 @@ export async function upsertStorefrontAdminPublication(
     input.images,
     input.publicName || product.name,
   );
-  const normalizedRelatedTerms = normalizeRelatedTerms(input.relatedTerms);
 
   const data: Prisma.StorefrontPublicationUncheckedCreateInput = {
     organizationId,
@@ -3068,34 +3173,8 @@ export async function upsertStorefrontAdminPublication(
   if (input.metaDescription !== undefined) {
     data.metaDescription = normalizeOptionalPublicationText(input.metaDescription);
   }
-  if (input.subcategory !== undefined) {
-    data.subcategory = normalizeOptionalPublicationText(input.subcategory);
-  }
-  if (input.productType !== undefined) {
-    data.productType = normalizeOptionalPublicationText(input.productType);
-  }
-  if (input.capacity !== undefined) {
-    data.capacity = normalizeOptionalPublicationText(input.capacity);
-  }
-  if (input.energyEfficiency !== undefined) {
-    data.energyEfficiency = normalizeOptionalPublicationText(input.energyEfficiency);
-  }
-  if (input.warranty !== undefined) {
-    data.warranty = normalizeOptionalPublicationText(input.warranty);
-  }
-  if (input.origin !== undefined) {
-    data.origin = normalizeOptionalPublicationText(input.origin);
-  }
-  if (input.relatedTerms !== undefined) {
-    data.relatedTerms = normalizedRelatedTerms.length
-      ? (normalizedRelatedTerms as Prisma.InputJsonValue)
-      : Prisma.JsonNull;
-  }
   if (input.indexable !== undefined) {
     data.indexable = input.indexable;
-  }
-  if (input.priority !== undefined) {
-    data.priority = normalizeSeoPriority(input.priority).toFixed(2);
   }
   if (input.images !== undefined) {
     data.images = normalizedImages.length
