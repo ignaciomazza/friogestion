@@ -4,6 +4,13 @@ import { prisma } from "@/lib/prisma";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
 import SalesClient from "./sales-client";
 import { backfillPendingReceipts } from "@/lib/receipts/backfill";
+import {
+  SALES_PAGE_SIZE,
+  getSalesStatsSummary,
+  salesListInclude,
+  salesOrderBy,
+  serializeSaleListItem,
+} from "@/lib/sales/list";
 
 const MANAGE_ROLES = ["OWNER", "ADMIN"];
 
@@ -40,29 +47,15 @@ export default async function SalesPage() {
   const canManage = MANAGE_ROLES.includes(membership.role);
   await backfillPendingReceipts(membership.organizationId, payload.userId);
 
-  const [sales, events, paymentMethods, accounts, currencies, rate] =
+  const [sales, stats, events, paymentMethods, accounts, currencies, rate] =
     await Promise.all([
     prisma.sale.findMany({
       where: { organizationId: membership.organizationId },
-      include: {
-        customer: true,
-        items: { include: { product: true } },
-        receipts: {
-          where: { status: "CONFIRMED" },
-          select: {
-            lines: {
-              select: {
-                accountMovement: {
-                  select: { verifiedAt: true },
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 50,
+      include: salesListInclude,
+      orderBy: salesOrderBy("newest"),
+      take: SALES_PAGE_SIZE,
     }),
+    getSalesStatsSummary(membership.organizationId),
     canManage
       ? prisma.saleEvent.findMany({
           where: { organizationId: membership.organizationId },
@@ -99,40 +92,13 @@ export default async function SalesPage() {
   return (
     <SalesClient
       role={membership.role}
-      initialSales={sales.map((sale) => ({
-        hasPendingDoubleCheck: sale.receipts.some((receipt) =>
-          receipt.lines.some(
-            (line) =>
-              line.accountMovement ? !line.accountMovement.verifiedAt : false
-          )
-        ),
-        id: sale.id,
-        customerName: sale.customer.displayName,
-        customerPhone: sale.customer.phone,
-        saleNumber: sale.saleNumber,
-        saleDate: sale.saleDate?.toISOString() ?? null,
-        createdAt: sale.createdAt.toISOString(),
-        subtotal: sale.subtotal?.toString() ?? null,
-        taxes: sale.taxes?.toString() ?? null,
-        extraType: sale.extraType ?? null,
-        extraValue: sale.extraValue?.toString() ?? null,
-        extraAmount: sale.extraAmount?.toString() ?? null,
-        total: sale.total?.toString() ?? null,
-        paidTotal: sale.paidTotal?.toString() ?? "0",
-        balance: sale.balance?.toString() ?? "0",
-        paymentStatus: sale.paymentStatus,
-        status: sale.status,
-        billingStatus: sale.billingStatus,
-        items: sale.items.map((item) => ({
-          id: item.id,
-          productName: item.product.name,
-          qty: item.qty.toString(),
-          unitPrice: item.unitPrice.toString(),
-          total: item.total.toString(),
-          taxRate: item.taxRate?.toString() ?? null,
-          taxAmount: item.taxAmount?.toString() ?? null,
-        })),
-      }))}
+      initialSales={sales.map((sale) => serializeSaleListItem(sale))}
+      initialStats={stats}
+      initialTotalResults={stats.totalSales}
+      initialNextOffset={
+        sales.length < stats.totalSales ? sales.length : null
+      }
+      initialHasMore={sales.length < stats.totalSales}
       initialEvents={
         canManage
           ? events.map((event) => ({

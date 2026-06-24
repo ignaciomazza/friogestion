@@ -18,6 +18,16 @@ import {
   type ExtraChargeTypeValue,
 } from "@/lib/sale-adjustments";
 import { assertManualBillingStatusAllowed } from "@/lib/sales/fiscal";
+import {
+  buildSalesWhere,
+  getSalesStatsSummary,
+  parseSalesLimit,
+  parseSalesOffset,
+  parseSalesSort,
+  salesListInclude,
+  salesOrderBy,
+  serializeSaleListItem,
+} from "@/lib/sales/list";
 
 const saleItemSchema = z.object({
   productId: z.string().min(1),
@@ -89,6 +99,12 @@ const normalizeBalanceForDisplay = (
   return parsed.toFixed(2);
 };
 
+const endOfDay = (date: Date) => {
+  const value = new Date(date);
+  value.setHours(23, 59, 59, 999);
+  return value;
+};
+
 const serializeSale = (
   sale: {
     id: string;
@@ -100,6 +116,11 @@ const serializeSale = (
       fiscalTaxProfile: string;
     };
     saleNumber: string | null;
+    fiscalInvoice?: {
+      type: string | null;
+      pointOfSale: string | null;
+      number: string | null;
+    } | null;
     saleDate: Date | null;
     createdAt: Date;
     subtotal: Prisma.Decimal | null;
@@ -142,6 +163,9 @@ const serializeSale = (
   customerType: sale.customer.type,
   customerFiscalTaxProfile: sale.customer.fiscalTaxProfile,
   saleNumber: sale.saleNumber,
+  fiscalInvoiceType: sale.fiscalInvoice?.type ?? null,
+  fiscalInvoicePointOfSale: sale.fiscalInvoice?.pointOfSale ?? null,
+  fiscalInvoiceNumber: sale.fiscalInvoice?.number ?? null,
   saleDate: sale.saleDate?.toISOString() ?? null,
   createdAt: sale.createdAt.toISOString(),
   subtotal: sale.subtotal?.toString() ?? null,
@@ -236,30 +260,50 @@ const ensureCounterAtLeast = async (
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const sales = await prisma.sale.findMany({
-      where: { organizationId },
-      include: {
-        customer: true,
-        items: { include: { product: true } },
-        saleCharges: { select: { amount: true } },
-        receipts: {
-          where: { status: "CONFIRMED" },
-          select: {
-            lines: {
-              select: {
-                accountMovement: {
-                  select: { verifiedAt: true },
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      take: 50,
+    const query = req.nextUrl.searchParams.get("q")?.trim() ?? "";
+    const limit = parseSalesLimit(req.nextUrl.searchParams.get("limit"));
+    const offset = parseSalesOffset(req.nextUrl.searchParams.get("offset"));
+    const sort = parseSalesSort(req.nextUrl.searchParams.get("sort"));
+    const dateFromResult = parseOptionalDate(
+      req.nextUrl.searchParams.get("dateFrom") ?? undefined,
+    );
+    const dateToResult = parseOptionalDate(
+      req.nextUrl.searchParams.get("dateTo") ?? undefined,
+    );
+
+    if (dateFromResult.error || dateToResult.error) {
+      return NextResponse.json({ error: "Fecha invalida" }, { status: 400 });
+    }
+
+    const where = buildSalesWhere({
+      organizationId,
+      query,
+      dateFrom: dateFromResult.date,
+      dateTo: dateToResult.date ? endOfDay(dateToResult.date) : null,
     });
 
-    return NextResponse.json(sales.map((sale) => serializeSale(sale)));
+    const [total, sales, stats] = await Promise.all([
+      prisma.sale.count({ where }),
+      prisma.sale.findMany({
+        where,
+        include: salesListInclude,
+        orderBy: salesOrderBy(sort),
+        skip: offset,
+        take: limit,
+      }),
+      getSalesStatsSummary(organizationId),
+    ]);
+
+    const nextOffset = offset + sales.length;
+    const hasMore = nextOffset < total;
+
+    return NextResponse.json({
+      items: sales.map((sale) => serializeSaleListItem(sale)),
+      total,
+      nextOffset: hasMore ? nextOffset : null,
+      hasMore,
+      stats,
+    });
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
@@ -432,6 +476,9 @@ export async function POST(req: NextRequest) {
       customerName: sale.customer.displayName,
       customerPhone: sale.customer.phone,
       saleNumber: sale.saleNumber,
+      fiscalInvoiceType: null,
+      fiscalInvoicePointOfSale: null,
+      fiscalInvoiceNumber: null,
       saleDate: sale.saleDate?.toISOString() ?? null,
       createdAt: sale.createdAt.toISOString(),
       subtotal: sale.subtotal?.toString() ?? null,
@@ -484,7 +531,9 @@ export async function PATCH(req: NextRequest) {
             },
           },
         },
-        fiscalInvoice: { select: { id: true } },
+        fiscalInvoice: {
+          select: { id: true, type: true, pointOfSale: true, number: true },
+        },
       },
     });
 
@@ -682,6 +731,9 @@ export async function PATCH(req: NextRequest) {
         include: {
           customer: true,
           items: { include: { product: true } },
+          fiscalInvoice: {
+            select: { type: true, pointOfSale: true, number: true },
+          },
           saleCharges: { select: { amount: true } },
           receipts: {
             where: { status: "CONFIRMED" },

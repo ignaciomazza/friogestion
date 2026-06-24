@@ -65,8 +65,13 @@ type ReceiptRow = {
 
 type SalesRecentTableProps = {
   sales: SaleRow[];
+  totalResults: number;
   sortOrder: string;
   onSortOrderChange: (value: string) => void;
+  isLoadingList: boolean;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  onLoadMore: () => Promise<void>;
   canManage: boolean;
   paymentMethods: PaymentMethodOption[];
   accounts: AccountOption[];
@@ -85,10 +90,23 @@ const formatItemTaxRate = (value: string | null | undefined) => {
 
 const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
 
+const formatFiscalInvoiceLabel = (sale: SaleRow) => {
+  const pointOfSale = sale.fiscalInvoicePointOfSale;
+  const number = sale.fiscalInvoiceNumber;
+  if (!pointOfSale && !number) return null;
+  const voucher = pointOfSale && number ? `${pointOfSale}-${number}` : number ?? pointOfSale;
+  return [sale.fiscalInvoiceType, voucher].filter(Boolean).join(" ");
+};
+
 export function SalesRecentTable({
   sales,
+  totalResults,
   sortOrder,
   onSortOrderChange,
+  isLoadingList,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
   canManage,
   paymentMethods,
   accounts,
@@ -268,11 +286,11 @@ export function SalesRecentTable({
           Ventas recientes
         </h3>
         <div className="flex flex-wrap items-center gap-3">
-          {sales.length > 0 ? (
-            <span className="text-xs text-zinc-500">
-              {sales.length} resultados
-            </span>
-          ) : null}
+          <span className="text-xs text-zinc-500">
+            {isLoadingList
+              ? "Cargando..."
+              : `${sales.length} de ${totalResults} resultados`}
+          </span>
           <select
             className="input cursor-pointer text-xs"
             value={sortOrder}
@@ -331,6 +349,7 @@ export function SalesRecentTable({
                     ? sale.items?.[0]?.productName ?? "Item"
                     : "Sin items";
                 const isSelected = selectedSaleId === sale.id;
+                const fiscalInvoiceLabel = formatFiscalInvoiceLabel(sale);
 
                 return (
                   <tr
@@ -347,6 +366,10 @@ export function SalesRecentTable({
                         ) : sale.billingStatus === "TO_BILL" ? (
                           <p className="text-[10px] uppercase tracking-wide text-sky-700">
                             Pendiente de facturacion
+                          </p>
+                        ) : fiscalInvoiceLabel ? (
+                          <p className="text-[10px] uppercase tracking-wide text-emerald-700">
+                            Factura {fiscalInvoiceLabel}
                           </p>
                         ) : null}
                       </div>
@@ -410,13 +433,26 @@ export function SalesRecentTable({
             ) : (
               <tr>
                 <td className="py-4 text-sm text-zinc-500" colSpan={9}>
-                  Sin ventas por ahora.
+                  {isLoadingList ? "Cargando ventas..." : "Sin ventas por ahora."}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+
+      {hasMore ? (
+        <div className="pt-1">
+          <button
+            type="button"
+            className="btn btn-sky text-xs w-full sm:w-auto"
+            onClick={() => onLoadMore().catch(() => undefined)}
+            disabled={isLoadingList || isLoadingMore}
+          >
+            {isLoadingMore ? "Cargando..." : "Cargar mas"}
+          </button>
+        </div>
+      ) : null}
 
       {selectedSale && isPortalReady
         ? createPortal(
@@ -441,6 +477,9 @@ export function SalesRecentTable({
                   {selectedSale.saleDate
                     ? new Date(selectedSale.saleDate).toLocaleDateString("es-AR")
                     : new Date(selectedSale.createdAt).toLocaleDateString("es-AR")}
+                  {formatFiscalInvoiceLabel(selectedSale)
+                    ? ` · Factura ${formatFiscalInvoiceLabel(selectedSale)}`
+                    : ""}
                 </p>
               </div>
               <button

@@ -1,28 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon } from "@/components/icons";
 import { SalesEvents } from "./components/SalesEvents";
 import { SalesRecentTable } from "./components/SalesRecentTable";
 import { SalesStats } from "./components/SalesStats";
 import type { SaleEventRow, SaleRow } from "./types";
+import type { SalesStatsSummary } from "@/lib/sales/list";
 
-const normalizeQuery = (value: string) => value.trim().toLowerCase();
-const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
-
-const parseDateInput = (value: string) => {
-  if (!value) return null;
-  const [year, month, day] = value.split("-").map(Number);
-  if (!year || !month || !day) return null;
-  return new Date(year, month - 1, day);
-};
-
-const endOfDay = (value: Date) => {
-  const date = new Date(value);
-  date.setHours(23, 59, 59, 999);
-  return date;
-};
+const PAGE_SIZE = 25;
 
 const formatDateInput = (value: Date) => {
   const year = value.getFullYear();
@@ -33,6 +20,10 @@ const formatDateInput = (value: Date) => {
 
 type SalesClientProps = {
   initialSales: SaleRow[];
+  initialStats: SalesStatsSummary;
+  initialTotalResults: number;
+  initialNextOffset: number | null;
+  initialHasMore: boolean;
   initialEvents: SaleEventRow[];
   role: string | null;
   paymentMethods: Array<{
@@ -61,6 +52,10 @@ type SalesClientProps = {
 
 export default function SalesClient({
   initialSales,
+  initialStats,
+  initialTotalResults,
+  initialNextOffset,
+  initialHasMore,
   initialEvents,
   role,
   paymentMethods,
@@ -69,70 +64,110 @@ export default function SalesClient({
   latestUsdRate,
 }: SalesClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
+  const [stats, setStats] = useState<SalesStatsSummary>(initialStats);
+  const [totalResults, setTotalResults] = useState(initialTotalResults);
+  const [nextOffset, setNextOffset] = useState<number | null>(initialNextOffset);
+  const [hasMore, setHasMore] = useState(initialHasMore);
   const [events] = useState<SaleEventRow[]>(initialEvents);
   const [saleQuery, setSaleQuery] = useState("");
+  const [debouncedSaleQuery, setDebouncedSaleQuery] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState("newest");
   const [quickRange, setQuickRange] = useState<string | null>(null);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [isActivityOpen, setIsActivityOpen] = useState(false);
+  const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const didMountRef = useRef(false);
 
   const canManage = useMemo(
     () => role === "OWNER" || role === "ADMIN",
     [role]
   );
 
-  const loadSales = async () => {
-    const res = await fetch("/api/sales", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as SaleRow[];
-      setSales(data);
+  const loadSales = useCallback(
+    async ({
+      offset,
+      append,
+      limit = PAGE_SIZE,
+    }: {
+      offset: number;
+      append: boolean;
+      limit?: number;
+    }) => {
+      if (append) {
+        setIsLoadingMore(true);
+      } else {
+        setIsLoadingList(true);
+      }
+
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      params.set("offset", String(offset));
+      params.set("sort", sortOrder);
+      if (debouncedSaleQuery.trim()) {
+        params.set("q", debouncedSaleQuery.trim());
+      }
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+
+      try {
+        const res = await fetch(`/api/sales?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          items: SaleRow[];
+          total: number;
+          nextOffset: number | null;
+          hasMore: boolean;
+          stats: SalesStatsSummary;
+        };
+        setSales((previous) =>
+          append ? [...previous, ...data.items] : data.items,
+        );
+        setStats(data.stats);
+        setTotalResults(data.total);
+        setNextOffset(data.nextOffset);
+        setHasMore(data.hasMore);
+      } finally {
+        setIsLoadingList(false);
+        setIsLoadingMore(false);
+      }
+    },
+    [dateFrom, dateTo, debouncedSaleQuery, sortOrder],
+  );
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedSaleQuery(saleQuery);
+    }, 250);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [saleQuery]);
+
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
     }
+
+    loadSales({ offset: 0, append: false }).catch(() => undefined);
+  }, [loadSales]);
+
+  const reloadLoadedSales = async () => {
+    await loadSales({
+      offset: 0,
+      append: false,
+      limit: Math.max(sales.length, PAGE_SIZE),
+    });
   };
 
-  const totalSales = sales.length;
-  const openBalanceSales = sales.filter(
-    (sale) => Number(sale.balance ?? 0) > PAYMENT_SETTLEMENT_TOLERANCE
-  ).length;
-  const totalRevenue = sales.reduce((totalValue, sale) => {
-    if (!sale.total) return totalValue;
-    const value = Number(sale.total);
-    return Number.isFinite(value) ? totalValue + value : totalValue;
-  }, 0);
-
-  const filteredSales = useMemo(() => {
-    const query = normalizeQuery(saleQuery);
-    const from = parseDateInput(dateFrom);
-    const to = dateTo ? endOfDay(parseDateInput(dateTo) ?? new Date()) : null;
-
-    const filtered = sales.filter((sale) => {
-      if (query) {
-        const haystack = normalizeQuery(
-          `${sale.customerName} ${sale.saleNumber ?? ""}`
-        );
-        if (!haystack.includes(query)) return false;
-      }
-      const occurredAt = new Date(sale.saleDate ?? sale.createdAt);
-      if (from && occurredAt < from) return false;
-      if (to && occurredAt > to) return false;
-      return true;
-    });
-
-    filtered.sort((a, b) => {
-      const aDate = new Date(a.saleDate ?? a.createdAt).getTime();
-      const bDate = new Date(b.saleDate ?? b.createdAt).getTime();
-      return sortOrder === "oldest" ? aDate - bDate : bDate - aDate;
-    });
-
-    return filtered;
-  }, [
-    dateFrom,
-    dateTo,
-    saleQuery,
-    sales,
-    sortOrder,
-  ]);
+  const handleLoadMore = async () => {
+    if (nextOffset === null || isLoadingMore) return;
+    await loadSales({ offset: nextOffset, append: true });
+  };
 
   const applyQuickRange = (
     range: "month" | "quarter" | "semester" | "year" | "last30"
@@ -195,9 +230,9 @@ export default function SalesClient({
       </div>
 
       <SalesStats
-        totalSales={totalSales}
-        openBalanceSales={openBalanceSales}
-        totalRevenue={totalRevenue}
+        totalSales={stats.totalSales}
+        openBalanceSales={stats.openBalanceSales}
+        totalRevenue={stats.totalRevenue}
       />
 
       <div className="card space-y-4">
@@ -229,7 +264,7 @@ export default function SalesClient({
           </label>
           <div className="flex h-full items-end justify-end text-right">
             <span className="pill border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-800">
-              Con saldo: {openBalanceSales}
+              Con saldo: {stats.openBalanceSales}
             </span>
           </div>
         </div>
@@ -332,15 +367,20 @@ export default function SalesClient({
       </div>
 
       <SalesRecentTable
-        sales={filteredSales}
+        sales={sales}
+        totalResults={totalResults}
         sortOrder={sortOrder}
         onSortOrderChange={setSortOrder}
+        isLoadingList={isLoadingList}
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={handleLoadMore}
         canManage={canManage}
         paymentMethods={paymentMethods}
         accounts={accounts}
         currencies={currencies}
         latestUsdRate={latestUsdRate}
-        onReceiptsUpdated={loadSales}
+        onReceiptsUpdated={reloadLoadedSales}
       />
 
       {canManage ? (

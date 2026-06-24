@@ -6,6 +6,9 @@ export type SaleRow = {
   customerType?: string | null;
   customerFiscalTaxProfile?: string | null;
   saleNumber: string | null;
+  fiscalInvoiceType?: string | null;
+  fiscalInvoicePointOfSale?: string | null;
+  fiscalInvoiceNumber?: string | null;
   saleDate: string | null;
   createdAt: string;
   subtotal?: string | null;
