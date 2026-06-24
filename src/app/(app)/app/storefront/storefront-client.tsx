@@ -82,12 +82,24 @@ type PublicationRow = {
   productName: string;
   sku: string | null;
   brand: string | null;
+  model: string | null;
   unit: string | null;
   slug: string;
   publicName: string;
   shortDescription: string;
   longDescription: string;
   category: string;
+  seoTitle: string | null;
+  metaDescription: string | null;
+  subcategory: string | null;
+  productType: string | null;
+  capacity: string | null;
+  energyEfficiency: string | null;
+  warranty: string | null;
+  origin: string | null;
+  relatedTerms: string[];
+  indexable: boolean;
+  priority: number;
   publicationStatus: "PUBLISHED" | "PAUSED";
   stockMode: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
   webStockAvailable: number;
@@ -382,14 +394,145 @@ const normalizePublicationImages = (
     .slice(0, 12);
 };
 
+const compactPublicationText = (value: string | null | undefined) =>
+  (value ?? "").trim().replace(/\s+/g, " ");
+
+const optionalPublicationText = (value: string | null | undefined) => {
+  const normalized = compactPublicationText(value);
+  return normalized || null;
+};
+
+const normalizeSlugText = (value: string) =>
+  compactPublicationText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+
+const normalizeRelatedTermsList = (value: unknown): string[] => {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value ?? "")
+        .split(/[,;\n]/)
+        .map((item) => item.trim());
+  const terms = rawItems
+    .map((item) => compactPublicationText(String(item ?? "")).slice(0, 80))
+    .filter(Boolean);
+
+  return Array.from(
+    new Map(
+      terms.map((term) => [term.toLocaleLowerCase("es-AR"), term]),
+    ).values(),
+  ).slice(0, 24);
+};
+
+const normalizeSeoPriority = (value: number | string | null | undefined) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0.5;
+  return Math.max(0, Math.min(1, Number(parsed.toFixed(2))));
+};
+
+const trimSentence = (value: string, maxLength: number) => {
+  const normalized = compactPublicationText(value);
+  if (normalized.length <= maxLength) return normalized;
+  const sliced = normalized.slice(0, maxLength + 1);
+  const lastSpace = sliced.lastIndexOf(" ");
+  return `${sliced.slice(0, lastSpace > 40 ? lastSpace : maxLength).trim()}.`;
+};
+
+const genericTitleTokens = new Set([
+  "producto",
+  "articulo",
+  "repuesto",
+  "aire acondicionado",
+]);
+
+const isGenericSeoTitleCandidate = (value: string) => {
+  const normalized = compactPublicationText(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  if (!normalized) return true;
+  if (genericTitleTokens.has(normalized)) return true;
+  return /^producto\s*\d+$/i.test(normalized);
+};
+
+const appendUniqueSeoPart = (parts: string[], value: string | null | undefined) => {
+  const normalized = compactPublicationText(value);
+  if (!normalized) return;
+  const normalizedLower = normalized.toLocaleLowerCase("es-AR");
+  if (
+    parts.some((part) =>
+      part.toLocaleLowerCase("es-AR").includes(normalizedLower),
+    )
+  ) return;
+  parts.push(normalized);
+};
+
+const buildSeoSuggestion = (row: PublicationRow): Partial<PublicationRow> => {
+  const titleParts: string[] = [];
+  appendUniqueSeoPart(titleParts, row.productType);
+  appendUniqueSeoPart(titleParts, row.publicName || row.productName);
+  appendUniqueSeoPart(titleParts, row.brand);
+  appendUniqueSeoPart(titleParts, row.model);
+  appendUniqueSeoPart(titleParts, row.capacity);
+  appendUniqueSeoPart(titleParts, row.energyEfficiency);
+
+  const rawTitle = compactPublicationText(titleParts.join(" "));
+  const suggestedTitle = isGenericSeoTitleCandidate(rawTitle)
+    ? null
+    : trimSentence(rawTitle, 70).replace(/\.$/, "");
+  const descriptionSource =
+    compactPublicationText(row.shortDescription) ||
+    compactPublicationText(row.longDescription).split(/[.!?]/)[0] ||
+    "";
+  const suggestedTerms = normalizeRelatedTermsList([
+    row.category,
+    row.subcategory,
+    row.productType,
+    row.brand,
+    row.model,
+    row.capacity,
+    row.energyEfficiency,
+    row.origin,
+  ]);
+  const slugSource = suggestedTitle || row.publicName || row.productName;
+  const suggestedSlug = normalizeSlugText(slugSource);
+
+  return {
+    ...(suggestedTitle && !row.seoTitle ? { seoTitle: suggestedTitle } : {}),
+    ...(!row.metaDescription && descriptionSource
+      ? { metaDescription: trimSentence(descriptionSource, 160) }
+      : {}),
+    ...(suggestedSlug ? { slug: suggestedSlug } : {}),
+    ...(!row.relatedTerms.length && suggestedTerms.length
+      ? { relatedTerms: suggestedTerms }
+      : {}),
+  };
+};
+
 const serializePublicationDraft = (row: PublicationRow) =>
   JSON.stringify({
     productId: row.productId,
+    slug: row.slug,
     publicationStatus: row.publicationStatus,
     publicName: row.publicName,
     shortDescription: row.shortDescription,
     longDescription: row.longDescription,
     category: row.category,
+    seoTitle: row.seoTitle,
+    metaDescription: row.metaDescription,
+    subcategory: row.subcategory,
+    productType: row.productType,
+    capacity: row.capacity,
+    energyEfficiency: row.energyEfficiency,
+    warranty: row.warranty,
+    origin: row.origin,
+    relatedTerms: row.relatedTerms,
+    indexable: row.indexable,
+    priority: row.priority,
     featured: row.featured,
     shippingType: row.shippingType,
     normalShippingOverrideAmount: row.normalShippingOverrideAmount,
@@ -1033,6 +1176,7 @@ function PublicationEditorCard({
   const productMeta = [
     row.sku || "Sin codigo",
     row.brand,
+    row.model,
     row.unit,
     row.featured ? "destacado" : null,
   ].filter((item): item is string => Boolean(item));
@@ -1110,6 +1254,26 @@ function PublicationEditorCard({
   );
 }
 
+function RelatedTermsTextarea({
+  terms,
+  onCommit,
+}: {
+  terms: string[];
+  onCommit: (terms: string[]) => void;
+}) {
+  const [draft, setDraft] = useState(terms.join(", "));
+
+  return (
+    <textarea
+      className={`${textareaClass} min-h-[88px]`}
+      placeholder="Separados por coma o salto de linea"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => onCommit(normalizeRelatedTermsList(draft))}
+    />
+  );
+}
+
 function PublicationEditorModal({
   row,
   onChange,
@@ -1150,6 +1314,15 @@ function PublicationEditorModal({
       label: getMercadoPagoRuleLabel(rule),
     })),
   ];
+  const seoTitleLength = row.seoTitle?.length ?? 0;
+  const metaDescriptionLength = row.metaDescription?.length ?? 0;
+  const relatedTermsKey = row.relatedTerms.join("\n");
+  const handleSuggestSeo = () => {
+    const suggestion = buildSeoSuggestion(row);
+    if (Object.keys(suggestion).length) {
+      onChange(suggestion);
+    }
+  };
 
   return (
     <div
@@ -1234,6 +1407,179 @@ function PublicationEditorModal({
                 </div>
               </div>
             </div>
+
+            <section className="rounded-[20px] border border-sky-100 bg-sky-50/35 px-4 py-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <h4 className="text-sm font-semibold text-zinc-950">
+                    SEO y publicacion web
+                  </h4>
+                  <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                    Datos opcionales para que la web tenga mejores titulos, descripcion y atributos publicos.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSuggestSeo}
+                  className="btn shrink-0 gap-1.5 px-3 py-2 text-xs"
+                >
+                  <DocumentTextIcon className="size-4" />
+                  Sugerir con datos reales
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <div className="lg:col-span-2">
+                  <Field
+                    label="Titulo SEO"
+                    helper={`Claro y buscable. ${seoTitleLength}/70 caracteres.`}
+                  >
+                    <input
+                      className={fieldClass}
+                      maxLength={70}
+                      placeholder="Ej. Aire acondicionado split inverter Electra 4500 frigorias"
+                      value={row.seoTitle ?? ""}
+                      onChange={(event) =>
+                        onChange({ seoTitle: event.target.value || null })
+                      }
+                    />
+                  </Field>
+                </div>
+                <Field
+                  label="Slug"
+                  helper="Corto, legible y unico. Se normaliza al guardar."
+                >
+                  <input
+                    className={fieldClass}
+                    placeholder="aire-split-electra-4500"
+                    value={row.slug}
+                    onChange={(event) =>
+                      onChange({ slug: normalizeSlugText(event.target.value) })
+                    }
+                  />
+                </Field>
+
+                <div className="lg:col-span-3">
+                  <Field
+                    label="Meta description"
+                    helper={`Explica el producto en una frase util. ${metaDescriptionLength}/180 caracteres.`}
+                  >
+                    <textarea
+                      className={`${textareaClass} min-h-[88px]`}
+                      maxLength={180}
+                      placeholder="Descripcion breve para resultados de busqueda y asistentes."
+                      value={row.metaDescription ?? ""}
+                      onChange={(event) =>
+                        onChange({
+                          metaDescription: event.target.value || null,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+
+                <Field label="Subcategoria">
+                  <input
+                    className={fieldClass}
+                    placeholder="Split inverter"
+                    value={row.subcategory ?? ""}
+                    onChange={(event) =>
+                      onChange({ subcategory: event.target.value || null })
+                    }
+                  />
+                </Field>
+                <Field label="Tipo de producto">
+                  <input
+                    className={fieldClass}
+                    placeholder="Aire acondicionado"
+                    value={row.productType ?? ""}
+                    onChange={(event) =>
+                      onChange({ productType: event.target.value || null })
+                    }
+                  />
+                </Field>
+                <Field label="Capacidad">
+                  <input
+                    className={fieldClass}
+                    placeholder="4500 frigorias"
+                    value={row.capacity ?? ""}
+                    onChange={(event) =>
+                      onChange({ capacity: event.target.value || null })
+                    }
+                  />
+                </Field>
+                <Field label="Eficiencia energetica">
+                  <input
+                    className={fieldClass}
+                    placeholder="A++"
+                    value={row.energyEfficiency ?? ""}
+                    onChange={(event) =>
+                      onChange({
+                        energyEfficiency: event.target.value || null,
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="Garantia">
+                  <input
+                    className={fieldClass}
+                    placeholder="12 meses"
+                    value={row.warranty ?? ""}
+                    onChange={(event) =>
+                      onChange({ warranty: event.target.value || null })
+                    }
+                  />
+                </Field>
+                <Field label="Origen / linea">
+                  <input
+                    className={fieldClass}
+                    placeholder="Linea residencial"
+                    value={row.origin ?? ""}
+                    onChange={(event) =>
+                      onChange({ origin: event.target.value || null })
+                    }
+                  />
+                </Field>
+
+                <div className="lg:col-span-2">
+                  <Field
+                    label="Terminos relacionados"
+                    helper="Son internos para busqueda y contexto; no son meta keywords."
+                  >
+                    <RelatedTermsTextarea
+                      key={`${row.productId}-${relatedTermsKey}`}
+                      terms={row.relatedTerms}
+                      onCommit={(terms) =>
+                        onChange({
+                          relatedTerms: terms,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+                <div className="grid gap-4">
+                  <MiniToggle
+                    checked={row.indexable}
+                    onChange={() => onChange({ indexable: !row.indexable })}
+                    label="Indexable"
+                    help="Permite que la web indique si este producto debe aparecer en buscadores."
+                  />
+                  <Field
+                    label="Prioridad SEO / sitemap"
+                    helper="Valor entre 0 y 1. Usar mas alto solo en productos importantes."
+                  >
+                    <input
+                      className={fieldClass}
+                      inputMode="decimal"
+                      value={row.priority}
+                      onChange={(event) =>
+                        onChange({ priority: normalizeSeoPriority(event.target.value) })
+                      }
+                    />
+                  </Field>
+                </div>
+              </div>
+            </section>
 
             <div className="pb-4">
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
@@ -1509,12 +1855,16 @@ function PublicationEditorModal({
 
 function PublicationImagesModal({
   row,
+  onChangeImageAlt,
+  onSaveImages,
   onReplaceImages,
   onRemoveImage,
   onClose,
   isWorking,
 }: {
   row: PublicationRow;
+  onChangeImageAlt: (image: PublicationImage, alt: string) => void;
+  onSaveImages: () => void;
   onReplaceImages: (files: File[]) => void;
   onRemoveImage: (image: PublicationImage) => void;
   onClose: () => void;
@@ -1555,6 +1905,15 @@ function PublicationImagesModal({
             </div>
           </div>
           <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onSaveImages}
+              disabled={isWorking || !row.images.length}
+              className="btn min-w-[120px] disabled:pointer-events-none disabled:opacity-60"
+            >
+              <SaveIcon className="size-4" />
+              Guardar alt
+            </button>
             <label
               className={`btn btn-sky cursor-pointer ${
                 isWorking ? "pointer-events-none opacity-70" : ""
@@ -1607,19 +1966,32 @@ function PublicationImagesModal({
                       </span>
                     ) : null}
                   </div>
-                  <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="min-w-0 text-sm font-medium text-zinc-700 truncate">
-                      {image.alt || row.publicName || row.productName}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveImage(image)}
-                      disabled={isWorking}
-                      className="btn shrink-0 gap-1.5 px-3 py-2 text-xs text-rose-700 transition hover:border-rose-200 hover:bg-rose-50 disabled:pointer-events-none disabled:opacity-60"
+                  <div className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <Field
+                      label="Alt text"
+                      helper="Debe describir la imagen real del producto."
                     >
-                      <TrashIcon className="size-4" />
-                      Eliminar
-                    </button>
+                      <input
+                        className="input min-h-[42px] w-full rounded-xl border-zinc-200 px-3 text-sm placeholder:text-zinc-400"
+                        maxLength={180}
+                        placeholder={row.publicName || row.productName}
+                        value={image.alt}
+                        onChange={(event) =>
+                          onChangeImageAlt(image, event.target.value)
+                        }
+                      />
+                    </Field>
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => onRemoveImage(image)}
+                        disabled={isWorking}
+                        className="btn shrink-0 gap-1.5 px-3 py-2 text-xs text-rose-700 transition hover:border-rose-200 hover:bg-rose-50 disabled:pointer-events-none disabled:opacity-60"
+                      >
+                        <TrashIcon className="size-4" />
+                        Eliminar
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -2030,6 +2402,17 @@ export default function StorefrontClient({
           row.images,
           row.publicName || row.productName,
         ),
+        seoTitle: optionalPublicationText(row.seoTitle),
+        metaDescription: optionalPublicationText(row.metaDescription),
+        subcategory: optionalPublicationText(row.subcategory),
+        productType: optionalPublicationText(row.productType),
+        capacity: optionalPublicationText(row.capacity),
+        energyEfficiency: optionalPublicationText(row.energyEfficiency),
+        warranty: optionalPublicationText(row.warranty),
+        origin: optionalPublicationText(row.origin),
+        relatedTerms: normalizeRelatedTermsList(row.relatedTerms),
+        indexable: row.indexable ?? true,
+        priority: normalizeSeoPriority(row.priority),
       }));
       setPublications(normalizedPublications);
       setOrders(ordersJson);
@@ -2332,12 +2715,23 @@ export default function StorefrontClient({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         productId: row.productId,
-        slug: null,
+        slug: row.slug || null,
         publicationStatus: row.publicationStatus,
         publicName: row.publicName,
         shortDescription: row.shortDescription,
         longDescription: row.longDescription,
         category: row.category,
+        seoTitle: row.seoTitle,
+        metaDescription: row.metaDescription,
+        subcategory: row.subcategory,
+        productType: row.productType,
+        capacity: row.capacity,
+        energyEfficiency: row.energyEfficiency,
+        warranty: row.warranty,
+        origin: row.origin,
+        relatedTerms: row.relatedTerms,
+        indexable: row.indexable,
+        priority: row.priority,
         featured: row.featured,
         shippingType: row.shippingType,
         normalShippingOverrideAmount: row.normalShippingOverrideAmount,
@@ -2503,6 +2897,21 @@ export default function StorefrontClient({
     } finally {
       setUploadingPublicationId(null);
     }
+  }
+
+  function handleChangePublicationImageAlt(
+    row: PublicationRow,
+    image: PublicationImage,
+    alt: string,
+  ) {
+    const imageIdentity = image.key || image.url;
+    updatePublication(row.productId, {
+      images: row.images.map((item) =>
+        (item.key || item.url) === imageIdentity
+          ? { ...item, alt: alt.slice(0, 180) }
+          : item,
+      ),
+    });
   }
 
   function updatePublication(productId: string, patch: Partial<PublicationRow>) {
@@ -3198,6 +3607,18 @@ export default function StorefrontClient({
             <PublicationImagesModal
               row={selectedImagePublication}
               onClose={() => setSelectedImagePublicationId(null)}
+              onChangeImageAlt={(image, alt) =>
+                handleChangePublicationImageAlt(
+                  selectedImagePublication,
+                  image,
+                  alt,
+                )
+              }
+              onSaveImages={() =>
+                savePublicationRow(selectedImagePublication, {
+                  successMessage: "Alt text de imagenes guardado.",
+                })
+              }
               onReplaceImages={(files) =>
                 handleReplacePublicationImages(selectedImagePublication, files)
               }

@@ -1517,6 +1517,17 @@ model StorefrontPublication {
   shortDescription             String
   longDescription              String
   category                     String                      @default("General")
+  seoTitle                     String?
+  metaDescription              String?
+  subcategory                  String?
+  productType                  String?
+  capacity                     String?
+  energyEfficiency             String?
+  warranty                     String?
+  origin                       String?
+  relatedTerms                 Json?
+  indexable                    Boolean                     @default(true)
+  priority                     Decimal                     @default(0.5) @db.Decimal(3, 2)
   featured                     Boolean                     @default(false)
   shippingType                 StorefrontShippingType      @default(NORMAL)
   normalShippingOverrideAmount Decimal?                    @db.Decimal(12, 2)

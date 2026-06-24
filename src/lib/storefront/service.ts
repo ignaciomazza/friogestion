@@ -134,12 +134,24 @@ type StorefrontAdminPublicationRow = {
   productName: string;
   sku: string | null;
   brand: string | null;
+  model: string | null;
   unit: string | null;
   slug: string;
   publicName: string;
   shortDescription: string;
   longDescription: string;
   category: string;
+  seoTitle: string | null;
+  metaDescription: string | null;
+  subcategory: string | null;
+  productType: string | null;
+  capacity: string | null;
+  energyEfficiency: string | null;
+  warranty: string | null;
+  origin: string | null;
+  relatedTerms: string[];
+  indexable: boolean;
+  priority: number;
   publicationStatus: "PUBLISHED" | "PAUSED";
   stockMode: "STRICT" | "CONSULT" | "BACKORDER" | "OUT_OF_STOCK";
   webStockAvailable: number;
@@ -198,6 +210,17 @@ type UpsertStorefrontPublicationInput = {
   shortDescription: string;
   longDescription: string;
   category: string;
+  seoTitle?: string | null;
+  metaDescription?: string | null;
+  subcategory?: string | null;
+  productType?: string | null;
+  capacity?: string | null;
+  energyEfficiency?: string | null;
+  warranty?: string | null;
+  origin?: string | null;
+  relatedTerms?: string[];
+  indexable?: boolean;
+  priority?: number | null;
   featured: boolean;
   shippingType: "NORMAL" | "PICKUP" | "OWN_DELIVERY" | "QUOTE" | "RESTRICTED";
   normalShippingOverrideAmount?: number | null;
@@ -670,6 +693,33 @@ const parseTechnicalSheet = (
     .filter((item): item is StorefrontTechnicalSheetItem => item !== null);
 };
 
+const normalizeOptionalPublicationText = (value: string | null | undefined) => {
+  const normalized = compactSpaces(value ?? "");
+  return normalized || null;
+};
+
+const normalizeRelatedTerms = (
+  value: Prisma.JsonValue | string[] | null | undefined,
+): string[] => {
+  if (!Array.isArray(value)) return [];
+
+  const terms = value
+    .map((item) => compactSpaces(String(item ?? "")).slice(0, 80))
+    .filter(Boolean);
+
+  return Array.from(
+    new Map(
+      terms.map((term) => [term.toLocaleLowerCase("es-AR"), term]),
+    ).values(),
+  ).slice(0, 24);
+};
+
+const normalizeSeoPriority = (value: number | null | undefined) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0.5;
+  return Math.max(0, Math.min(1, Number(parsed.toFixed(2))));
+};
+
 const parseStoredImages = (
   value: Prisma.JsonValue | StorefrontProductImage[] | null | undefined,
   name: string,
@@ -927,8 +977,25 @@ const publicationMatchesSearch = (
 ) => {
   const normalized = normalizeSearchText(rawQuery);
   if (!normalized) return true;
+  const publicationText = normalizeSearchText(
+    [
+      publication.seoTitle,
+      publication.metaDescription,
+      publication.category,
+      publication.subcategory,
+      publication.productType,
+      publication.capacity,
+      publication.energyEfficiency,
+      publication.warranty,
+      publication.origin,
+      ...normalizeRelatedTerms(publication.relatedTerms),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 
   return (
+    publicationText.includes(normalized) ||
     scoreProductSearchMatch(
       {
         id: publication.productId,
@@ -962,6 +1029,14 @@ const buildPublicationSearchWhere = (
     OR: terms.flatMap((term) => [
       { publicName: { contains: term, mode: "insensitive" } },
       { category: { contains: term, mode: "insensitive" } },
+      { seoTitle: { contains: term, mode: "insensitive" } },
+      { metaDescription: { contains: term, mode: "insensitive" } },
+      { subcategory: { contains: term, mode: "insensitive" } },
+      { productType: { contains: term, mode: "insensitive" } },
+      { capacity: { contains: term, mode: "insensitive" } },
+      { energyEfficiency: { contains: term, mode: "insensitive" } },
+      { warranty: { contains: term, mode: "insensitive" } },
+      { origin: { contains: term, mode: "insensitive" } },
       {
         product: {
           is: {
@@ -1033,8 +1108,19 @@ const storefrontProductFromPublication = (
     publicName: publication.publicName,
     shortDescription: publication.shortDescription,
     longDescription: publication.longDescription,
+    seoTitle: publication.seoTitle,
+    metaDescription: publication.metaDescription,
     images: parseImages(publication.images, slug, publication.publicName),
     category: publication.category,
+    subcategory: publication.subcategory,
+    productType: publication.productType,
+    capacity: publication.capacity,
+    energyEfficiency: publication.energyEfficiency,
+    warranty: publication.warranty,
+    origin: publication.origin,
+    relatedTerms: normalizeRelatedTerms(publication.relatedTerms),
+    indexable: publication.indexable,
+    priority: normalizeSeoPriority(toNumber(publication.priority)),
     brand: publication.product.brand,
     model: publication.product.model,
     technicalSheet: parseTechnicalSheet(publication.technicalSheet),
@@ -2835,6 +2921,7 @@ export async function listStorefrontAdminPublications(
         productName: product.name,
         sku: product.sku,
         brand: product.brand,
+        model: product.model,
         unit: product.unit,
         slug: publication?.slug ?? derivedSlug,
         publicName: publication?.publicName ?? product.name,
@@ -2842,6 +2929,17 @@ export async function listStorefrontAdminPublications(
           publication?.shortDescription ?? (product.model ? compactSpaces(product.model) : ""),
         longDescription: publication?.longDescription ?? "",
         category: publication?.category ?? "General",
+        seoTitle: publication?.seoTitle ?? null,
+        metaDescription: publication?.metaDescription ?? null,
+        subcategory: publication?.subcategory ?? null,
+        productType: publication?.productType ?? null,
+        capacity: publication?.capacity ?? null,
+        energyEfficiency: publication?.energyEfficiency ?? null,
+        warranty: publication?.warranty ?? null,
+        origin: publication?.origin ?? null,
+        relatedTerms: normalizeRelatedTerms(publication?.relatedTerms ?? null),
+        indexable: publication?.indexable ?? true,
+        priority: normalizeSeoPriority(toNumber(publication?.priority ?? 0.5)),
         publicationStatus: publication?.publicationStatus ?? "PAUSED",
         stockMode: publication?.stockMode ?? "STRICT",
         webStockAvailable: publication?.webStockAvailable ?? 0,
@@ -2930,6 +3028,7 @@ export async function upsertStorefrontAdminPublication(
     input.images,
     input.publicName || product.name,
   );
+  const normalizedRelatedTerms = normalizeRelatedTerms(input.relatedTerms);
 
   const data: Prisma.StorefrontPublicationUncheckedCreateInput = {
     organizationId,
@@ -2963,6 +3062,41 @@ export async function upsertStorefrontAdminPublication(
     isFlammable: Boolean(input.flags?.isFlammable),
     hasSpecialLogistics: Boolean(input.flags?.hasSpecialLogistics),
   };
+  if (input.seoTitle !== undefined) {
+    data.seoTitle = normalizeOptionalPublicationText(input.seoTitle);
+  }
+  if (input.metaDescription !== undefined) {
+    data.metaDescription = normalizeOptionalPublicationText(input.metaDescription);
+  }
+  if (input.subcategory !== undefined) {
+    data.subcategory = normalizeOptionalPublicationText(input.subcategory);
+  }
+  if (input.productType !== undefined) {
+    data.productType = normalizeOptionalPublicationText(input.productType);
+  }
+  if (input.capacity !== undefined) {
+    data.capacity = normalizeOptionalPublicationText(input.capacity);
+  }
+  if (input.energyEfficiency !== undefined) {
+    data.energyEfficiency = normalizeOptionalPublicationText(input.energyEfficiency);
+  }
+  if (input.warranty !== undefined) {
+    data.warranty = normalizeOptionalPublicationText(input.warranty);
+  }
+  if (input.origin !== undefined) {
+    data.origin = normalizeOptionalPublicationText(input.origin);
+  }
+  if (input.relatedTerms !== undefined) {
+    data.relatedTerms = normalizedRelatedTerms.length
+      ? (normalizedRelatedTerms as Prisma.InputJsonValue)
+      : Prisma.JsonNull;
+  }
+  if (input.indexable !== undefined) {
+    data.indexable = input.indexable;
+  }
+  if (input.priority !== undefined) {
+    data.priority = normalizeSeoPriority(input.priority).toFixed(2);
+  }
   if (input.images !== undefined) {
     data.images = normalizedImages.length
       ? (normalizedImages as Prisma.InputJsonValue)
