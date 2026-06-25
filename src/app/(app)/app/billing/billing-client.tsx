@@ -314,6 +314,7 @@ export default function BillingClient({
     EditableInvoiceItem[]
   >([]);
   const [isSavingInvoiceSale, setIsSavingInvoiceSale] = useState(false);
+  const [markingInternalSaleId, setMarkingInternalSaleId] = useState<string | null>(null);
   const [invoiceToCancel, setInvoiceToCancel] = useState<IssuedInvoiceRow | null>(null);
   const [creditNoteStep, setCreditNoteStep] = useState<"FORM" | "CONFIRM">("FORM");
   const [creditPreview, setCreditPreview] = useState<CreditNotePreview | null>(null);
@@ -1609,6 +1610,50 @@ export default function BillingClient({
     window.location.href = `/api/billing/report?${params.toString()}`;
   };
 
+  const markSaleAsInternal = async (sale: SaleRow) => {
+    if (
+      !window.confirm(
+        "Marcar esta venta como registro interno? Dejaria de figurar como pendiente de facturacion.",
+      )
+    ) {
+      return;
+    }
+
+    setMarkingInternalSaleId(sale.id);
+    setInvoiceStatus(null);
+    try {
+      const res = await fetch("/api/sales", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: sale.id,
+          billingStatus: "NOT_BILLED",
+          note: "Marcada como registro interno desde Facturacion",
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setInvoiceStatus(
+          typeof data?.error === "string"
+            ? data.error
+            : "No se pudo marcar como registro interno",
+        );
+        return;
+      }
+
+      const updatedSale = data as SaleRow;
+      setSales((prev) =>
+        prev.map((item) => (item.id === updatedSale.id ? updatedSale : item)),
+      );
+      setInvoiceStatus("Venta marcada como registro interno.");
+      setInvoiceWarnings([]);
+    } catch {
+      setInvoiceStatus("No se pudo marcar como registro interno");
+    } finally {
+      setMarkingInternalSaleId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -2000,15 +2045,6 @@ export default function BillingClient({
                             </td>
                             <td className="py-2 pr-4 text-right">
                               <div className="flex flex-wrap items-center justify-end gap-2">
-                                <a
-                                  className="btn text-xs"
-                                  href={`/api/pdf/sale?id=${sale.id}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                >
-                                  <ArrowDownTrayIcon className="size-4" />
-                                  PDF venta
-                                </a>
                                 <WhatsappPdfButton
                                   documentType="sale"
                                   documentId={sale.id}
@@ -2021,6 +2057,16 @@ export default function BillingClient({
                                   customerPhone={sale.customerPhone}
                                   className="btn btn-emerald text-xs"
                                 />
+                                <button
+                                  type="button"
+                                  className="btn btn-rose text-xs"
+                                  onClick={() => void markSaleAsInternal(sale)}
+                                  disabled={markingInternalSaleId === sale.id}
+                                >
+                                  {markingInternalSaleId === sale.id
+                                    ? "Guardando..."
+                                    : "No facturar"}
+                                </button>
                                 <button
                                   type="button"
                                   className="btn btn-emerald text-xs"

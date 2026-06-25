@@ -13,6 +13,7 @@ import {
   calculateSaleAdjustment,
   type ExtraChargeTypeValue,
 } from "@/lib/sale-adjustments";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 const quoteItemSchema = z.object({
   productId: z.string().min(1),
@@ -340,7 +341,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = quoteSchema.parse(await req.json());
 
@@ -427,7 +428,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      return tx.quote.create({
+      const created = await tx.quote.create({
         data: {
           organizationId,
           customerId: body.customerId,
@@ -461,6 +462,23 @@ export async function POST(req: NextRequest) {
         },
         include: { customer: true, priceList: true },
       });
+
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "QUOTE",
+        entityId: created.id,
+        action: "QUOTE_CREATED",
+        summary: `Presupuesto ${created.quoteNumber ?? created.id} creado`,
+        after: {
+          quoteNumber: created.quoteNumber,
+          customerId: body.customerId,
+          status,
+          total: total.toFixed(2),
+        },
+      });
+
+      return created;
     });
 
     return NextResponse.json({
@@ -504,7 +522,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = quoteUpdateSchema.parse(await req.json());
 
@@ -596,7 +614,7 @@ export async function PATCH(req: NextRequest) {
       }
 
       await tx.quoteItem.deleteMany({ where: { quoteId: body.id } });
-      return tx.quote.update({
+      const updated = await tx.quote.update({
         where: { id: body.id },
         data: {
           customerId: body.customerId,
@@ -630,6 +648,29 @@ export async function PATCH(req: NextRequest) {
         },
         include: { customer: true, priceList: true },
       });
+
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "QUOTE",
+        entityId: updated.id,
+        action: "QUOTE_UPDATED",
+        summary: `Presupuesto ${updated.quoteNumber ?? updated.id} actualizado`,
+        before: {
+          quoteNumber: existing.quoteNumber,
+          customerId: existing.customerId,
+          status: existing.status,
+          total: existing.total?.toString() ?? null,
+        },
+        after: {
+          quoteNumber: updated.quoteNumber,
+          customerId: updated.customerId,
+          status: updated.status,
+          total: updated.total?.toString() ?? null,
+        },
+      });
+
+      return updated;
     });
 
     return NextResponse.json({
@@ -676,7 +717,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const id = req.nextUrl.searchParams.get("id");
     if (!id) {
@@ -703,6 +744,21 @@ export async function DELETE(req: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "QUOTE",
+        entityId: id,
+        action: "QUOTE_DELETED",
+        summary: `Presupuesto ${existing.quoteNumber ?? existing.id} eliminado`,
+        before: {
+          quoteNumber: existing.quoteNumber,
+          customerId: existing.customerId,
+          status: existing.status,
+          total: existing.total?.toString() ?? null,
+        },
+      });
+
       await tx.quoteItem.deleteMany({
         where: { quoteId: id },
       });

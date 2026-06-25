@@ -4,7 +4,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
-import { ADMIN_ROLES, WRITE_ROLES } from "@/lib/auth/rbac";
+import { WRITE_ROLES } from "@/lib/auth/rbac";
 import { parseOptionalDate } from "@/lib/validation";
 import {
   buildSaleOutMovements,
@@ -28,6 +28,7 @@ import {
   salesOrderBy,
   serializeSaleListItem,
 } from "@/lib/sales/list";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 const saleItemSchema = z.object({
   productId: z.string().min(1),
@@ -311,7 +312,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = saleSchema.parse(await req.json());
 
@@ -468,6 +469,21 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "SALE",
+        entityId: created.id,
+        action: "SALE_CREATED",
+        summary: `Venta ${created.saleNumber ?? created.id} creada`,
+        after: {
+          saleNumber: created.saleNumber,
+          customerId: body.customerId,
+          billingStatus,
+          total: total.toFixed(2),
+        },
+      });
+
       return created;
     });
 
@@ -510,7 +526,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const { payload, membership } = await requireRole(req, [...ADMIN_ROLES]);
+    const { payload, membership } = await requireRole(req, [...WRITE_ROLES]);
     const body = saleUpdateSchema.parse(await req.json());
 
     const existing = await prisma.sale.findFirst({
@@ -726,6 +742,41 @@ export async function PATCH(req: NextRequest) {
         },
       });
 
+      const billingChanged =
+        body.billingStatus && body.billingStatus !== existing.billingStatus;
+      const summary = billingChanged
+        ? body.billingStatus === "NOT_BILLED"
+          ? `Venta ${updated.saleNumber ?? updated.id} marcada como registro interno`
+          : `Venta ${updated.saleNumber ?? updated.id} marcada como pendiente de facturacion`
+        : pricingUpdate
+          ? `Importes de venta ${updated.saleNumber ?? updated.id} actualizados`
+          : `Venta ${updated.saleNumber ?? updated.id} actualizada`;
+
+      await recordOperationEvent(tx, {
+        organizationId: membership.organizationId,
+        actorUserId: payload.userId,
+        entityType: "SALE",
+        entityId: updated.id,
+        action: billingChanged ? "SALE_BILLING_STATUS_UPDATED" : "SALE_UPDATED",
+        summary,
+        before: {
+          saleNumber: existing.saleNumber,
+          saleDate: existing.saleDate,
+          billingStatus: existing.billingStatus,
+          subtotal: existing.subtotal?.toString() ?? null,
+          taxes: existing.taxes?.toString() ?? null,
+          total: existing.total?.toString() ?? null,
+        },
+        after: {
+          saleNumber: updated.saleNumber,
+          saleDate: updated.saleDate,
+          billingStatus: updated.billingStatus,
+          subtotal: updated.subtotal?.toString() ?? null,
+          taxes: updated.taxes?.toString() ?? null,
+          total: updated.total?.toString() ?? null,
+        },
+      });
+
       const hydrated = await tx.sale.findUnique({
         where: { id: updated.id },
         include: {
@@ -784,7 +835,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...ADMIN_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const id = req.nextUrl.searchParams.get("id");
     if (!id) {
@@ -796,6 +847,7 @@ export async function DELETE(req: NextRequest) {
       select: {
         id: true,
         quoteId: true,
+        saleNumber: true,
         billingStatus: true,
         fiscalInvoice: { select: { id: true } },
         fiscalInvoiceIssueJob: { select: { id: true, status: true } },
@@ -841,6 +893,21 @@ export async function DELETE(req: NextRequest) {
     }
 
     await prisma.$transaction(async (tx) => {
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "SALE",
+        entityId: id,
+        action: "SALE_DELETED",
+        summary: `Venta ${existing.saleNumber ?? existing.id} eliminada`,
+        before: {
+          id: existing.id,
+          quoteId: existing.quoteId,
+          saleNumber: existing.saleNumber,
+          billingStatus: existing.billingStatus,
+        },
+      });
+
       await tx.stockMovement.deleteMany({
         where: {
           organizationId,

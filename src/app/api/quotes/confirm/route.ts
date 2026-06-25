@@ -9,6 +9,7 @@ import { buildSaleOutMovements } from "@/lib/stock";
 import { STOCK_ENABLED } from "@/lib/features";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 const confirmSchema = z.object({
   id: z.string().min(1),
@@ -191,6 +192,40 @@ export async function POST(req: NextRequest) {
           await tx.stockMovement.createMany({ data: saleStock });
         }
       }
+
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "QUOTE",
+        entityId: quote.id,
+        action: "QUOTE_CONFIRMED",
+        summary: `Presupuesto ${quote.quoteNumber ?? quote.id} confirmado como venta`,
+        before: {
+          quoteNumber: quote.quoteNumber,
+          status: quote.status,
+        },
+        after: {
+          status: "ACCEPTED",
+          saleId: created.id,
+          saleNumber: created.saleNumber,
+        },
+      });
+
+      await recordOperationEvent(tx, {
+        organizationId,
+        actorUserId: payload.userId,
+        entityType: "SALE",
+        entityId: created.id,
+        action: "SALE_CREATED_FROM_QUOTE",
+        summary: `Venta ${created.saleNumber ?? created.id} creada desde presupuesto`,
+        after: {
+          quoteId: quote.id,
+          quoteNumber: quote.quoteNumber,
+          customerId: quote.customerId,
+          billingStatus: body.billingStatus ?? "TO_BILL",
+          total: total.toFixed(2),
+        },
+      });
 
       return created;
     });

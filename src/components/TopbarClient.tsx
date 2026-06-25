@@ -167,6 +167,12 @@ const NAV_SECTIONS: NavSection[] = [
         roles: [...ADMIN_ENTRY_ROLES],
       },
       {
+        href: "/app/history",
+        label: "Historial",
+        Icon: InformationCircleIcon,
+        roles: [...ADMIN_ROLES],
+      },
+      {
         href: "/app/developer",
         label: "Developer",
         Icon: InformationCircleIcon,

@@ -82,8 +82,12 @@ export default function SalesClient({
   const didMountRef = useRef(false);
 
   const canManage = useMemo(
-    () => role === "OWNER" || role === "ADMIN",
+    () => role === "OWNER" || role === "ADMIN" || role === "SALES",
     [role]
+  );
+  const canViewActivity = useMemo(
+    () => role === "OWNER" || role === "ADMIN",
+    [role],
   );
 
   const loadSales = useCallback(
@@ -383,7 +387,7 @@ export default function SalesClient({
         onReceiptsUpdated={reloadLoadedSales}
       />
 
-      {canManage ? (
+      {canViewActivity ? (
         <div className="card p-0 border-dashed border-sky-200">
           <button
             type="button"

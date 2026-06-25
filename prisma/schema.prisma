@@ -355,6 +355,7 @@ model Organization {
   quotes                       Quote[]
   sales                        Sale[]
   saleEvents                   SaleEvent[]
+  operationEvents              OperationEvent[]
   saleCharges                  SaleCharge[]
   receipts                     Receipt[]
   accountMoves                 AccountMovement[]
@@ -396,6 +397,7 @@ model User {
 
   memberships                Membership[]
   saleEvents                 SaleEvent[]
+  operationEvents            OperationEvent[]
   receiptsCreated            Receipt[]                  @relation("ReceiptCreatedBy")
   receiptsConfirmed          Receipt[]                  @relation("ReceiptConfirmedBy")
   accountMovementsVerified   AccountMovement[]          @relation("AccountMovementVerifiedBy")
@@ -829,6 +831,29 @@ model SaleEvent {
   @@index([organizationId])
   @@index([saleId])
   @@index([actorUserId])
+}
+
+model OperationEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  actorUserId    String?
+  entityType     String
+  entityId       String
+  action         String
+  summary        String
+  before         Json?
+  after          Json?
+  metadata       Json?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  actor        User?        @relation(fields: [actorUserId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@index([actorUserId])
+  @@index([expiresAt])
 }
 
 model Receipt {

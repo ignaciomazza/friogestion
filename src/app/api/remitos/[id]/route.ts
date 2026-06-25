@@ -8,6 +8,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { mapDeliveryNote } from "@/lib/remitos-response";
 import { updateDeliveryNote } from "@/lib/remitos";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 export const runtime = "nodejs";
 
@@ -69,7 +70,7 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const params = await context.params;
     const body = patchSchema.parse(await req.json());
@@ -152,6 +153,23 @@ export async function PATCH(
       observations: body.observations,
       digitalRepresentation: body.digitalRepresentation,
       items: body.items,
+    });
+
+    await recordOperationEvent(prisma, {
+      organizationId,
+      actorUserId: payload.userId,
+      entityType: "DELIVERY_NOTE",
+      entityId: note.id,
+      action: "DELIVERY_NOTE_UPDATED",
+      summary: `Remito ${note.type} ${note.number ?? note.id} actualizado`,
+      after: {
+        type: note.type,
+        status: note.status,
+        saleId: note.saleId,
+        purchaseInvoiceId: note.purchaseInvoiceId,
+        customerId: note.customerId,
+        supplierId: note.supplierId,
+      },
     });
 
     return NextResponse.json(mapDeliveryNote(note));

@@ -8,6 +8,7 @@ import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
 import { logServerError } from "@/lib/server/log";
 import { createDeliveryNote } from "@/lib/remitos";
 import { mapDeliveryNote } from "@/lib/remitos-response";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 export const runtime = "nodejs";
 
@@ -64,7 +65,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const { membership } = await requireRole(req, [...WRITE_ROLES]);
+    const { membership, payload } = await requireRole(req, [...WRITE_ROLES]);
     const organizationId = membership.organizationId;
     const body = createSchema.parse(await req.json());
     const pointOfSale = 1;
@@ -149,6 +150,23 @@ export async function POST(req: NextRequest) {
       observations: body.observations ?? null,
       digitalRepresentation: body.digitalRepresentation,
       items: body.items,
+    });
+
+    await recordOperationEvent(prisma, {
+      organizationId,
+      actorUserId: payload.userId,
+      entityType: "DELIVERY_NOTE",
+      entityId: note.id,
+      action: "DELIVERY_NOTE_CREATED",
+      summary: `Remito ${note.type} ${note.number ?? note.id} creado`,
+      after: {
+        type: note.type,
+        status: note.status,
+        saleId: note.saleId,
+        purchaseInvoiceId: note.purchaseInvoiceId,
+        customerId: note.customerId,
+        supplierId: note.supplierId,
+      },
     });
 
     return NextResponse.json(mapDeliveryNote(note));

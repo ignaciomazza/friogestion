@@ -36,16 +36,37 @@ export default async function BillingPage() {
     redirect("/app");
   }
 
-  const sales = await prisma.sale.findMany({
-    where: { organizationId: membership.organizationId },
-    include: {
-      customer: true,
-      items: { include: { product: true } },
-      saleCharges: { select: { amount: true } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 80,
-  });
+  const saleInclude = {
+    customer: true,
+    items: { include: { product: true } },
+    saleCharges: { select: { amount: true } },
+  } as const;
+  const [toBillSales, billedSales] = await Promise.all([
+    prisma.sale.findMany({
+      where: {
+        organizationId: membership.organizationId,
+        billingStatus: "TO_BILL",
+      },
+      include: saleInclude,
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    }),
+    prisma.sale.findMany({
+      where: {
+        organizationId: membership.organizationId,
+        billingStatus: "BILLED",
+      },
+      include: saleInclude,
+      orderBy: { createdAt: "desc" },
+      take: 120,
+    }),
+  ]);
+  const sales = [
+    ...toBillSales,
+    ...billedSales.filter(
+      (sale) => !toBillSales.some((pending) => pending.id === sale.id),
+    ),
+  ];
   const fiscalInvoices = await prisma.fiscalInvoice.findMany({
     where: { organizationId: membership.organizationId },
     include: {

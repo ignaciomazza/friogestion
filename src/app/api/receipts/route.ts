@@ -4,10 +4,10 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
-import { ADMIN_ROLES } from "@/lib/auth/rbac";
 import { parseOptionalDate } from "@/lib/validation";
 import { applyReceiptToInstallments } from "@/lib/installments";
 import { backfillPendingReceipts, recalcSaleTotals } from "@/lib/receipts/backfill";
+import { recordOperationEvent } from "@/lib/operation-events";
 
 const lineSchema = z.object({
   paymentMethodId: z.string().min(1),
@@ -28,7 +28,7 @@ const receiptUpdateSchema = receiptSchema.extend({
 });
 
 const ALLOWED_ROLES = ["OWNER", "ADMIN", "SALES"];
-const MANAGE_ROLES = [...ADMIN_ROLES];
+const MANAGE_ROLES = ALLOWED_ROLES;
 
 type ReceiptLineInput = z.infer<typeof lineSchema>;
 type ReceiptWithLines = Prisma.ReceiptGetPayload<{
@@ -332,6 +332,28 @@ export async function POST(req: NextRequest) {
       );
       await recalcSaleTotals(tx, sale.id);
 
+      await recordOperationEvent(tx, {
+        organizationId: membership.organizationId,
+        actorUserId: payload.userId,
+        entityType: "RECEIPT",
+        entityId: created.id,
+        action: "RECEIPT_CREATED",
+        summary: `Cobro ${created.receiptNumber ?? created.id} registrado`,
+        after: {
+          saleId: sale.id,
+          customerId: sale.customerId,
+          total: totalBase.toFixed(2),
+          receivedAt,
+          lines: lines.map((line) => ({
+            paymentMethodId: line.paymentMethodId,
+            accountId: line.accountId,
+            currencyCode: line.currencyCode,
+            amount: line.amount,
+            amountBase: line.amountBase,
+          })),
+        },
+      });
+
       return created;
     });
 
@@ -518,6 +540,33 @@ export async function PATCH(req: NextRequest) {
         });
       }
 
+      await recordOperationEvent(tx, {
+        organizationId: membership.organizationId,
+        actorUserId: payload.userId,
+        entityType: "RECEIPT",
+        entityId: receipt.id,
+        action: "RECEIPT_UPDATED",
+        summary: `Cobro ${receipt.receiptNumber ?? receipt.id} editado`,
+        before: {
+          saleId: receipt.saleId,
+          total: receipt.total.toString(),
+          receivedAt: receipt.receivedAt,
+          lineCount: receipt.lines.length,
+        },
+        after: {
+          saleId: receipt.saleId,
+          total: totalBase.toFixed(2),
+          receivedAt,
+          lines: lines.map((line) => ({
+            paymentMethodId: line.paymentMethodId,
+            accountId: line.accountId,
+            currencyCode: line.currencyCode,
+            amount: line.amount,
+            amountBase: line.amountBase,
+          })),
+        },
+      });
+
       return saved;
     });
 
@@ -632,6 +681,21 @@ export async function DELETE(req: NextRequest) {
           },
         });
       }
+
+      await recordOperationEvent(tx, {
+        organizationId: membership.organizationId,
+        actorUserId: payload.userId,
+        entityType: "RECEIPT",
+        entityId: receipt.id,
+        action: "RECEIPT_DELETED",
+        summary: `Cobro ${receipt.receiptNumber ?? receipt.id} eliminado`,
+        before: {
+          saleId: receipt.saleId,
+          total: receipt.total.toString(),
+          receivedAt: receipt.receivedAt,
+          lineCount: receipt.lines.length,
+        },
+      });
     });
 
     return NextResponse.json({ ok: true });

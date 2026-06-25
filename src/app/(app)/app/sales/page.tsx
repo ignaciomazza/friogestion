@@ -12,7 +12,7 @@ import {
   serializeSaleListItem,
 } from "@/lib/sales/list";
 
-const MANAGE_ROLES = ["OWNER", "ADMIN"];
+const ACTIVITY_ROLES = ["OWNER", "ADMIN"];
 
 export default async function SalesPage() {
   const token = (await cookies()).get(AUTH_COOKIE_NAME)?.value;
@@ -44,7 +44,7 @@ export default async function SalesPage() {
     redirect("/app");
   }
 
-  const canManage = MANAGE_ROLES.includes(membership.role);
+  const canViewActivity = ACTIVITY_ROLES.includes(membership.role);
   await backfillPendingReceipts(membership.organizationId, payload.userId);
 
   const [sales, stats, events, paymentMethods, accounts, currencies, rate] =
@@ -56,7 +56,7 @@ export default async function SalesPage() {
       take: SALES_PAGE_SIZE,
     }),
     getSalesStatsSummary(membership.organizationId),
-    canManage
+    canViewActivity
       ? prisma.saleEvent.findMany({
           where: { organizationId: membership.organizationId },
           include: {
@@ -100,7 +100,7 @@ export default async function SalesPage() {
       }
       initialHasMore={sales.length < stats.totalSales}
       initialEvents={
-        canManage
+        canViewActivity
           ? events.map((event) => ({
               id: event.id,
               saleId: event.saleId,
