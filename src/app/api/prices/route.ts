@@ -36,6 +36,11 @@ const nullableNumber = z.preprocess(
   z.union([z.coerce.number(), z.null()]),
 );
 
+const normalizeStoredMoney = (value: number | null | undefined) => {
+  if (value === null || value === undefined || value <= 0) return null;
+  return value.toFixed(2);
+};
+
 const stockPatchSchema = z.object({
   productId: z.string().min(1),
   cost: nullableNonNegativeNumber.optional(),
@@ -336,10 +341,10 @@ export async function PATCH(req: NextRequest) {
           where: { id: body.productId },
           data: {
             ...(body.cost !== undefined
-              ? { cost: body.cost === null ? null : body.cost.toFixed(2) }
+              ? { cost: normalizeStoredMoney(body.cost) }
               : {}),
             ...(body.costUsd !== undefined
-              ? { costUsd: body.costUsd === null ? null : body.costUsd.toFixed(2) }
+              ? { costUsd: normalizeStoredMoney(body.costUsd) }
               : {}),
           },
         });
@@ -353,9 +358,10 @@ export async function PATCH(req: NextRequest) {
         }
 
         const nextPrice = update.price;
+        const nextStoredPrice = normalizeStoredMoney(nextPrice);
         const nextPercentage = update.percentage;
         const shouldDeletePriceItem =
-          nextPrice === null &&
+          nextStoredPrice === null &&
           (nextPercentage === undefined || nextPercentage === null);
         if (shouldDeletePriceItem) {
           await tx.priceListItem.deleteMany({
@@ -373,7 +379,7 @@ export async function PATCH(req: NextRequest) {
               },
             },
             update: {
-              price: nextPrice === null ? null : nextPrice.toFixed(2),
+              price: nextStoredPrice,
               ...(nextPercentage !== undefined
                 ? {
                     percentage:
@@ -384,7 +390,7 @@ export async function PATCH(req: NextRequest) {
             create: {
               priceListId,
               productId: body.productId,
-              price: nextPrice === null ? null : nextPrice.toFixed(2),
+              price: nextStoredPrice,
               ...(nextPercentage !== undefined
                 ? {
                     percentage:
@@ -399,7 +405,7 @@ export async function PATCH(req: NextRequest) {
           await tx.product.update({
             where: { id: body.productId },
             data: {
-              price: nextPrice === null ? null : nextPrice.toFixed(2),
+              price: nextStoredPrice,
             },
           });
         }

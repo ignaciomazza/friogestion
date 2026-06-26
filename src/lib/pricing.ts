@@ -13,10 +13,16 @@ const toNumber = (value: string | null | undefined) => {
   return parsed;
 };
 
+const toPositiveNumber = (value: string | null | undefined) => {
+  const parsed = toNumber(value);
+  if (parsed === null || parsed <= 0) return null;
+  return parsed;
+};
+
 const validPrice = (value: string | null | undefined) => {
   if (!value) return null;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return value;
 };
 
@@ -187,9 +193,9 @@ const deriveDynamicUsdListPrice = ({
   productCostUsd: string | null | undefined;
   usdRateArs: number;
 }) => {
-  const costUsd = toNumber(productCostUsd);
+  const costUsd = toPositiveNumber(productCostUsd);
   if (costUsd === null) return null;
-  if (costUsd < 0 || usdRateArs <= 0) return null;
+  if (usdRateArs <= 0) return null;
 
   return deriveListPriceFromBaseCost({
     prices,
@@ -239,7 +245,7 @@ export const resolveSuggestedProductPrice = ({
       Boolean(chosenPriceListId) &&
       Boolean(usdRateArs && usdRateArs > 0) &&
       Boolean(orderedPriceListIds.length) &&
-      (selectedCostCurrency === "USD" || toNumber(productCost) === null);
+      (selectedCostCurrency === "USD" || toPositiveNumber(productCost) === null);
 
     if (shouldTryUsdDynamicPrice && chosenPriceListId && usdRateArs) {
       const dynamicPrice = deriveDynamicUsdListPrice({
@@ -259,7 +265,7 @@ export const resolveSuggestedProductPrice = ({
       productCost &&
       orderedPriceListIds.length
     ) {
-      const costArs = toNumber(validPrice(productCost));
+      const costArs = toPositiveNumber(validPrice(productCost));
       const dynamicPrice =
         costArs === null
           ? null

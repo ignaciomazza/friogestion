@@ -243,6 +243,18 @@ const parseNumber = (value: string | null | undefined) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parsePositivePriceNumber = (value: string | null | undefined) => {
+  const parsed = parseNumber(value);
+  if (parsed === null || parsed <= 0) return null;
+  return parsed;
+};
+
+const normalizeStoredPriceString = (value: string | null | undefined) =>
+  parsePositivePriceNumber(value) === null ? null : value;
+
+const normalizeDraftCostValue = (value: string | null | undefined) =>
+  normalizeStoredPriceString(value) ?? "";
+
 const parsePositiveNumber = (value: string | number | null | undefined) => {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -339,8 +351,8 @@ const getProductPriceForList = (
   const explicit = product.prices.find(
     (price) => price.priceListId === priceList.id,
   )?.price;
-  if (explicit !== undefined) return explicit;
-  if (priceList.isDefault) return product.price ?? "";
+  if (explicit !== undefined) return normalizeStoredPriceString(explicit) ?? "";
+  if (priceList.isDefault) return normalizeStoredPriceString(product.price) ?? "";
   return "";
 };
 
@@ -397,8 +409,8 @@ const derivePercentagesFromPrices = (
 ) => {
   const derived: Record<string, string> = {};
   const effectiveCost =
-    parseNumber(product.cost) ??
-    convertUsdCostToArs(parseNumber(product.costUsd), latestUsdRate);
+    parsePositivePriceNumber(product.cost) ??
+    convertUsdCostToArs(parsePositivePriceNumber(product.costUsd), latestUsdRate);
   const defaultPriceList = resolveDefaultPriceList(priceLists);
   const defaultStoredPercentage =
     defaultPriceList === null
@@ -414,9 +426,19 @@ const derivePercentagesFromPrices = (
 
   for (const priceList of priceLists) {
     const storedPercentage = getProductPercentageForList(product, priceList);
-    const listPrice = parseNumber(getProductPriceForList(product, priceList));
+    const listPrice = parsePositivePriceNumber(
+      getProductPriceForList(product, priceList),
+    );
 
     if (storedPercentage !== null) {
+      if (
+        normalizePercentageNumber(storedPercentage) === 0 &&
+        effectiveCost === null &&
+        listPrice === null
+      ) {
+        derived[priceList.id] = "";
+        continue;
+      }
       derived[priceList.id] = formatPercentageValue(Number(storedPercentage));
       continue;
     }
@@ -446,8 +468,8 @@ const getStockRowChangeState = (
   priceLists: PriceListOption[],
   latestUsdRate: number | null,
 ): StockRowChangeState => {
-  const currentCost = parseNumber(draft.cost);
-  const currentCostUsd = parseNumber(draft.costUsd);
+  const currentCost = parsePositivePriceNumber(draft.cost);
+  const currentCostUsd = parsePositivePriceNumber(draft.costUsd);
   const currentCostUsdArs = convertUsdCostToArs(currentCostUsd, latestUsdRate);
   const effectiveCost = resolveEffectiveCost({
     cost: currentCost,
@@ -471,10 +493,10 @@ const getStockRowChangeState = (
   );
   const costChanged =
     normalizePriceNumber(currentCost) !==
-    normalizePriceNumber(parseNumber(product.cost));
+    normalizePriceNumber(parsePositivePriceNumber(product.cost));
   const costUsdChanged =
     normalizePriceNumber(currentCostUsd) !==
-    normalizePriceNumber(parseNumber(product.costUsd));
+    normalizePriceNumber(parsePositivePriceNumber(product.costUsd));
   const derivedPercentages = derivePercentagesFromPrices(
     product,
     priceLists,
@@ -937,11 +959,11 @@ export default function PricesPage() {
         cost:
           shouldKeepEditableDraft && previousDraft
             ? previousDraft.cost
-            : (product.cost ?? ""),
+            : normalizeDraftCostValue(product.cost),
         costUsd:
           shouldKeepEditableDraft && previousDraft
             ? previousDraft.costUsd
-            : (product.costUsd ?? ""),
+            : normalizeDraftCostValue(product.costUsd),
         percentages: nextPercentages,
         adjustmentQty:
           shouldKeepEditableDraft && previousDraft
@@ -1258,6 +1280,22 @@ export default function PricesPage() {
   const updateUsdCost = (productId: string, value: string) => {
     updateEditableRow(productId, {
       costUsd: normalizeMoney(value),
+    });
+  };
+
+  const clearZeroCostInput = (productId: string, field: "cost" | "costUsd") => {
+    updateRows((previous) => {
+      const current = previous[productId];
+      if (!current || parseNumber(current[field]) !== 0) return previous;
+      return {
+        ...previous,
+        [productId]: {
+          ...current,
+          [field]: "",
+          saveStatus: "idle",
+          saveError: null,
+        },
+      };
     });
   };
 
@@ -2113,8 +2151,8 @@ export default function PricesPage() {
                 const draft =
                   rows[product.id] ??
                   createEmptyRowDraft({
-                    cost: product.cost ?? "",
-                    costUsd: product.costUsd ?? "",
+                    cost: normalizeDraftCostValue(product.cost),
+                    costUsd: normalizeDraftCostValue(product.costUsd),
                     percentages: derivedPercentages,
                   });
                 const rowState = getStockRowChangeState(
@@ -2241,7 +2279,8 @@ export default function PricesPage() {
                                     cost: normalizeMoney(nextValue),
                                   })
                                 }
-                                placeholder="0,00"
+                                onBlur={() => clearZeroCostInput(product.id, "cost")}
+                                placeholder="$ 0,00"
                                 maxDecimals={2}
                                 prefix="$"
                                 caretToEndOnFocus
@@ -2258,7 +2297,10 @@ export default function PricesPage() {
                                 onValueChange={(nextValue) =>
                                   updateUsdCost(product.id, nextValue)
                                 }
-                                placeholder="0,00"
+                                onBlur={() =>
+                                  clearZeroCostInput(product.id, "costUsd")
+                                }
+                                placeholder="USD 0,00"
                                 maxDecimals={2}
                                 prefix="USD "
                                 caretToEndOnFocus
@@ -3012,7 +3054,8 @@ export default function PricesPage() {
                                   cost: normalizeMoney(nextValue),
                                 })
                               }
-                              placeholder="0,00"
+                              onBlur={() => clearZeroCostInput(product.id, "cost")}
+                              placeholder="$ 0,00"
                               maxDecimals={2}
                               prefix="$"
                               caretToEndOnFocus
@@ -3035,7 +3078,10 @@ export default function PricesPage() {
                               onValueChange={(nextValue) =>
                                 updateUsdCost(product.id, nextValue)
                               }
-                              placeholder="0,00"
+                              onBlur={() =>
+                                clearZeroCostInput(product.id, "costUsd")
+                              }
+                              placeholder="USD 0,00"
                               maxDecimals={2}
                               prefix="USD "
                               caretToEndOnFocus

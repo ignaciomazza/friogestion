@@ -68,6 +68,25 @@ test("resolveSuggestedProductPrice recalculates from USD cost with internal FX",
   assert.equal(result, "180.00");
 });
 
+test("resolveSuggestedProductPrice ignores zero ARS cost when USD cost exists", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "general", price: "0.00", percentage: "30.00" },
+      { priceListId: "special", price: "0.00", percentage: "15.3846" },
+    ],
+    productCost: "0.00",
+    productCostUsd: "10.00",
+    productPrice: "0.00",
+    preferredPriceListId: "special",
+    customerPriceListId: "general",
+    defaultPriceListId: "general",
+    usdRateArs: 12,
+    priceListOrderIds: ["general", "special"],
+  });
+
+  assert.equal(result, "180.00");
+});
+
 test("resolveSuggestedProductPrice keeps ARS list price when both costs exist", () => {
   const result = resolveSuggestedProductPrice({
     prices: [
