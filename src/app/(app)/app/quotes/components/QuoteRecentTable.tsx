@@ -45,8 +45,12 @@ const toNumber = (value: string | null | undefined) => {
 
 type QuoteRecentTableProps = {
   quotes: QuoteRow[];
+  loadedCount: number;
+  hasMore: boolean;
+  isLoadingMore: boolean;
   sortOrder: string;
   onSortOrderChange: (value: string) => void;
+  onLoadMore: () => void;
   onEdit: (quote: QuoteRow) => void;
   onDelete: (quote: QuoteRow) => void;
   onConfirmSale: (quote: QuoteRow) => void;
@@ -55,8 +59,12 @@ type QuoteRecentTableProps = {
 
 export function QuoteRecentTable({
   quotes,
+  loadedCount,
+  hasMore,
+  isLoadingMore,
   sortOrder,
   onSortOrderChange,
+  onLoadMore,
   onEdit,
   onDelete,
   onConfirmSale,
@@ -421,10 +429,29 @@ export function QuoteRecentTable({
                   Sin presupuestos por ahora.
                 </td>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+          )}
+        </tbody>
+      </table>
     </div>
-  );
+      <div className="flex flex-col gap-2 border-t border-zinc-200/70 pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-xs text-zinc-500">
+          {loadedCount} presupuestos cargados
+        </span>
+        {hasMore ? (
+          <button
+            type="button"
+            className="btn w-full text-xs sm:w-auto"
+            onClick={onLoadMore}
+            disabled={isLoadingMore}
+          >
+            {isLoadingMore ? "Cargando..." : "Ver mas"}
+          </button>
+        ) : (
+          <span className="text-xs text-zinc-500">
+            No hay mas presupuestos para cargar.
+          </span>
+        )}
+      </div>
+  </div>
+);
 }

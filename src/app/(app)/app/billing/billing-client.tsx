@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { ToastContainer } from "react-toastify";
 import {
   ArrowDownTrayIcon,
   CurrencyDollarIcon,
@@ -32,6 +33,7 @@ import {
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { cn } from "@/lib/cn";
+import "react-toastify/dist/ReactToastify.css";
 
 type AfipStatus = {
   ok: boolean;
@@ -2666,6 +2668,8 @@ export default function BillingClient({
           </div>
         </div>
       ) : null}
+
+      <ToastContainer position="bottom-right" theme="light" />
 
       {saleToInvoice ? (
         <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-zinc-950/35 p-3 backdrop-blur-sm sm:items-center sm:p-6">

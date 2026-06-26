@@ -65,6 +65,8 @@ type QuotesClientProps = {
   initialCustomers: CustomerOption[];
   initialProducts: ProductOption[];
   initialQuotes: QuoteRow[];
+  initialQuotesHasMore: boolean;
+  initialQuotesNextOffset: number | null;
   initialPriceLists: PriceListOption[];
   initialLatestUsdRate: string | null;
 };
@@ -190,6 +192,7 @@ const formatDateInput = (value: Date) => {
 const normalizeTaxId = (value: string) => value.replace(/\D/g, "");
 const CONSUMER_FINAL_IDENTIFICATION_THRESHOLD = 10_000_000;
 const AUTOCOMPLETE_LIMIT = 8;
+const QUOTES_PAGE_SIZE = 50;
 const round2 = (value: number) => Math.round(value * 100) / 100;
 const toSafeNumber = (value: string | number | null | undefined) => {
   const parsed = Number(value ?? 0);
@@ -294,6 +297,8 @@ export default function QuotesClient({
   initialCustomers,
   initialProducts,
   initialQuotes,
+  initialQuotesHasMore,
+  initialQuotesNextOffset,
   initialPriceLists,
   initialLatestUsdRate,
 }: QuotesClientProps) {
@@ -308,6 +313,11 @@ export default function QuotesClient({
   const [isProductMatchesLoading, setIsProductMatchesLoading] = useState(false);
   const [priceLists] = useState<PriceListOption[]>(initialPriceLists);
   const [quotes, setQuotes] = useState<QuoteRow[]>(initialQuotes);
+  const [quotesHasMore, setQuotesHasMore] = useState(initialQuotesHasMore);
+  const [quotesNextOffset, setQuotesNextOffset] = useState<number | null>(
+    initialQuotesNextOffset,
+  );
+  const [isLoadingMoreQuotes, setIsLoadingMoreQuotes] = useState(false);
   const [selectedPriceListId, setSelectedPriceListId] = useState(
     initialPriceLists.find((priceList) => priceList.isDefault)?.id ??
       initialPriceLists.find((priceList) => priceList.isConsumerFinal)?.id ??
@@ -529,11 +539,47 @@ export default function QuotesClient({
     });
   };
 
+  const fetchQuotesPage = async (offset = 0) => {
+    const params = new URLSearchParams({
+      limit: QUOTES_PAGE_SIZE.toString(),
+      offset: offset.toString(),
+    });
+    const res = await fetch(`/api/quotes?${params.toString()}`, {
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as CatalogResponse<QuoteRow>;
+  };
+
   const loadQuotes = async () => {
-    const res = await fetch("/api/quotes", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as QuoteRow[];
-      setQuotes(data);
+    const data = await fetchQuotesPage(0);
+    if (!data) return;
+    setQuotes(data.items);
+    setQuotesHasMore(data.hasMore);
+    setQuotesNextOffset(data.nextOffset);
+  };
+
+  const loadMoreQuotes = async () => {
+    if (!quotesHasMore || isLoadingMoreQuotes) return;
+    setIsLoadingMoreQuotes(true);
+    setTableStatus(null);
+    try {
+      const data = await fetchQuotesPage(quotesNextOffset ?? quotes.length);
+      if (!data) {
+        setTableStatus("No se pudieron cargar mas presupuestos");
+        return;
+      }
+      setQuotes((previous) => {
+        const byId = new Map(previous.map((quote) => [quote.id, quote]));
+        for (const quote of data.items) {
+          byId.set(quote.id, quote);
+        }
+        return Array.from(byId.values());
+      });
+      setQuotesHasMore(data.hasMore);
+      setQuotesNextOffset(data.nextOffset);
+    } finally {
+      setIsLoadingMoreQuotes(false);
     }
   };
 
@@ -3151,8 +3197,12 @@ export default function QuotesClient({
 
           <QuoteRecentTable
             quotes={filteredQuotes}
+            loadedCount={quotes.length}
+            hasMore={quotesHasMore}
+            isLoadingMore={isLoadingMoreQuotes}
             sortOrder={sortOrder}
             onSortOrderChange={setSortOrder}
+            onLoadMore={loadMoreQuotes}
             onEdit={handleEdit}
             onDelete={handleDelete}
             onConfirmSale={handleConfirmSale}

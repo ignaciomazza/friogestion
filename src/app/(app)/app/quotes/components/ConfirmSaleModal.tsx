@@ -164,8 +164,8 @@ export default function ConfirmSaleModal({
   }, 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/35 p-4 sm:items-center">
-      <div className="card w-full max-w-3xl space-y-4 p-5">
+    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/35 p-3 sm:items-center sm:p-4">
+      <div className="card max-h-[calc(100dvh-1.5rem)] w-full max-w-3xl space-y-4 overflow-y-auto p-4 sm:max-h-[calc(100dvh-2rem)] sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
             <h3 className="text-base font-semibold text-zinc-900">Confirmar venta</h3>

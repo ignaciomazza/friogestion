@@ -5,6 +5,8 @@ import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
 import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import QuotesClient from "./quotes-client";
 
+const QUOTES_PAGE_SIZE = 50;
+
 const toMoneyString = (value: { toString(): string } | null | undefined) =>
   value ? value.toString() : null;
 
@@ -38,12 +40,12 @@ export default async function QuotesPage() {
     redirect("/app");
   }
 
-  const [quotes, priceLists, usdRate] = await Promise.all([
+  const [quotePage, priceLists, usdRate] = await Promise.all([
       prisma.quote.findMany({
         where: { organizationId: membership.organizationId },
         include: { customer: true, sale: true, priceList: true },
         orderBy: { createdAt: "desc" },
-        take: 50,
+        take: QUOTES_PAGE_SIZE + 1,
       }),
       prisma.priceList.findMany({
         where: { organizationId: membership.organizationId, isActive: true },
@@ -58,6 +60,8 @@ export default async function QuotesPage() {
         orderBy: { asOf: "desc" },
       }),
   ]);
+  const quotes = quotePage.slice(0, QUOTES_PAGE_SIZE);
+  const quotesHasMore = quotePage.length > QUOTES_PAGE_SIZE;
 
   return (
       <QuotesClient
@@ -84,6 +88,8 @@ export default async function QuotesPage() {
           priceListName: quote.priceList?.name ?? null,
         };
       })}
+      initialQuotesHasMore={quotesHasMore}
+      initialQuotesNextOffset={quotesHasMore ? quotes.length : null}
       initialPriceLists={priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,

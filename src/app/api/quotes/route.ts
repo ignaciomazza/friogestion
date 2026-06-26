@@ -159,6 +159,12 @@ const parseSequenceNumber = (value?: string | null) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+const parsePageParam = (value: string | null, fallback: number) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) return fallback;
+  return parsed;
+};
+
 const reserveNextCounter = async (
   tx: Prisma.TransactionClient,
   organizationId: string,
@@ -304,36 +310,51 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    const limitParam = req.nextUrl.searchParams.get("limit");
+    const offsetParam = req.nextUrl.searchParams.get("offset");
+    const isPaginated = limitParam !== null || offsetParam !== null;
+    const limit = Math.min(parsePageParam(limitParam, 50) || 50, 100);
+    const offset = parsePageParam(offsetParam, 0);
     const quotes = await prisma.quote.findMany({
       where: { organizationId },
       include: { customer: true, sale: true, priceList: true },
       orderBy: { createdAt: "desc" },
-      take: 50,
+      skip: isPaginated ? offset : undefined,
+      take: isPaginated ? limit + 1 : 50,
+    });
+    const pageQuotes = isPaginated ? quotes.slice(0, limit) : quotes;
+    const items = pageQuotes.map((quote) => {
+      const amounts = resolveQuoteAmounts(quote);
+      return {
+        id: quote.id,
+        customerName: quote.customer.displayName,
+        customerPhone: quote.customer.phone,
+        quoteNumber: quote.quoteNumber,
+        validUntil: quote.validUntil?.toISOString() ?? null,
+        createdAt: quote.createdAt.toISOString(),
+        subtotal: amounts.subtotal,
+        taxes: amounts.taxes,
+        extraType: amounts.extraType,
+        extraValue: amounts.extraValue,
+        extraAmount: amounts.extraAmount,
+        total: amounts.total,
+        status: quote.status,
+        saleId: quote.sale?.id ?? null,
+        priceListId: quote.priceListId ?? null,
+        priceListName: quote.priceList?.name ?? null,
+      };
     });
 
-    return NextResponse.json(
-      quotes.map((quote) => {
-        const amounts = resolveQuoteAmounts(quote);
-        return {
-          id: quote.id,
-          customerName: quote.customer.displayName,
-          customerPhone: quote.customer.phone,
-          quoteNumber: quote.quoteNumber,
-          validUntil: quote.validUntil?.toISOString() ?? null,
-          createdAt: quote.createdAt.toISOString(),
-          subtotal: amounts.subtotal,
-          taxes: amounts.taxes,
-          extraType: amounts.extraType,
-          extraValue: amounts.extraValue,
-          extraAmount: amounts.extraAmount,
-          total: amounts.total,
-          status: quote.status,
-          saleId: quote.sale?.id ?? null,
-          priceListId: quote.priceListId ?? null,
-          priceListName: quote.priceList?.name ?? null,
-        };
-      })
-    );
+    if (isPaginated) {
+      const hasMore = quotes.length > limit;
+      return NextResponse.json({
+        items,
+        nextOffset: hasMore ? offset + items.length : null,
+        hasMore,
+      });
+    }
+
+    return NextResponse.json(items);
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }

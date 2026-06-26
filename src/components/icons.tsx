@@ -711,6 +711,26 @@ export function ArrowPathIcon(props: IconProps) {
   );
 }
 
+export function LinkIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M13.19 8.688a4.5 4.5 0 0 1 6.364 6.364l-1.768 1.768a4.5 4.5 0 0 1-6.364 0M10.81 15.312a4.5 4.5 0 0 1-6.364-6.364L6.214 7.18a4.5 4.5 0 0 1 6.364 0M8.25 12h7.5"
+      />
+    </svg>
+  );
+}
+
 export function ChevronDownIcon(props: IconProps) {
   return (
     <svg
