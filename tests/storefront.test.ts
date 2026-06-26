@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   calculateMercadoPagoFeeBreakdown,
+  calculateStorefrontTaxIncludedPrice,
   calculateStorefrontPricePreview,
   evaluateStorefrontAvailability,
   isHardToGuessStorefrontOrderReference,
@@ -37,6 +38,18 @@ test("storefront pricing AUTO adds Mercado Pago fee separately", () => {
   assert.equal(fee.finalPercent, 6.05);
   assert.equal(result.adjustmentPercentTotal, 9.05);
   assert.equal(result.priceFinal, 109050);
+});
+
+test("storefront pricing publishes tax-included list price before Mercado Pago fee", () => {
+  const taxIncludedPrice = calculateStorefrontTaxIncludedPrice(7775.02);
+  const result = calculateStorefrontPricePreview({
+    basePrice: taxIncludedPrice,
+    pricingMode: "AUTO",
+    mercadoPagoFeePercent: 4.31,
+  });
+
+  assert.equal(taxIncludedPrice, 9407.77);
+  assert.equal(result.priceFinal, 9813.24);
 });
 
 test("storefront pricing AUTO supports negative publication discount", () => {

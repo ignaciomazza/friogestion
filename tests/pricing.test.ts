@@ -202,3 +202,24 @@ test("resolveSuggestedProductPrice applies non-default percentages over default 
 
   assert.equal(result, "15248.00");
 });
+
+test("resolveSuggestedProductPrice recalculates stale storefront list prices from USD cost", () => {
+  const result = resolveSuggestedProductPrice({
+    prices: [
+      { priceListId: "base", price: "6150.02", percentage: "22.00" },
+      { priceListId: "cash", price: "6396.02", percentage: "4.00" },
+      { priceListId: "debit", price: "6734.27", percentage: "9.50" },
+      { priceListId: "consumer", price: "7380.02", percentage: "20.00" },
+    ],
+    productCost: null,
+    productCostUsd: "3.55",
+    productPrice: "6150.02",
+    preferredPriceListId: "consumer",
+    customerPriceListId: null,
+    defaultPriceListId: "base",
+    usdRateArs: 1496,
+    priceListOrderIds: ["base", "cash", "debit", "consumer"],
+  });
+
+  assert.equal(result, "7775.02");
+});

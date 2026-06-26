@@ -2393,7 +2393,11 @@ export default function StorefrontClient({
       setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
       setStatus(null);
 
-      const mercadoPagoFeeRules = DEFAULT_MERCADOPAGO_FEE_RULES;
+      const mercadoPagoFeeRules = mercadoPagoFeeRulesToForm(
+        channelJson.channel.mercadoPagoFeeRules?.length
+          ? channelJson.channel.mercadoPagoFeeRules
+          : MERCADOPAGO_MAX_FEE_RULES,
+      );
       const mercadoPagoDefaultFeeDays = normalizeMercadoPagoDefaultFeeDays(
         channelJson.channel.mercadoPagoDefaultFeeDays,
         mercadoPagoFeeRules,
@@ -2418,7 +2422,9 @@ export default function StorefrontClient({
         productCategories: normalizeProductCategoryList(
           channelJson.channel.productCategories,
         ),
-        mercadoPagoFeeRegion: DEFAULT_MERCADOPAGO_FEE_REGION,
+        mercadoPagoFeeRegion:
+          channelJson.channel.mercadoPagoFeeRegion ??
+          DEFAULT_MERCADOPAGO_FEE_REGION,
         mercadoPagoFeeRules,
         mercadoPagoDefaultFeeDays: String(mercadoPagoDefaultFeeDays),
       };

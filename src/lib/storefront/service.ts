@@ -19,6 +19,7 @@ import {
 } from "@/lib/products-search";
 import { STOCK_ENABLED } from "@/lib/features";
 import { buildSaleOutMovements } from "@/lib/stock";
+import { resolveSuggestedProductPrice } from "@/lib/pricing";
 import type {
   ApiDeliveryMethod,
   ApiShippingType,
@@ -72,6 +73,7 @@ type StorefrontPublicationWithProduct = Prisma.StorefrontPublicationGetPayload<{
           select: {
             priceListId: true;
             price: true;
+            percentage: true;
           };
         };
       };
@@ -207,6 +209,12 @@ type StorefrontChannelConfigInput = {
   paymentAdjustments: StorefrontPaymentAdjustmentInput[];
 };
 
+type StorefrontPricingContext = {
+  defaultPriceListId: string | null;
+  priceListOrderIds: string[];
+  usdRateArs: number | null;
+};
+
 type UpsertStorefrontPublicationInput = {
   productId: string;
   slug?: string | null;
@@ -257,6 +265,7 @@ const DEFAULT_MERCADOPAGO_FEE_RULES = [
   { days: 35, netPercent: 1.56 },
 ] satisfies StorefrontMercadoPagoFeeRuleInput[];
 export const MERCADOPAGO_FEE_IVA_PERCENT = 21;
+export const STOREFRONT_PRICE_TAX_PERCENT = 21;
 const ORDER_COUNTER_KEY = "storefront-order-number";
 const SALE_COUNTER_KEY = "sale-number";
 export const STOREFRONT_DEFAULT_PRODUCT_LIMIT = 36;
@@ -320,6 +329,9 @@ const toNumber = (value: unknown) => {
 
 const roundMoney = (value: number) =>
   Number.isFinite(value) ? Number(value.toFixed(2)) : 0;
+
+export const calculateStorefrontTaxIncludedPrice = (netPrice: number) =>
+  roundMoney(netPrice * (1 + STOREFRONT_PRICE_TAX_PERCENT / 100));
 
 const compactSpaces = (value: string) =>
   value
@@ -864,20 +876,34 @@ const normalizeCartItems = (items: StorefrontCartItemInput[]) => {
 };
 
 const resolveBasePrice = (
-  product: Product & {
-    priceItems: Array<{ priceListId: string; price: Prisma.Decimal | null }>;
+  product: Pick<Product, "cost" | "costUsd" | "price"> & {
+    priceItems: Array<{
+      priceListId: string;
+      price: Prisma.Decimal | null;
+      percentage?: Prisma.Decimal | null;
+    }>;
   },
-  defaultPriceListId: string | null,
+  selectedPriceListId: string | null,
+  pricingContext?: StorefrontPricingContext,
 ) => {
-  if (defaultPriceListId) {
-    const priceItem = product.priceItems.find(
-      (candidate) => candidate.priceListId === defaultPriceListId,
-    );
-    if (priceItem && priceItem.price !== null) {
-      return roundMoney(toNumber(priceItem.price));
-    }
-  }
-  return roundMoney(toNumber(product.price));
+  const netPrice = resolveSuggestedProductPrice({
+    prices: product.priceItems.map((item) => ({
+      priceListId: item.priceListId,
+      price: item.price?.toString() ?? null,
+      percentage: item.percentage?.toString() ?? null,
+    })),
+    productCost: product.cost?.toString() ?? null,
+    productCostUsd: product.costUsd?.toString() ?? null,
+    productPrice: product.price?.toString() ?? null,
+    preferredPriceListId: selectedPriceListId,
+    customerPriceListId: null,
+    defaultPriceListId:
+      pricingContext?.defaultPriceListId ?? selectedPriceListId,
+    usdRateArs: pricingContext?.usdRateArs ?? null,
+    priceListOrderIds: pricingContext?.priceListOrderIds ?? null,
+  });
+
+  return calculateStorefrontTaxIncludedPrice(toNumber(netPrice));
 };
 
 const resolvePublicationAvailableStock = (
@@ -1018,6 +1044,40 @@ const readMercadoPagoFeeConfigForChannel = (
     getLegacyMercadoPagoAdjustmentPercent(channel),
   );
 
+const readStorefrontPricingContext = async (
+  client: typeof prisma | Prisma.TransactionClient,
+  organizationId: string,
+): Promise<StorefrontPricingContext> => {
+  const [priceLists, latestUsdRate] = await Promise.all([
+    client.priceList.findMany({
+      where: { organizationId, isActive: true },
+      orderBy: PRICE_LIST_ORDER_BY,
+      select: {
+        id: true,
+        isDefault: true,
+      },
+    }),
+    client.exchangeRate.findFirst({
+      where: {
+        organizationId,
+        baseCode: "USD",
+        quoteCode: "ARS",
+      },
+      orderBy: { asOf: "desc" },
+      select: { rate: true },
+    }),
+  ]);
+
+  return {
+    defaultPriceListId:
+      priceLists.find((priceList) => priceList.isDefault)?.id ??
+      priceLists[0]?.id ??
+      null,
+    priceListOrderIds: priceLists.map((priceList) => priceList.id),
+    usdRateArs: latestUsdRate ? toNumber(latestUsdRate.rate) : null,
+  };
+};
+
 const resolvePublicationPrice = (
   channel: StorefrontChannelWithRelations,
   publication: StorefrontPublicationWithProduct & {
@@ -1028,8 +1088,13 @@ const resolvePublicationPrice = (
     mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
     mercadoPagoDefaultFeeDays: number;
   },
+  pricingContext?: StorefrontPricingContext,
 ) => {
-  const basePrice = resolveBasePrice(publication.product, channel.defaultPriceListId);
+  const basePrice = resolveBasePrice(
+    publication.product,
+    channel.defaultPriceListId,
+    pricingContext,
+  );
   const legacyPaymentAdjustment = toNumber(
     channel.paymentAdjustments.find(
       (candidate) =>
@@ -1172,12 +1237,14 @@ const storefrontProductFromPublication = (
     mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
     mercadoPagoDefaultFeeDays: number;
   },
+  pricingContext: StorefrontPricingContext,
 ): StorefrontProductDto => {
   const pricing = resolvePublicationPrice(
     channel,
     publication,
     paymentMethod,
     mercadoPagoFeeConfig,
+    pricingContext,
   );
   const slug = publication.slug || normalizeSlug(publication.publicName || publication.product.name);
   const seoSource = {
@@ -1235,12 +1302,14 @@ const evaluateCartLine = (
     mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
     mercadoPagoDefaultFeeDays: number;
   },
+  pricingContext: StorefrontPricingContext,
 ): StorefrontCartValidationLine => {
   const product = storefrontProductFromPublication(
     channel,
     publication,
     paymentMethod,
     mercadoPagoFeeConfig,
+    pricingContext,
   );
   const availability = evaluateStorefrontAvailability({
     publicationStatus: publication.publicationStatus,
@@ -1432,6 +1501,7 @@ const productInclude = {
           select: {
             priceListId: true,
             price: true,
+            percentage: true,
           },
         },
       },
@@ -1718,6 +1788,7 @@ const orderToDto = (
     mercadoPagoFeeRules: StorefrontMercadoPagoFeeRuleInput[];
     mercadoPagoDefaultFeeDays: number;
   },
+  pricingContext: StorefrontPricingContext,
 ): StorefrontOrderDto => {
   const items = order.items.flatMap((item) => {
       const publication = publicationsByProductId.get(item.productId);
@@ -1727,6 +1798,7 @@ const orderToDto = (
         publication,
         paymentMethod,
         mercadoPagoFeeConfig,
+        pricingContext,
       );
       return [{
         product,
@@ -1788,10 +1860,10 @@ export async function listStorefrontProducts(
 ): Promise<StorefrontProductsListDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
-  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
-    prisma,
-    channel,
-  );
+  const [mercadoPagoFeeConfig, pricingContext] = await Promise.all([
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+    readStorefrontPricingContext(prisma, channel.organizationId),
+  ]);
 
   const baseWhere: Prisma.StorefrontPublicationWhereInput = {
     channelId,
@@ -1908,6 +1980,7 @@ export async function listStorefrontProducts(
           publication,
           channel.defaultPaymentMethod,
           mercadoPagoFeeConfig,
+          pricingContext,
         ),
       ),
     total: totalWithoutPostFilters ?? filteredPublications.length,
@@ -1922,10 +1995,10 @@ export async function getStorefrontProduct(
 ): Promise<StorefrontProductDto | null> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
-  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
-    prisma,
-    channel,
-  );
+  const [mercadoPagoFeeConfig, pricingContext] = await Promise.all([
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+    readStorefrontPricingContext(prisma, channel.organizationId),
+  ]);
 
   const publication = await prisma.storefrontPublication.findFirst({
     where: {
@@ -1953,6 +2026,7 @@ export async function getStorefrontProduct(
     publicationWithFeeDays,
     channel.defaultPaymentMethod,
     mercadoPagoFeeConfig,
+    pricingContext,
   );
 }
 
@@ -1963,10 +2037,10 @@ export async function validateStorefrontCart(
 ): Promise<StorefrontCartValidationDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
-  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
-    prisma,
-    channel,
-  );
+  const [mercadoPagoFeeConfig, pricingContext] = await Promise.all([
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+    readStorefrontPricingContext(prisma, channel.organizationId),
+  ]);
 
   const normalizedItems = normalizeCartItems(items);
   assertStorefrontCartLimits(normalizedItems);
@@ -2004,6 +2078,7 @@ export async function validateStorefrontCart(
         item.quantity,
         resolvedPaymentMethod,
         mercadoPagoFeeConfig,
+        pricingContext,
       ),
     );
   }
@@ -2128,10 +2203,10 @@ export async function createStorefrontOrder(
 ): Promise<StorefrontOrderDto> {
   const channel = await loadChannel(channelId);
   await expirePendingOrders(channelId);
-  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
-    prisma,
-    channel,
-  );
+  const [mercadoPagoFeeConfig, pricingContext] = await Promise.all([
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+    readStorefrontPricingContext(prisma, channel.organizationId),
+  ]);
 
   const normalizedItems = normalizeCartItems(input.items);
   assertStorefrontCartLimits(normalizedItems);
@@ -2207,6 +2282,7 @@ export async function createStorefrontOrder(
           item.quantity,
           input.paymentMethod,
           mercadoPagoFeeConfig,
+          pricingContext,
         );
       }),
     );
@@ -2296,6 +2372,7 @@ export async function createStorefrontOrder(
               publication,
               input.paymentMethod,
               mercadoPagoFeeConfig,
+              pricingContext,
             );
             return {
               organizationId: channel.organizationId,
@@ -2358,6 +2435,7 @@ export async function createStorefrontOrder(
       publicationByProductId,
       input.paymentMethod,
       mercadoPagoFeeConfig,
+      pricingContext,
     );
   });
 }
@@ -2913,10 +2991,10 @@ export async function listStorefrontAdminPublications(
   query?: string,
 ): Promise<StorefrontAdminPublicationRow[]> {
   const channel = await ensureDefaultStorefrontChannel(organizationId);
-  const mercadoPagoFeeConfig = await readMercadoPagoFeeConfigForChannel(
-    prisma,
-    channel,
-  );
+  const [mercadoPagoFeeConfig, pricingContext] = await Promise.all([
+    readMercadoPagoFeeConfigForChannel(prisma, channel),
+    readStorefrontPricingContext(prisma, organizationId),
+  ]);
   const [products, publications, salesByProduct] = await Promise.all([
     prisma.product.findMany({
       where: { organizationId },
@@ -2925,6 +3003,7 @@ export async function listStorefrontAdminPublications(
           select: {
             priceListId: true,
             price: true,
+            percentage: true,
           },
         },
       },
@@ -3016,7 +3095,11 @@ export async function listStorefrontAdminPublications(
       const pricing =
         publication === null
           ? {
-              priceFinal: resolveBasePrice(product, channel.defaultPriceListId),
+              priceFinal: resolveBasePrice(
+                product,
+                channel.defaultPriceListId,
+                pricingContext,
+              ),
               mercadoPagoFeePercent: resolveMercadoPagoFeePercent(
                 mercadoPagoFeeConfig.mercadoPagoFeeRules,
                 mercadoPagoFeeConfig.mercadoPagoDefaultFeeDays,
@@ -3027,6 +3110,7 @@ export async function listStorefrontAdminPublications(
               publication,
               channel.defaultPaymentMethod,
               mercadoPagoFeeConfig,
+              pricingContext,
             );
 
       return {
