@@ -13,6 +13,7 @@ import {
   MinusIcon,
   PencilSquareIcon,
   PlusIcon,
+  TrashIcon,
   XMarkIcon,
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
@@ -826,6 +827,12 @@ export default function PricesPage() {
   const [productEditStatus, setProductEditStatus] = useState<string | null>(
     null,
   );
+  const [productDeleteTarget, setProductDeleteTarget] =
+    useState<StockProduct | null>(null);
+  const [isDeletingProduct, setIsDeletingProduct] = useState(false);
+  const [productDeleteStatus, setProductDeleteStatus] = useState<string | null>(
+    null,
+  );
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
   const productEditNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -1185,11 +1192,18 @@ export default function PricesPage() {
   }, [editingProduct]);
 
   useEffect(() => {
-    if (!editingProduct || isUpdatingProduct) return;
+    if ((!editingProduct && !productDeleteTarget) || isUpdatingProduct || isDeletingProduct) {
+      return;
+    }
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       event.preventDefault();
+      if (productDeleteTarget) {
+        setProductDeleteTarget(null);
+        setProductDeleteStatus(null);
+        return;
+      }
       setEditingProduct(null);
       setProductEditForm(createProductEditForm());
       setProductEditStatus(null);
@@ -1197,7 +1211,7 @@ export default function PricesPage() {
 
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [editingProduct, isUpdatingProduct]);
+  }, [editingProduct, productDeleteTarget, isUpdatingProduct, isDeletingProduct]);
 
   const totalStock = products.reduce((sum, product) => {
     const parsed = Number(product.stock ?? 0);
@@ -1237,7 +1251,9 @@ export default function PricesPage() {
     Boolean(editingProduct) &&
     productEditForm.name.trim().length >= 2 &&
     productEditIsDirty &&
-    !isUpdatingProduct;
+    !isUpdatingProduct &&
+    !isDeletingProduct &&
+    !productDeleteTarget;
 
   const openStockExitGuard = useCallback((action: StockExitGuardAction) => {
     setStockExitGuardAction(action);
@@ -1374,15 +1390,44 @@ export default function PricesPage() {
   const openProductEditModal = (product: StockProduct) => {
     setProductTooltip(null);
     setProductEditStatus(null);
+    setProductDeleteStatus(null);
     setEditingProduct(product);
     setProductEditForm(createProductEditForm(product));
   };
 
   const closeProductEditModal = () => {
-    if (isUpdatingProduct) return;
+    if (isUpdatingProduct || isDeletingProduct || productDeleteTarget) return;
     setEditingProduct(null);
     setProductEditForm(createProductEditForm());
     setProductEditStatus(null);
+    setProductDeleteStatus(null);
+  };
+
+  const isProductDeleteBlocked = (productId: string) => {
+    const draft = rowsRef.current[productId];
+    return (
+      draft?.saveStatus === "queued" ||
+      draft?.saveStatus === "saving" ||
+      saveProductIdsRef.current.has(productId)
+    );
+  };
+
+  const openProductDeleteConfirm = () => {
+    if (!editingProduct || isUpdatingProduct) return;
+    if (isProductDeleteBlocked(editingProduct.id)) {
+      setProductEditStatus(
+        "Espera a que termine el guardado antes de eliminar.",
+      );
+      return;
+    }
+    setProductDeleteTarget(editingProduct);
+    setProductDeleteStatus(null);
+  };
+
+  const closeProductDeleteConfirm = () => {
+    if (isDeletingProduct) return;
+    setProductDeleteTarget(null);
+    setProductDeleteStatus(null);
   };
 
   const updateUsdCost = (productId: string, value: string) => {
@@ -1772,6 +1817,68 @@ export default function PricesPage() {
       setProductEditStatus("No se pudo actualizar producto.");
     } finally {
       setIsUpdatingProduct(false);
+    }
+  };
+
+  const handleProductDeleteConfirm = async () => {
+    const target = productDeleteTarget;
+    if (!target || isDeletingProduct) return;
+
+    if (isProductDeleteBlocked(target.id)) {
+      setProductDeleteStatus(
+        "Espera a que termine el guardado antes de eliminar.",
+      );
+      return;
+    }
+
+    setIsDeletingProduct(true);
+    setProductDeleteStatus(null);
+
+    try {
+      const res = await fetch(
+        `/api/products?id=${encodeURIComponent(target.id)}`,
+        { method: "DELETE" },
+      );
+      const data = (await readResponseJson(res)) as { error?: string } | null;
+
+      if (!res.ok) {
+        setProductDeleteStatus(data?.error ?? "No se pudo eliminar producto.");
+        return;
+      }
+
+      setProducts((previousProducts) => {
+        const nextProducts = previousProducts.filter(
+          (product) => product.id !== target.id,
+        );
+        productsRef.current = nextProducts;
+        productsLengthRef.current = nextProducts.length;
+        return nextProducts;
+      });
+      updateRows((previousRows) => {
+        const nextRows = { ...previousRows };
+        delete nextRows[target.id];
+        return nextRows;
+      });
+      setCalculatorRows((previousRows) => {
+        const nextRows = new Set(previousRows);
+        nextRows.delete(target.id);
+        return nextRows;
+      });
+      setTotalProducts((previousTotal) => Math.max(0, previousTotal - 1));
+      setNextOffset((previousOffset) =>
+        previousOffset === null ? null : Math.max(0, previousOffset - 1),
+      );
+      setStatus("Producto eliminado");
+      toast.success("Producto eliminado.");
+      setEditingProduct(null);
+      setProductEditForm(createProductEditForm());
+      setProductEditStatus(null);
+      setProductDeleteTarget(null);
+      setProductDeleteStatus(null);
+    } catch {
+      setProductDeleteStatus("No se pudo eliminar producto.");
+    } finally {
+      setIsDeletingProduct(false);
     }
   };
 
@@ -3936,7 +4043,7 @@ export default function PricesPage() {
                   type="button"
                   className="btn h-9 w-9 shrink-0 p-0"
                   onClick={closeProductEditModal}
-                  disabled={isUpdatingProduct}
+                  disabled={isUpdatingProduct || isDeletingProduct}
                   aria-label="Cerrar editor"
                 >
                   <XMarkIcon className="size-4" />
@@ -3958,7 +4065,7 @@ export default function PricesPage() {
                     }
                     minLength={2}
                     required
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   />
                 </label>
                 <label className="field-stack">
@@ -3972,7 +4079,7 @@ export default function PricesPage() {
                         sku: event.target.value,
                       }))
                     }
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   />
                 </label>
                 <label className="field-stack">
@@ -3986,7 +4093,7 @@ export default function PricesPage() {
                         purchaseCode: event.target.value,
                       }))
                     }
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   />
                 </label>
                 <label className="field-stack">
@@ -4000,7 +4107,7 @@ export default function PricesPage() {
                         unit: event.target.value,
                       }))
                     }
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   >
                     <option value="">Sin unidad</option>
                     {UNIT_OPTIONS.map((unit) => (
@@ -4021,7 +4128,7 @@ export default function PricesPage() {
                         brand: event.target.value,
                       }))
                     }
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   />
                 </label>
                 <label className="field-stack sm:col-span-2">
@@ -4035,7 +4142,7 @@ export default function PricesPage() {
                         model: event.target.value,
                       }))
                     }
-                    disabled={isUpdatingProduct}
+                    disabled={isUpdatingProduct || isDeletingProduct}
                   />
                 </label>
               </div>
@@ -4050,25 +4157,134 @@ export default function PricesPage() {
                 </p>
               ) : null}
 
-              <div className="flex flex-col-reverse gap-2 border-t border-zinc-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-5">
+              <div className="flex flex-col gap-2 border-t border-zinc-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                <button
+                  type="button"
+                  className="btn w-full border-rose-200 bg-rose-50/70 text-xs font-semibold text-rose-700 hover:bg-rose-100 sm:w-auto"
+                  onClick={openProductDeleteConfirm}
+                  disabled={isUpdatingProduct || isDeletingProduct}
+                  aria-label={`Eliminar producto ${editingProduct.name}`}
+                >
+                  <TrashIcon className="size-4" />
+                  Eliminar
+                </button>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+                  <button
+                    type="button"
+                    className="btn w-full text-xs sm:w-auto"
+                    onClick={closeProductEditModal}
+                    disabled={isUpdatingProduct || isDeletingProduct}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-emerald w-full text-xs sm:w-auto"
+                    disabled={!canSaveProductEdit}
+                  >
+                    <CheckIcon className="size-4" />
+                    {isUpdatingProduct ? "Guardando..." : "Guardar cambios"}
+                  </button>
+                </div>
+              </div>
+            </motion.form>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {productDeleteTarget ? (
+          <motion.div
+            key="product-delete-confirm"
+            className="fixed inset-0 z-[75] flex min-h-[100dvh] items-center justify-center overflow-y-auto bg-zinc-950/45 p-3 py-5 backdrop-blur-[2px] sm:p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                closeProductDeleteConfirm();
+              }
+            }}
+          >
+            <motion.div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="product-delete-title"
+              aria-describedby="product-delete-description"
+              className="w-full max-w-md overflow-y-auto rounded-2xl border border-rose-200 bg-white p-5 shadow-[0_28px_80px_-44px_rgba(127,29,29,0.55)] max-h-[calc(100dvh-2rem)]"
+              initial={{ opacity: 0, scale: 0.97, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 16 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-rose-700">
+                  <TrashIcon className="size-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">
+                    Eliminar producto
+                  </p>
+                  <h3
+                    id="product-delete-title"
+                    className="mt-1 text-lg font-semibold text-zinc-900"
+                  >
+                    Confirmar eliminacion
+                  </h3>
+                  <p
+                    id="product-delete-description"
+                    className="mt-2 text-sm leading-6 text-zinc-600"
+                  >
+                    Vas a eliminar{" "}
+                    <span className="font-semibold text-zinc-900">
+                      {productDeleteTarget.name}
+                    </span>
+                    . Esta accion no se puede deshacer.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn h-9 w-9 shrink-0 p-0"
+                  onClick={closeProductDeleteConfirm}
+                  disabled={isDeletingProduct}
+                  aria-label="Cerrar confirmacion"
+                >
+                  <XMarkIcon className="size-4" />
+                </button>
+              </div>
+
+              {productDeleteStatus ? (
+                <p
+                  className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {productDeleteStatus}
+                </p>
+              ) : null}
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
                 <button
                   type="button"
                   className="btn w-full text-xs sm:w-auto"
-                  onClick={closeProductEditModal}
-                  disabled={isUpdatingProduct}
+                  onClick={closeProductDeleteConfirm}
+                  disabled={isDeletingProduct}
                 >
                   Cancelar
                 </button>
                 <button
-                  type="submit"
-                  className="btn btn-emerald w-full text-xs sm:w-auto"
-                  disabled={!canSaveProductEdit}
+                  type="button"
+                  className="btn w-full border-rose-200 bg-rose-50 text-xs font-semibold text-rose-700 hover:bg-rose-100 sm:w-auto"
+                  onClick={handleProductDeleteConfirm}
+                  disabled={isDeletingProduct}
                 >
-                  <CheckIcon className="size-4" />
-                  {isUpdatingProduct ? "Guardando..." : "Guardar cambios"}
+                  <TrashIcon className="size-4" />
+                  {isDeletingProduct ? "Eliminando..." : "Eliminar"}
                 </button>
               </div>
-            </motion.form>
+            </motion.div>
           </motion.div>
         ) : null}
       </AnimatePresence>
