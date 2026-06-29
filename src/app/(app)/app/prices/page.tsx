@@ -11,6 +11,7 @@ import {
   CheckIcon,
   CubeIcon,
   MinusIcon,
+  PencilSquareIcon,
   PlusIcon,
   XMarkIcon,
 } from "@/components/icons";
@@ -54,6 +55,26 @@ type StockProduct = {
   price: string | null;
   stock: string;
   prices: StockPrice[];
+};
+
+type ProductEditForm = {
+  name: string;
+  sku: string;
+  purchaseCode: string;
+  brand: string;
+  model: string;
+  unit: string;
+};
+
+type ProductEditResponse = {
+  id: string;
+  name: string;
+  sku: string | null;
+  purchaseCode: string | null;
+  brand: string | null;
+  model: string | null;
+  unit: string | null;
+  error?: string;
 };
 
 type StockSaveStatus = "idle" | "queued" | "saving" | "saved" | "failed";
@@ -188,6 +209,17 @@ const createEmptyRowDraft = (overrides: Partial<RowDraft> = {}): RowDraft => ({
   saveError: null,
   warning: null,
   ...overrides,
+});
+
+const createProductEditForm = (
+  product: StockProduct | null = null,
+): ProductEditForm => ({
+  name: product?.name ?? "",
+  sku: product?.sku ?? "",
+  purchaseCode: product?.purchaseCode ?? "",
+  brand: product?.brand ?? "",
+  model: product?.model ?? "",
+  unit: product?.unit ?? "",
 });
 
 const STOCK_SORT_OPTIONS: Array<{ value: StockSort; label: string }> = [
@@ -342,6 +374,28 @@ const formatUsdPreview = (value: number | null | undefined) => {
 const formatUnit = (unit: string | null) => {
   if (!unit) return "-";
   return UNIT_LABELS[unit as (typeof UNIT_VALUES)[number]] ?? unit;
+};
+
+const normalizeProductOptionalText = (value: string | null | undefined) =>
+  value?.trim() ?? "";
+
+const hasProductEditChanges = (
+  product: StockProduct | null,
+  form: ProductEditForm,
+) => {
+  if (!product) return false;
+  return (
+    form.name.trim() !== product.name.trim() ||
+    normalizeProductOptionalText(form.sku) !==
+      normalizeProductOptionalText(product.sku) ||
+    normalizeProductOptionalText(form.purchaseCode) !==
+      normalizeProductOptionalText(product.purchaseCode) ||
+    normalizeProductOptionalText(form.brand) !==
+      normalizeProductOptionalText(product.brand) ||
+    normalizeProductOptionalText(form.model) !==
+      normalizeProductOptionalText(product.model) ||
+    form.unit !== (product.unit ?? "")
+  );
 };
 
 const getProductPriceForList = (
@@ -762,7 +816,18 @@ export default function PricesPage() {
     model: "",
     unit: "",
   });
+  const [editingProduct, setEditingProduct] = useState<StockProduct | null>(
+    null,
+  );
+  const [productEditForm, setProductEditForm] = useState<ProductEditForm>(() =>
+    createProductEditForm(),
+  );
+  const [isUpdatingProduct, setIsUpdatingProduct] = useState(false);
+  const [productEditStatus, setProductEditStatus] = useState<string | null>(
+    null,
+  );
   const productNameInputRef = useRef<HTMLInputElement | null>(null);
+  const productEditNameInputRef = useRef<HTMLInputElement | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement | null>(null);
   const stickyHeaderRef = useRef<HTMLDivElement | null>(null);
   const stockRequestIdRef = useRef(0);
@@ -1114,6 +1179,26 @@ export default function PricesPage() {
     productNameInputRef.current?.focus();
   }, [showProductForm]);
 
+  useEffect(() => {
+    if (!editingProduct) return;
+    productEditNameInputRef.current?.focus();
+  }, [editingProduct]);
+
+  useEffect(() => {
+    if (!editingProduct || isUpdatingProduct) return;
+
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setEditingProduct(null);
+      setProductEditForm(createProductEditForm());
+      setProductEditStatus(null);
+    };
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [editingProduct, isUpdatingProduct]);
+
   const totalStock = products.reduce((sum, product) => {
     const parsed = Number(product.stock ?? 0);
     return Number.isFinite(parsed) ? sum + parsed : sum;
@@ -1144,6 +1229,15 @@ export default function PricesPage() {
   const visibleUnsavedCount = visibleUnsavedProductIds.length;
   const hasVisibleUnsavedChanges = visibleUnsavedCount > 0;
   const shouldBlockStockExit = hasSaveQueueActivity || hasVisibleUnsavedChanges;
+  const productEditIsDirty = hasProductEditChanges(
+    editingProduct,
+    productEditForm,
+  );
+  const canSaveProductEdit =
+    Boolean(editingProduct) &&
+    productEditForm.name.trim().length >= 2 &&
+    productEditIsDirty &&
+    !isUpdatingProduct;
 
   const openStockExitGuard = useCallback((action: StockExitGuardAction) => {
     setStockExitGuardAction(action);
@@ -1275,6 +1369,20 @@ export default function PricesPage() {
       saveStatus: "idle",
       saveError: null,
     });
+  };
+
+  const openProductEditModal = (product: StockProduct) => {
+    setProductTooltip(null);
+    setProductEditStatus(null);
+    setEditingProduct(product);
+    setProductEditForm(createProductEditForm(product));
+  };
+
+  const closeProductEditModal = () => {
+    if (isUpdatingProduct) return;
+    setEditingProduct(null);
+    setProductEditForm(createProductEditForm());
+    setProductEditStatus(null);
   };
 
   const updateUsdCost = (productId: string, value: string) => {
@@ -1591,6 +1699,79 @@ export default function PricesPage() {
       return await response.json();
     } catch {
       return null;
+    }
+  };
+
+  const handleProductEditSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingProduct) return;
+
+    const name = productEditForm.name.trim();
+    if (name.length < 2) {
+      setProductEditStatus("El nombre debe tener al menos 2 caracteres.");
+      return;
+    }
+
+    if (!canSaveProductEdit) {
+      closeProductEditModal();
+      return;
+    }
+
+    setIsUpdatingProduct(true);
+    setProductEditStatus(null);
+
+    try {
+      const res = await fetch("/api/products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingProduct.id,
+          name,
+          sku: productEditForm.sku.trim(),
+          purchaseCode: productEditForm.purchaseCode.trim(),
+          brand: productEditForm.brand.trim(),
+          model: productEditForm.model.trim(),
+          unit: productEditForm.unit,
+        }),
+      });
+      const data = (await readResponseJson(res)) as ProductEditResponse | null;
+
+      if (!res.ok) {
+        setProductEditStatus(data?.error ?? "No se pudo actualizar producto.");
+        return;
+      }
+
+      if (!data) {
+        setProductEditStatus("No se pudo actualizar producto.");
+        return;
+      }
+
+      setProducts((previousProducts) => {
+        const nextProducts = previousProducts.map((product) =>
+          product.id === editingProduct.id
+            ? {
+                ...product,
+                name: data.name,
+                sku: data.sku,
+                purchaseCode: data.purchaseCode,
+                brand: data.brand,
+                model: data.model,
+                unit: data.unit,
+              }
+            : product,
+        );
+        productsRef.current = nextProducts;
+        return nextProducts;
+      });
+      setStatus("Producto actualizado");
+      toast.success("Producto actualizado.");
+      setEditingProduct(null);
+      setProductEditForm(createProductEditForm());
+      setProductEditStatus(null);
+    } catch {
+      setProductEditStatus("No se pudo actualizar producto.");
+    } finally {
+      setIsUpdatingProduct(false);
     }
   };
 
@@ -2136,7 +2317,7 @@ export default function PricesPage() {
                     Stock
                   </th>
                 ) : null}
-                <th className="2xl:sticky 2xl:right-0 2xl:z-20 w-[92px] bg-white/95 py-2 pr-2 text-right">
+                <th className="2xl:sticky 2xl:right-0 2xl:z-20 w-[140px] bg-white/95 py-2 pr-2 text-right">
                   <span className="sr-only">Acciones</span>
                 </th>
               </tr>
@@ -2373,7 +2554,7 @@ export default function PricesPage() {
                                 ) : null}
                               </div>
                             ) : null}
-                            <div className="ml-auto flex min-w-[5rem] flex-col items-end justify-end gap-0.5 self-end">
+                            <div className="ml-auto flex min-w-[8.5rem] flex-col items-end justify-end gap-0.5 self-end">
                               <div className="flex items-center justify-end gap-2">
                                 <div className="group relative">
                                   <button
@@ -2387,6 +2568,24 @@ export default function PricesPage() {
                                   </button>
                                   <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
                                     Simulador
+                                  </span>
+                                </div>
+                                <div className="group relative">
+                                  <button
+                                    type="button"
+                                    className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-zinc-700 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+                                      editingProduct?.id === product.id
+                                        ? "border-sky-200 bg-sky-50 text-sky-700"
+                                        : "border-zinc-200 bg-white hover:bg-zinc-50"
+                                    }`}
+                                    onClick={() => openProductEditModal(product)}
+                                    aria-label={`Editar producto ${product.name}`}
+                                    aria-pressed={editingProduct?.id === product.id}
+                                  >
+                                    <PencilSquareIcon className="size-4" />
+                                  </button>
+                                  <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                                    Editar
                                   </span>
                                 </div>
                                 <button
@@ -2408,18 +2607,18 @@ export default function PricesPage() {
                                 </button>
                               </div>
                               {draft.saveStatus === "queued" ? (
-                                <span className="max-w-[96px] truncate text-[10px] font-semibold text-sky-700">
+                                <span className="max-w-[136px] truncate text-[10px] font-semibold text-sky-700">
                                   En cola
                                 </span>
                               ) : null}
                               {draft.saveStatus === "saving" ? (
-                                <span className="max-w-[96px] truncate text-[10px] font-semibold text-emerald-700">
+                                <span className="max-w-[136px] truncate text-[10px] font-semibold text-emerald-700">
                                   Guardando
                                 </span>
                               ) : null}
                               {draft.saveStatus === "failed" && draft.saveError ? (
                                 <span
-                                  className="max-w-[96px] truncate text-[10px] font-semibold text-rose-700"
+                                  className="max-w-[136px] truncate text-[10px] font-semibold text-rose-700"
                                   title={draft.saveError}
                                 >
                                   Error
@@ -3514,6 +3713,24 @@ export default function PricesPage() {
                               Simulador
                             </span>
                           </div>
+                          <div className="group relative">
+                            <button
+                              type="button"
+                              className={`inline-flex h-10 w-10 items-center justify-center rounded-full border text-zinc-700 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+                                editingProduct?.id === product.id
+                                  ? "border-sky-200 bg-sky-50 text-sky-700"
+                                  : "border-zinc-200 bg-white hover:bg-zinc-50"
+                              }`}
+                              onClick={() => openProductEditModal(product)}
+                              aria-label={`Editar producto ${product.name}`}
+                              aria-pressed={editingProduct?.id === product.id}
+                            >
+                              <PencilSquareIcon className="size-4" />
+                            </button>
+                            <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 translate-y-1 rounded-full border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-zinc-900 opacity-0 shadow-[0_12px_30px_-20px_rgba(24,24,27,0.7)] transition duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+                              Editar
+                            </span>
+                          </div>
                           <button
                             type="button"
                             className={`btn h-10 w-10 p-0 ${
@@ -3533,18 +3750,18 @@ export default function PricesPage() {
                           </button>
                         </div>
                         {draft.saveStatus === "queued" ? (
-                          <span className="max-w-[96px] truncate text-[10px] font-semibold text-sky-700">
+                          <span className="max-w-[136px] truncate text-[10px] font-semibold text-sky-700">
                             En cola
                           </span>
                         ) : null}
                         {draft.saveStatus === "saving" ? (
-                          <span className="max-w-[96px] truncate text-[10px] font-semibold text-emerald-700">
+                          <span className="max-w-[136px] truncate text-[10px] font-semibold text-emerald-700">
                             Guardando
                           </span>
                         ) : null}
                         {draft.saveStatus === "failed" && draft.saveError ? (
                           <span
-                            className="max-w-[96px] truncate text-[10px] font-semibold text-rose-700"
+                            className="max-w-[136px] truncate text-[10px] font-semibold text-rose-700"
                             title={draft.saveError}
                           >
                             Error
@@ -3669,6 +3886,189 @@ export default function PricesPage() {
                 </span>
               </div>
             </div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {editingProduct ? (
+          <motion.div
+            key="product-edit-modal"
+            className="fixed inset-0 z-[65] flex min-h-[100dvh] items-center justify-center overflow-y-auto bg-zinc-950/35 p-3 py-5 backdrop-blur-[2px] sm:p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                closeProductEditModal();
+              }
+            }}
+          >
+            <motion.form
+              onSubmit={handleProductEditSubmit}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="product-edit-title"
+              className="w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-200 bg-white shadow-[0_28px_80px_-44px_rgba(24,24,27,0.75)] max-h-[calc(100dvh-2rem)]"
+              initial={{ opacity: 0, scale: 0.97, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 16 }}
+              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3 border-b border-zinc-100 px-4 py-4 sm:px-5">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
+                    Producto
+                  </p>
+                  <h3
+                    id="product-edit-title"
+                    className="mt-1 text-lg font-semibold text-zinc-900"
+                  >
+                    Editar producto
+                  </h3>
+                  <p className="mt-1 truncate text-xs text-zinc-500">
+                    {editingProduct.name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn h-9 w-9 shrink-0 p-0"
+                  onClick={closeProductEditModal}
+                  disabled={isUpdatingProduct}
+                  aria-label="Cerrar editor"
+                >
+                  <XMarkIcon className="size-4" />
+                </button>
+              </div>
+
+              <div className="grid gap-3 px-4 py-4 sm:grid-cols-2 sm:px-5">
+                <label className="field-stack sm:col-span-2">
+                  <span className="input-label">Nombre</span>
+                  <input
+                    ref={productEditNameInputRef}
+                    className="input w-full"
+                    value={productEditForm.name}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        name: event.target.value,
+                      }))
+                    }
+                    minLength={2}
+                    required
+                    disabled={isUpdatingProduct}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="input-label">Codigo interno</span>
+                  <input
+                    className="input w-full"
+                    value={productEditForm.sku}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        sku: event.target.value,
+                      }))
+                    }
+                    disabled={isUpdatingProduct}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="input-label">Codigo compra</span>
+                  <input
+                    className="input w-full"
+                    value={productEditForm.purchaseCode}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        purchaseCode: event.target.value,
+                      }))
+                    }
+                    disabled={isUpdatingProduct}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="input-label">Unidad</span>
+                  <select
+                    className="input w-full cursor-pointer"
+                    value={productEditForm.unit}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        unit: event.target.value,
+                      }))
+                    }
+                    disabled={isUpdatingProduct}
+                  >
+                    <option value="">Sin unidad</option>
+                    {UNIT_OPTIONS.map((unit) => (
+                      <option key={unit.value} value={unit.value}>
+                        {unit.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-stack">
+                  <span className="input-label">Marca</span>
+                  <input
+                    className="input w-full"
+                    value={productEditForm.brand}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        brand: event.target.value,
+                      }))
+                    }
+                    disabled={isUpdatingProduct}
+                  />
+                </label>
+                <label className="field-stack sm:col-span-2">
+                  <span className="input-label">Modelo</span>
+                  <input
+                    className="input w-full"
+                    value={productEditForm.model}
+                    onChange={(event) =>
+                      setProductEditForm((previous) => ({
+                        ...previous,
+                        model: event.target.value,
+                      }))
+                    }
+                    disabled={isUpdatingProduct}
+                  />
+                </label>
+              </div>
+
+              {productEditStatus ? (
+                <p
+                  className="px-4 pb-2 text-xs text-rose-700 sm:px-5"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {productEditStatus}
+                </p>
+              ) : null}
+
+              <div className="flex flex-col-reverse gap-2 border-t border-zinc-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-end sm:px-5">
+                <button
+                  type="button"
+                  className="btn w-full text-xs sm:w-auto"
+                  onClick={closeProductEditModal}
+                  disabled={isUpdatingProduct}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-emerald w-full text-xs sm:w-auto"
+                  disabled={!canSaveProductEdit}
+                >
+                  <CheckIcon className="size-4" />
+                  {isUpdatingProduct ? "Guardando..." : "Guardar cambios"}
+                </button>
+              </div>
+            </motion.form>
           </motion.div>
         ) : null}
       </AnimatePresence>

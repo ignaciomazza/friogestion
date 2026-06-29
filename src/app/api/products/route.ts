@@ -27,11 +27,11 @@ const productSchema = z.object({
 const productUpdateSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(2),
-  sku: z.string().min(1).optional(),
+  sku: z.string().optional(),
   purchaseCode: z.string().optional(),
-  brand: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  unit: z.enum(UNIT_VALUES).optional(),
+  brand: z.string().optional(),
+  model: z.string().optional(),
+  unit: z.union([z.enum(UNIT_VALUES), z.literal("")]).optional(),
 });
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -396,13 +396,13 @@ export async function PATCH(req: NextRequest) {
       where: { id: body.id },
       data: {
         name: body.name.trim(),
-        sku: sku || undefined,
+        ...(body.sku !== undefined ? { sku: sku || null } : {}),
         ...(body.purchaseCode !== undefined
           ? { purchaseCode: purchaseCode || null }
           : {}),
-        brand: brand || undefined,
-        model: model || undefined,
-        unit: unit || undefined,
+        ...(body.brand !== undefined ? { brand: brand || null } : {}),
+        ...(body.model !== undefined ? { model: model || null } : {}),
+        ...(body.unit !== undefined ? { unit: unit || null } : {}),
       },
     });
 
