@@ -130,6 +130,42 @@ test("rankProductsBySearchQuery exige match compacto para queries de codigo con 
   assert.ok(!ranked.some((product) => product.id === "p5"));
 });
 
+test("rankProductsBySearchQuery tolera proximidad en codigos numericos largos", () => {
+  const ranked = rankProductsBySearchQuery(
+    [
+      {
+        id: "near-code",
+        name: "Relay compresor",
+        sku: "2161",
+        purchaseCode: null,
+        brand: null,
+        model: null,
+      },
+    ],
+    "2160",
+  );
+
+  assert.equal(ranked[0]?.id, "near-code");
+});
+
+test("rankProductsBySearchQuery no aplica fuzzy numerico a codigos cortos", () => {
+  const ranked = rankProductsBySearchQuery(
+    [
+      {
+        id: "short-code",
+        name: "Relay compresor",
+        sku: "301",
+        purchaseCode: null,
+        brand: null,
+        model: null,
+      },
+    ],
+    "300",
+  );
+
+  assert.equal(ranked.length, 0);
+});
+
 test("rankProductsBySearchQuery no mezcla tokens cortos por fuzzy cuando hay separadores", () => {
   const ranked = rankProductsBySearchQuery(PRODUCTS, "kg-");
   assert.ok(ranked.some((product) => product.id === "p7"));

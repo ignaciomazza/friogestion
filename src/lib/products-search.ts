@@ -18,6 +18,7 @@ type SearchTarget = {
   compact: string;
   words: string[];
   weight: number;
+  allowNumericFuzzy?: boolean;
 };
 
 const SPACES_REGEX = /\s+/g;
@@ -104,6 +105,25 @@ const scoreTokenInTarget = (token: string, target: SearchTarget) => {
     target.compact.includes(compactToken)
   ) {
     return 102 * target.weight;
+  }
+  if (isNumericToken) {
+    if (!target.allowNumericFuzzy || token.length < 4) return 0;
+
+    let bestDistance: number | null = null;
+    for (const word of target.words) {
+      if (!NUMERIC_TOKEN_REGEX.test(word) || word.length < 4) continue;
+      const distance = levenshteinWithin(token, word, 1);
+      if (distance === null) continue;
+      if (bestDistance === null || distance < bestDistance) {
+        bestDistance = distance;
+        if (bestDistance === 0) break;
+      }
+    }
+
+    if (bestDistance === null) return 0;
+
+    const score = 84 - bestDistance * 28;
+    return Math.max(0, score) * target.weight;
   }
   if (HAS_DIGIT_REGEX.test(token)) return 0;
   if (token.length <= 2) return 0;
@@ -192,12 +212,14 @@ export const scoreProductSearchMatch = (
       compact: compactSearchText(normalizedSku),
       words: normalizedSku ? normalizedSku.split(" ") : [],
       weight: 1.2,
+      allowNumericFuzzy: true,
     },
     {
       value: normalizedPurchaseCode,
       compact: compactSearchText(normalizedPurchaseCode),
       words: normalizedPurchaseCode ? normalizedPurchaseCode.split(" ") : [],
       weight: 1.15,
+      allowNumericFuzzy: true,
     },
     {
       value: normalizedBrand,
@@ -210,6 +232,7 @@ export const scoreProductSearchMatch = (
       compact: compactSearchText(normalizedModel),
       words: normalizedModel ? normalizedModel.split(" ") : [],
       weight: 1,
+      allowNumericFuzzy: true,
     },
     {
       value: combined,

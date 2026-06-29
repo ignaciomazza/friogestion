@@ -135,6 +135,7 @@ type StorefrontAdminPublicationRow = {
   productId: string;
   productName: string;
   sku: string | null;
+  purchaseCode: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
@@ -3118,6 +3119,7 @@ export async function listStorefrontAdminPublications(
         productId: product.id,
         productName: product.name,
         sku: product.sku,
+        purchaseCode: product.purchaseCode,
         brand: product.brand,
         model: product.model,
         unit: product.unit,

@@ -21,6 +21,10 @@ import {
 } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { APP_NAVIGATION_GUARD_EVENT } from "@/lib/navigation-guard";
+import {
+  normalizeSearchText,
+  scoreProductSearchMatch,
+} from "@/lib/products-search";
 import "react-toastify/dist/ReactToastify.css";
 
 type MercadoPagoFeeRule = {
@@ -81,6 +85,7 @@ type PublicationRow = {
   productId: string;
   productName: string;
   sku: string | null;
+  purchaseCode: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
@@ -204,8 +209,11 @@ type ConfigFormState = {
 
 export type StorefrontSectionKey = "config" | "publications" | "orders";
 type PublicationSortKey =
+  | "relevance"
   | "name-asc"
   | "name-desc"
+  | "code-asc"
+  | "code-desc"
   | "price-desc"
   | "price-asc"
   | "stock-desc"
@@ -670,6 +678,78 @@ const formatMoney = (value: number) =>
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   });
+
+const comparePublicationName = (
+  left: PublicationRow,
+  right: PublicationRow,
+  direction: "asc" | "desc" = "asc",
+) => {
+  const compared = left.productName.localeCompare(right.productName, "es", {
+    numeric: true,
+    sensitivity: "base",
+  });
+  return direction === "desc" ? -compared : compared;
+};
+
+const getPublicationCode = (row: PublicationRow) =>
+  compactPublicationText(row.sku) || compactPublicationText(row.purchaseCode);
+
+const comparePublicationCode = (
+  left: PublicationRow,
+  right: PublicationRow,
+  direction: "asc" | "desc" = "asc",
+) => {
+  const leftCode = getPublicationCode(left);
+  const rightCode = getPublicationCode(right);
+
+  if (!leftCode && !rightCode) return comparePublicationName(left, right);
+  if (!leftCode) return 1;
+  if (!rightCode) return -1;
+
+  const compared = leftCode.localeCompare(rightCode, "es", {
+    numeric: true,
+    sensitivity: "base",
+  });
+  if (compared !== 0) return direction === "desc" ? -compared : compared;
+  return comparePublicationName(left, right);
+};
+
+const scorePublicationRelevance = (
+  row: PublicationRow,
+  rawQuery: string,
+) => {
+  const normalizedQuery = normalizeSearchText(rawQuery);
+  if (!normalizedQuery) return null;
+
+  const productScore = scoreProductSearchMatch(
+    {
+      id: row.productId,
+      name: [row.productName, row.publicName, row.category]
+        .filter(Boolean)
+        .join(" "),
+      sku: row.sku,
+      purchaseCode: row.purchaseCode,
+      brand: row.brand,
+      model: row.model,
+    },
+    rawQuery,
+  );
+  if (productScore !== null) return productScore;
+
+  const publicationText = normalizeSearchText(
+    [
+      row.seoTitle,
+      row.metaDescription,
+      row.shortDescription,
+      row.longDescription,
+      row.category,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+
+  return publicationText.includes(normalizedQuery) ? 80 : null;
+};
 
 const formatDateTime = (value: string | null) => {
   if (!value) return "Sin registrar";
@@ -1188,6 +1268,7 @@ function PublicationEditorCard({
 }) {
   const productMeta = [
     row.sku || "Sin codigo",
+    row.purchaseCode ? `Compra ${row.purchaseCode}` : null,
     row.brand,
     row.model,
     row.unit,
@@ -2312,7 +2393,7 @@ export default function StorefrontClient({
   const [selectedImagePublicationId, setSelectedImagePublicationId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [publicationSort, setPublicationSort] =
-    useState<PublicationSortKey>("name-asc");
+    useState<PublicationSortKey>("relevance");
   const [orderStatusFilter, setOrderStatusFilter] =
     useState<OrderStatusFilter>("to-deliver");
   const [orderDateRangeFilter, setOrderDateRangeFilter] =
@@ -2955,6 +3036,7 @@ export default function StorefrontClient({
     ).length;
   };
   const filteredPublications = useMemo(() => {
+    const trimmedQuery = query.trim();
     const items = publications.filter((row) => {
       if (publicationStatusFilter === "active") {
         return row.publicationStatus === "PUBLISHED";
@@ -2967,10 +3049,19 @@ export default function StorefrontClient({
 
     items.sort((left, right) => {
       switch (publicationSort) {
+        case "relevance": {
+          if (!trimmedQuery) return comparePublicationName(left, right);
+          const leftScore = scorePublicationRelevance(left, trimmedQuery) ?? -1;
+          const rightScore = scorePublicationRelevance(right, trimmedQuery) ?? -1;
+          if (leftScore !== rightScore) return rightScore - leftScore;
+          return comparePublicationName(left, right);
+        }
         case "name-desc":
-          return right.productName.localeCompare(left.productName, "es", {
-            sensitivity: "base",
-          });
+          return comparePublicationName(left, right, "desc");
+        case "code-asc":
+          return comparePublicationCode(left, right);
+        case "code-desc":
+          return comparePublicationCode(left, right, "desc");
         case "price-desc":
           return right.computedPriceFinal - left.computedPriceFinal;
         case "price-asc":
@@ -2981,14 +3072,12 @@ export default function StorefrontClient({
           return left.webStockAvailable - right.webStockAvailable;
         case "name-asc":
         default:
-          return left.productName.localeCompare(right.productName, "es", {
-            sensitivity: "base",
-          });
+          return comparePublicationName(left, right);
       }
     });
 
     return items;
-  }, [publicationSort, publicationStatusFilter, publications]);
+  }, [publicationSort, publicationStatusFilter, publications, query]);
   const filteredOrders = useMemo(() => {
     const normalizedQuery = orderQuery.trim().toLowerCase();
     const rangeStart = getOrderDateRangeStart(
@@ -3514,12 +3603,16 @@ export default function StorefrontClient({
                     <SelectInput
                       embedded
                       value={publicationSort}
-                      onChange={(value) =>
-                        setPublicationSort(value as PublicationSortKey)
-                      }
+                      onChange={(value) => {
+                        setPublicationSort(value as PublicationSortKey);
+                        setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+                      }}
                       options={[
+                        { label: "Coincidencia", value: "relevance" },
                         { label: "Nombre A-Z", value: "name-asc" },
                         { label: "Nombre Z-A", value: "name-desc" },
+                        { label: "Codigo A-Z", value: "code-asc" },
+                        { label: "Codigo Z-A", value: "code-desc" },
                         { label: "Precio mas alto", value: "price-desc" },
                         { label: "Precio mas bajo", value: "price-asc" },
                         { label: "Mas stock", value: "stock-desc" },
