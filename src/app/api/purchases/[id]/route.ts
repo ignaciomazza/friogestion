@@ -84,6 +84,7 @@ export async function GET(
         fiscalVoucherType: true,
         fiscalPointOfSale: true,
         fiscalVoucherNumber: true,
+        authorizationMode: true,
         authorizationCode: true,
         supplier: {
           select: {
@@ -214,6 +215,7 @@ export async function GET(
       discountDetails: purchase.discountDetails,
       fiscalVoucherKind: purchase.fiscalVoucherKind,
       fiscalVoucherType: purchase.fiscalVoucherType,
+      authorizationMode: purchase.authorizationMode,
       authorizationCode: purchase.authorizationCode,
       items: purchase.items.map((item) => ({
         id: item.id,

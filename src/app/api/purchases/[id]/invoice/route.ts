@@ -15,6 +15,7 @@ import {
 } from "@/lib/arca/purchase-validation";
 import { mapArcaValidationError } from "@/lib/arca/validation-errors";
 import {
+  PURCHASE_AUTHORIZATION_MODES,
   PURCHASE_DOCUMENT_TYPES,
   PURCHASE_VOUCHER_KINDS,
   assertPurchaseVoucherVatRules,
@@ -22,6 +23,7 @@ import {
   getPurchaseVoucherType,
   mapVoucherTypeToPurchaseDocumentType,
   mapVoucherTypeToPurchaseKind,
+  normalizePurchaseAuthorizationMode,
 } from "@/lib/purchases/fiscal";
 import type {
   PurchaseDocumentType,
@@ -36,6 +38,7 @@ const updatePurchaseInvoiceSchema = z.object({
   invoiceNumber: z.string().optional().nullable(),
   invoiceDate: z.string().optional().nullable(),
   voucherKind: z.enum(PURCHASE_VOUCHER_KINDS).optional().nullable(),
+  authorizationMode: z.enum(PURCHASE_AUTHORIZATION_MODES).optional().nullable(),
   authorizationCode: z.string().optional().nullable(),
 });
 
@@ -208,6 +211,10 @@ export async function PATCH(
     const authorizationCode = hasInvoice
       ? trimToNull(body.authorizationCode) ?? trimToNull(purchase.authorizationCode)
       : null;
+    const authorizationMode = hasInvoice
+      ? body.authorizationMode ??
+        normalizePurchaseAuthorizationMode(purchase.authorizationMode)
+      : null;
 
     const totalAmount = Number(purchase.total ?? 0);
     const hasTotalAmount = Number.isFinite(totalAmount) && totalAmount > 0;
@@ -238,6 +245,7 @@ export async function PATCH(
           invoiceNumber,
           voucherDate: invoiceDateInput,
           totalAmount,
+          mode: authorizationMode,
           authorizationCode,
         },
         {
@@ -274,7 +282,7 @@ export async function PATCH(
           : null,
         authorizationMode: hasInvoice
           ? arcaValidationPayload?.mode ??
-            (authorizationCode ? "CAE" : purchase.authorizationMode)
+            authorizationMode
           : null,
         authorizationCode,
         arcaValidationRequest: arcaValidationPayload
@@ -286,7 +294,7 @@ export async function PATCH(
         arcaValidationMessage: hasInvoice
           ? arcaValidationPayload
             ? "Datos del comprobante actualizados. Revalida para confirmar en ARCA."
-            : "Comprobante actualizado. Completa CAE y revalida en ARCA."
+            : "Comprobante actualizado. Completa codigo de autorizacion y revalida en ARCA."
           : "Registro interno no computable fiscalmente. Sin comprobante fiscal.",
       },
       select: {
@@ -298,6 +306,7 @@ export async function PATCH(
         fiscalVoucherType: true,
         fiscalPointOfSale: true,
         fiscalVoucherNumber: true,
+        authorizationMode: true,
         authorizationCode: true,
       },
     });
@@ -352,6 +361,7 @@ export async function PATCH(
         fiscalVoucherType: updated.fiscalVoucherType,
         fiscalPointOfSale: updated.fiscalPointOfSale,
         fiscalVoucherNumber: updated.fiscalVoucherNumber,
+        authorizationMode: updated.authorizationMode,
         authorizationCode: updated.authorizationCode,
         fiscalComputable,
         fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),

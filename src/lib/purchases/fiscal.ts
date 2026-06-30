@@ -27,6 +27,20 @@ export const PURCHASE_VOUCHER_KINDS = ["A", "B", "C"] as const;
 
 export type PurchaseVoucherKind = (typeof PURCHASE_VOUCHER_KINDS)[number];
 
+export const PURCHASE_AUTHORIZATION_MODES = ["CAE", "CAI", "CAEA"] as const;
+
+export type PurchaseAuthorizationMode =
+  (typeof PURCHASE_AUTHORIZATION_MODES)[number];
+
+export function normalizePurchaseAuthorizationMode(
+  value: string | null | undefined,
+): PurchaseAuthorizationMode {
+  const normalized = value?.trim().toUpperCase() ?? "";
+  if (normalized === "CAI" || normalized === "I") return "CAI";
+  if (normalized === "CAEA" || normalized === "A") return "CAEA";
+  return "CAE";
+}
+
 export const PURCHASE_VOUCHER_TYPE_BY_DOCUMENT_AND_KIND: Record<
   PurchaseDocumentType,
   Record<PurchaseVoucherKind, number>

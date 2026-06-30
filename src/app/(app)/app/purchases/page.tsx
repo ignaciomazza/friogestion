@@ -28,7 +28,9 @@ import {
   type PurchaseDiscountStepInput,
 } from "@/lib/purchases/discounts";
 import {
+  PURCHASE_AUTHORIZATION_MODES,
   PURCHASE_DOCUMENT_TYPE_LABELS,
+  type PurchaseAuthorizationMode,
   type PurchaseDiscountBase,
   type PurchaseDiscountType,
   type PurchaseDocumentType,
@@ -36,6 +38,7 @@ import {
   formatPurchaseDocumentTypeLabel,
   mapVoucherTypeToPurchaseDocumentType,
   mapVoucherTypeToPurchaseKind,
+  normalizePurchaseAuthorizationMode,
 } from "@/lib/purchases/fiscal";
 import {
   calculateAutoTotalsFromProducts,
@@ -243,6 +246,7 @@ type PurchaseQrImportResponse = {
   invoiceNumber: string;
   voucherDate: string;
   totalAmount: number;
+  authorizationMode: string | null;
   authorizationCode: string | null;
   netTaxedAmount?: number | null;
   nonTaxedAmount?: number | null;
@@ -291,6 +295,7 @@ type PurchaseEditResponse = {
   discountDetails?: PurchaseDiscountStepInput[] | null;
   fiscalVoucherKind: string | null;
   fiscalVoucherType: number | null;
+  authorizationMode: string | null;
   authorizationCode: string | null;
   items: Array<{
     productId: string;
@@ -665,8 +670,13 @@ const buildArcaHints = (messages: string[]) => {
   if (text.includes("importe") || text.includes("total") || text.includes("imptotal")) {
     hints.push("Corrobora que el total cargado sea igual al del comprobante.");
   }
-  if (text.includes("cae") || text.includes("codautorizacion")) {
-    hints.push("Valida que el CAE esté completo y sin errores.");
+  if (
+    text.includes("cae") ||
+    text.includes("cai") ||
+    text.includes("caea") ||
+    text.includes("codautorizacion")
+  ) {
+    hints.push("Valida que el codigo de autorizacion este completo y sin errores.");
   }
   if (text.includes("tipo") || text.includes("cbtetipo")) {
     hints.push("Revisa el tipo de comprobante (A/B/C).");
@@ -678,7 +688,10 @@ const buildArcaHints = (messages: string[]) => {
 };
 
 const ARCA_DETAIL_LABELS: Array<{ includes: string[]; label: string }> = [
-  { includes: ["cae", "caea", "codautorizacion"], label: "Código CAE/CAEA" },
+  {
+    includes: ["cae", "cai", "caea", "codautorizacion"],
+    label: "Código de autorización",
+  },
   { includes: ["cbtemodo", "modo"], label: "Modo de comprobante" },
   { includes: ["cbtetipo"], label: "Tipo de comprobante" },
   { includes: ["ptovta", "puntoventa"], label: "Punto de venta" },
@@ -738,6 +751,7 @@ const formatArcaAuthorizationModeLabel = (value: unknown) => {
   const mode = String(value ?? "").trim().toUpperCase();
   if (!mode) return "-";
   if (mode === "CAE" || mode === "E") return "CAE";
+  if (mode === "CAI" || mode === "I") return "CAI";
   if (mode === "CAEA" || mode === "A") return "CAEA";
   return mode;
 };
@@ -941,6 +955,14 @@ const PURCHASE_VOUCHER_KIND_OPTIONS: Array<{
   { value: "B", label: "B" },
   { value: "C", label: "C" },
 ];
+
+const PURCHASE_AUTHORIZATION_MODE_OPTIONS: Array<{
+  value: PurchaseAuthorizationMode;
+  label: string;
+}> = PURCHASE_AUTHORIZATION_MODES.map((mode) => ({
+  value: mode,
+  label: mode,
+}));
 
 const PURCHASE_DISCOUNT_TYPE_OPTIONS: Array<{
   value: PurchaseDiscountType;
@@ -1473,6 +1495,8 @@ export default function PurchasesPage() {
   const [arcaVoucherKind, setArcaVoucherKind] = useState<PurchaseVoucherKind>(
     "B",
   );
+  const [arcaAuthorizationMode, setArcaAuthorizationMode] =
+    useState<PurchaseAuthorizationMode>("CAE");
   const [arcaAuthorizationCode, setArcaAuthorizationCode] = useState("");
   const [arcaValidationResult, setArcaValidationResult] = useState<{
     status: string;
@@ -1526,6 +1550,8 @@ export default function PurchasesPage() {
   const [editingVoucherKind, setEditingVoucherKind] = useState<PurchaseVoucherKind>(
     "B",
   );
+  const [editingAuthorizationMode, setEditingAuthorizationMode] =
+    useState<PurchaseAuthorizationMode>("CAE");
   const [editingAuthorizationCode, setEditingAuthorizationCode] = useState("");
   const [isSavingInvoiceEdit, setIsSavingInvoiceEdit] = useState(false);
   const [revalidateAfterInvoiceEdit, setRevalidateAfterInvoiceEdit] =
@@ -2533,6 +2559,7 @@ export default function PurchasesPage() {
     if (!inferredPointOfSale) return null;
 
     const payload: Record<string, string | number> = {
+      mode: arcaAuthorizationMode,
       documentType,
       voucherKind: arcaVoucherKind,
       invoiceNumber: normalizedInvoiceNumber,
@@ -2836,6 +2863,12 @@ export default function PurchasesPage() {
       if (parsedQr.voucherKind === "A" || parsedQr.voucherKind === "B" || parsedQr.voucherKind === "C") {
         setArcaVoucherKind(parsedQr.voucherKind);
       }
+      setArcaAuthorizationMode(
+        normalizePurchaseAuthorizationMode(
+          parsedQr.authorizationMode ??
+            String(parsedQr.arcaValidation.mode ?? ""),
+        ),
+      );
       setInvoiceNumber(parsedQr.invoiceNumber ?? "");
       setInvoiceDate(
         toCalendarDateInput(parsedQr.voucherDate) || toDateInputValue(new Date()),
@@ -3782,6 +3815,7 @@ export default function PurchasesPage() {
     setSelectedProductsById({});
     setCashOutLines([buildCashOutLine(paymentMethods, accounts)]);
     setArcaVoucherKind("B");
+    setArcaAuthorizationMode("CAE");
     setArcaAuthorizationCode("");
     setArcaValidationResult(null);
     setHighlightedFields({});
@@ -3966,6 +4000,9 @@ export default function PurchasesPage() {
       setPaymentMode(purchase.impactsAccount ? "CURRENT_ACCOUNT" : "OFF_BOOK");
       setCashOutLines([buildCashOutLine(paymentMethods, accounts)]);
       setArcaVoucherKind(voucherKind);
+      setArcaAuthorizationMode(
+        normalizePurchaseAuthorizationMode(purchase.authorizationMode),
+      );
       setArcaAuthorizationCode(purchase.authorizationCode ?? "");
       setArcaValidationResult(null);
       setPendingPurchase(null);
@@ -4239,6 +4276,9 @@ export default function PurchasesPage() {
         "INVOICE",
     );
     setEditingVoucherKind(voucherKind);
+    setEditingAuthorizationMode(
+      normalizePurchaseAuthorizationMode(purchase.authorizationMode),
+    );
     setEditingAuthorizationCode(purchase.authorizationCode ?? "");
     setRevalidateAfterInvoiceEdit(Boolean(options?.revalidateAfterSave));
     if (options?.closeRevalidation) {
@@ -4289,6 +4329,7 @@ export default function PurchasesPage() {
             invoiceNumber: normalizedInvoiceNumber,
             invoiceDate: editingInvoiceDate,
             voucherKind: editingVoucherKind,
+            authorizationMode: editingAuthorizationMode,
             authorizationCode: editingAuthorizationCode.trim() || null,
           }),
         },
@@ -5998,6 +6039,7 @@ export default function PurchasesPage() {
                       setDocumentType("INVOICE");
                       setLinkedPurchaseInvoiceId("");
                       setInvoiceNumber("");
+                      setArcaAuthorizationMode("CAE");
                       setArcaAuthorizationCode("");
                       setArcaValidationResult(null);
                     }
@@ -6008,7 +6050,7 @@ export default function PurchasesPage() {
 
               {hasInvoice ? (
                 <>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                     <label className="field-stack min-w-0 w-full">
                       <span className="input-label">Comprobante</span>
                       <PurchaseSelect
@@ -6058,14 +6100,25 @@ export default function PurchasesPage() {
                       ) : null}
                     </label>
                     <label className="field-stack min-w-0 w-full">
-                      <span className="input-label">CAE</span>
+                      <span className="input-label">Autorizacion</span>
+                      <PurchaseSelect
+                        value={arcaAuthorizationMode}
+                        options={PURCHASE_AUTHORIZATION_MODE_OPTIONS}
+                        onValueChange={(next) => {
+                          setArcaAuthorizationMode(next);
+                          setArcaValidationResult(null);
+                        }}
+                      />
+                    </label>
+                    <label className="field-stack min-w-0 w-full">
+                      <span className="input-label">{arcaAuthorizationMode}</span>
                       <input
                         className={`input w-full min-w-0 ${getHighlightClass("invoice.authorizationCode")}`}
                         value={arcaAuthorizationCode}
                         onChange={(event) =>
                           setArcaAuthorizationCode(event.target.value)
                         }
-                        placeholder="Codigo autorizacion"
+                        placeholder={`Codigo ${arcaAuthorizationMode}`}
                       />
                     </label>
                   </div>
@@ -6122,7 +6175,7 @@ export default function PurchasesPage() {
                     ) : null}
                     {arcaValidationResult?.comprobante ? (
                       <span className="text-[11px] text-zinc-500">
-                        ARCA se usa para correlacion de tipo/punto/numero/fecha/total/CAE; si no trae desglose fiscal, IVA y percepciones se cargan manualmente.
+                        ARCA se usa para correlacion de tipo/punto/numero/fecha/total/codigo de autorizacion; si no trae desglose fiscal, IVA y percepciones se cargan manualmente.
                       </span>
                     ) : null}
                   </div>
@@ -7223,7 +7276,7 @@ export default function PurchasesPage() {
                           {String(revalidationFeedback.request.receiverDocNumber ?? "-")}
                         </span>
                         <span>
-                          CAE/CAEA:{" "}
+                          Codigo autorizacion:{" "}
                           {String(revalidationFeedback.request.authorizationCode ?? "-")}
                         </span>
                       </div>
@@ -7287,6 +7340,7 @@ export default function PurchasesPage() {
               editingVoucherKind={editingVoucherKind}
               editingInvoiceDate={editingInvoiceDate}
               editingInvoiceNumber={editingInvoiceNumber}
+              editingAuthorizationMode={editingAuthorizationMode}
               editingAuthorizationCode={editingAuthorizationCode}
               isSavingInvoiceEdit={isSavingInvoiceEdit}
               revalidateAfterInvoiceEdit={revalidateAfterInvoiceEdit}
@@ -7294,6 +7348,7 @@ export default function PurchasesPage() {
               onSetEditingVoucherKind={setEditingVoucherKind}
               onSetEditingInvoiceDate={setEditingInvoiceDate}
               onSetEditingInvoiceNumber={setEditingInvoiceNumber}
+              onSetEditingAuthorizationMode={setEditingAuthorizationMode}
               onSetEditingAuthorizationCode={setEditingAuthorizationCode}
               onClose={closeInvoiceEditor}
               onSave={handleSaveInvoiceEdit}

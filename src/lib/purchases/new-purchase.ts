@@ -286,7 +286,7 @@ export function compareArcaVoucherAgainstForm(input: {
   ) {
     mismatches.push({
       field: "invoice.authorizationCode",
-      label: "CAE",
+      label: "codigo de autorizacion",
       section: "invoice",
       formValue: expectedAuthorization,
       arcaValue: normalizeCode(arca.authorizationCode),

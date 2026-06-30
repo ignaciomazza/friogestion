@@ -1,6 +1,8 @@
-import type {
-  PurchaseDocumentType,
-  PurchaseVoucherKind,
+import {
+  PURCHASE_AUTHORIZATION_MODES,
+  type PurchaseAuthorizationMode,
+  type PurchaseDocumentType,
+  type PurchaseVoucherKind,
 } from "@/lib/purchases/fiscal";
 import { PurchaseSelect } from "./PurchaseSelect";
 
@@ -27,12 +29,21 @@ const VOUCHER_KIND_OPTIONS: Array<{
   { value: "C", label: "C" },
 ];
 
+const AUTHORIZATION_MODE_OPTIONS: Array<{
+  value: PurchaseAuthorizationMode;
+  label: string;
+}> = PURCHASE_AUTHORIZATION_MODES.map((mode) => ({
+  value: mode,
+  label: mode,
+}));
+
 type PurchaseEditInvoiceModalProps = {
   editingInvoicePurchase: PurchaseSummary | null;
   editingDocumentType: PurchaseDocumentType;
   editingVoucherKind: PurchaseVoucherKind;
   editingInvoiceDate: string;
   editingInvoiceNumber: string;
+  editingAuthorizationMode: PurchaseAuthorizationMode;
   editingAuthorizationCode: string;
   isSavingInvoiceEdit: boolean;
   revalidateAfterInvoiceEdit: boolean;
@@ -40,6 +51,7 @@ type PurchaseEditInvoiceModalProps = {
   onSetEditingVoucherKind: (value: PurchaseVoucherKind) => void;
   onSetEditingInvoiceDate: (value: string) => void;
   onSetEditingInvoiceNumber: (value: string) => void;
+  onSetEditingAuthorizationMode: (value: PurchaseAuthorizationMode) => void;
   onSetEditingAuthorizationCode: (value: string) => void;
   onClose: () => void;
   onSave: () => void;
@@ -51,6 +63,7 @@ export default function PurchaseEditInvoiceModal({
   editingVoucherKind,
   editingInvoiceDate,
   editingInvoiceNumber,
+  editingAuthorizationMode,
   editingAuthorizationCode,
   isSavingInvoiceEdit,
   revalidateAfterInvoiceEdit,
@@ -58,6 +71,7 @@ export default function PurchaseEditInvoiceModal({
   onSetEditingVoucherKind,
   onSetEditingInvoiceDate,
   onSetEditingInvoiceNumber,
+  onSetEditingAuthorizationMode,
   onSetEditingAuthorizationCode,
   onClose,
   onSave,
@@ -112,7 +126,7 @@ export default function PurchaseEditInvoiceModal({
               disabled={isSavingInvoiceEdit}
             />
           </label>
-          <label className="field-stack sm:col-span-2">
+          <label className="field-stack">
             <span className="input-label">Numero comprobante</span>
             <input
               className="input"
@@ -123,13 +137,22 @@ export default function PurchaseEditInvoiceModal({
             />
             <p className="text-[11px] text-zinc-500">Formato obligatorio: 0001-00001234 (con guion).</p>
           </label>
-          <label className="field-stack sm:col-span-2">
-            <span className="input-label">CAE/CAEA</span>
+          <label className="field-stack">
+            <span className="input-label">Autorizacion</span>
+            <PurchaseSelect
+              value={editingAuthorizationMode}
+              options={AUTHORIZATION_MODE_OPTIONS}
+              onValueChange={onSetEditingAuthorizationMode}
+              disabled={isSavingInvoiceEdit}
+            />
+          </label>
+          <label className="field-stack">
+            <span className="input-label">{editingAuthorizationMode}</span>
             <input
               className="input"
               value={editingAuthorizationCode}
               onChange={(event) => onSetEditingAuthorizationCode(event.target.value)}
-              placeholder="Codigo de autorizacion"
+              placeholder={`Codigo ${editingAuthorizationMode}`}
               disabled={isSavingInvoiceEdit}
             />
           </label>

@@ -59,6 +59,7 @@ const normalizeAuthorizationMode = (
   const normalized = String(value ?? "").trim().toUpperCase();
   if (!normalized) return null;
   if (normalized === "E" || normalized === "CAE") return "CAE";
+  if (normalized === "I" || normalized === "CAI") return "CAI";
   if (normalized === "A" || normalized === "CAEA") return "CAEA";
   return normalized;
 };

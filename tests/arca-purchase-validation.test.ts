@@ -21,6 +21,22 @@ test("toWscdcValidationInput preserves voucherDate calendar day", () => {
   assert.equal(input.voucherDate.getDate(), 15);
 });
 
+test("toWscdcValidationInput preserves CAI authorization mode", () => {
+  const input = toWscdcValidationInput({
+    mode: "CAI",
+    issuerTaxId: "30516712593",
+    pointOfSale: 2,
+    voucherType: 3,
+    voucherNumber: 757494,
+    voucherDate: "2026-06-12",
+    totalAmount: 228709.58,
+    authorizationCode: "51523216374912",
+  });
+
+  assert.equal(input.mode, "CAI");
+  assert.equal(input.authorizationCode, "51523216374912");
+});
+
 test("toWscdcValidationInput rejects impossible voucherDate", () => {
   assert.throws(
     () =>

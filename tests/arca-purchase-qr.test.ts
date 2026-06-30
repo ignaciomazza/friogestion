@@ -32,6 +32,25 @@ test("parsea QR ARCA valido desde URL", () => {
   assert.equal(parsed.totalAmount, 1240);
 });
 
+test("normaliza QR ARCA con CAI", () => {
+  const payload = {
+    fecha: "2026-06-12",
+    cuit: 30516712593,
+    ptoVta: 2,
+    tipoCmp: 3,
+    nroCmp: 757494,
+    importe: 228709.58,
+    tipoCodAut: "I",
+    codAut: 51523216374912,
+  };
+  const parsed = parseArcaPurchaseQr(
+    `https://www.afip.gob.ar/fe/qr/?p=${encodeQrPayload(payload)}`,
+  );
+
+  assert.equal(parsed.authorizationMode, "CAI");
+  assert.equal(parsed.authorizationCode, "51523216374912");
+});
+
 test("rechaza QR ARCA invalido", () => {
   assert.throws(() => parseArcaPurchaseQr("no-es-un-qr"), /ARCA_QR_INVALID/);
 });

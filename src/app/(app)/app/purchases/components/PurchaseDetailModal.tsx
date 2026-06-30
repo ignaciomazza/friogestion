@@ -19,6 +19,7 @@ type PurchaseDetailData = {
   exemptAmount: string | null;
   vatTotal: string | null;
   otherTaxesTotal: string | null;
+  authorizationMode: string | null;
   authorizationCode: string | null;
   hasInvoice?: boolean;
   impactsAccount: boolean;
@@ -323,7 +324,7 @@ export default function PurchaseDetailModal({
                       Comprobante fiscal
                     </p>
                     <p className="mt-1">
-                      CAE/CAEA:{" "}
+                      {detail.authorizationMode?.trim() || "Codigo"}:{" "}
                       <span className="font-semibold text-zinc-900">
                         {detail.authorizationCode?.trim() || "-"}
                       </span>
