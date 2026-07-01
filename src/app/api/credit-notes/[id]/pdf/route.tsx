@@ -9,6 +9,7 @@ import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
 import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  isConsumerFinalFiscalTaxProfile,
   normalizeCustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
@@ -107,6 +108,8 @@ export async function GET(
     const receiverFiscalCondition = receiverFiscalProfile
       ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[receiverFiscalProfile]
       : null;
+    const hideTaxBreakdown =
+      isConsumerFinalFiscalTaxProfile(receiverFiscalProfile);
     const iva = Number(voucherData.ImpIVA ?? 0);
     const otherTaxes = Number(voucherData.ImpTrib ?? 0);
     const issuerTaxId =
@@ -182,17 +185,14 @@ export async function GET(
                 : null,
           },
           items: items ?? [],
-          transparency: {
-            enabled: receiverFiscalProfile === "CONSUMIDOR_FINAL",
-            ivaContained: iva,
-            otherNationalIndirectTaxes: otherTaxes,
-          },
+          transparency: null,
           logoSrc,
           qrBase64:
             payload && typeof payload === "object"
               ? (payload.qrBase64 as string | null)
               : null,
           paymentMethod,
+          hideTaxBreakdown,
         }}
       />
     );

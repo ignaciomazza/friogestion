@@ -20,26 +20,30 @@ import { logServerError } from "@/lib/server/log";
 
 export const runtime = "nodejs";
 
+const INVOICE_PDF_LIMIT = 30;
+const CREDIT_NOTE_PDF_LIMIT = 16;
+const DEBIT_NOTE_PDF_LIMIT = 16;
+
 const styles = StyleSheet.create({
   page: {
-    padding: 28,
-    fontSize: 9,
+    padding: 24,
+    fontSize: 8.5,
     color: "#27272a",
     fontFamily: "Helvetica",
   },
   title: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 700,
     marginBottom: 4,
   },
   subtitle: {
     color: "#71717a",
-    marginBottom: 18,
+    marginBottom: 12,
   },
   sectionTitle: {
-    marginTop: 14,
-    marginBottom: 6,
-    fontSize: 10,
+    marginTop: 10,
+    marginBottom: 4,
+    fontSize: 9.5,
     fontWeight: 700,
     textTransform: "uppercase",
     color: "#52525b",
@@ -47,12 +51,12 @@ const styles = StyleSheet.create({
   summaryGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+    gap: 4,
   },
   summaryBox: {
     width: "24%",
     border: "1 solid #e4e4e7",
-    padding: 8,
+    padding: 6,
   },
   summaryLabel: {
     color: "#71717a",
@@ -61,7 +65,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   summaryValue: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: 700,
   },
   table: {
@@ -72,8 +76,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   headerCell: {
-    padding: 4,
-    fontSize: 7,
+    padding: 3,
+    fontSize: 6.5,
     fontWeight: 700,
     color: "#52525b",
     backgroundColor: "#f4f4f5",
@@ -81,8 +85,8 @@ const styles = StyleSheet.create({
     borderBottom: "1 solid #e4e4e7",
   },
   cell: {
-    padding: 4,
-    fontSize: 7,
+    padding: 3,
+    fontSize: 6.5,
     borderRight: "1 solid #e4e4e7",
     borderBottom: "1 solid #e4e4e7",
   },
@@ -169,7 +173,7 @@ function buildBillingReportPdf(
               Total
             </Text>
           </View>
-          {report.invoices.slice(0, 24).map((invoice) => (
+          {report.invoices.slice(0, INVOICE_PDF_LIMIT).map((invoice) => (
             <View key={invoice.id} style={styles.row}>
               <Text style={[styles.cell, { width: "12%" }]}>
                 {formatDate(invoice.date)}
@@ -207,7 +211,7 @@ function buildBillingReportPdf(
                   Total
                 </Text>
               </View>
-              {report.creditNotes.slice(0, 12).map((note) => (
+              {report.creditNotes.slice(0, CREDIT_NOTE_PDF_LIMIT).map((note) => (
                 <View key={note.id} style={styles.row}>
                   <Text style={[styles.cell, { width: "14%" }]}>
                     {formatDate(note.date)}
@@ -241,7 +245,7 @@ function buildBillingReportPdf(
                   Total
                 </Text>
               </View>
-              {report.debitNotes.slice(0, 12).map((note) => (
+              {report.debitNotes.slice(0, DEBIT_NOTE_PDF_LIMIT).map((note) => (
                 <View key={note.id} style={styles.row}>
                   <Text style={[styles.cell, { width: "14%" }]}>
                     {formatDate(note.date)}
@@ -262,9 +266,9 @@ function buildBillingReportPdf(
           </>
         ) : null}
 
-        {report.invoices.length > 24 ||
-        report.creditNotes.length > 12 ||
-        report.debitNotes.length > 12 ? (
+        {report.invoices.length > INVOICE_PDF_LIMIT ||
+        report.creditNotes.length > CREDIT_NOTE_PDF_LIMIT ||
+        report.debitNotes.length > DEBIT_NOTE_PDF_LIMIT ? (
           <Text style={[styles.subtitle, { marginTop: 6 }]}>
             El PDF muestra un resumen de documentos. El CSV incluye el detalle
             completo.

@@ -42,6 +42,10 @@ export function normalizeCustomerFiscalTaxProfile(
   return null;
 }
 
+export function isConsumerFinalFiscalTaxProfile(input?: string | null) {
+  return normalizeCustomerFiscalTaxProfile(input) === "CONSUMIDOR_FINAL";
+}
+
 function normalizeArcaText(value: string) {
   return value
     .normalize("NFD")

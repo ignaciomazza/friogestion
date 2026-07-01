@@ -7,6 +7,7 @@ import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
+import { isConsumerFinalFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
 
 export const runtime = "nodejs";
 
@@ -72,6 +73,19 @@ export async function GET(req: NextRequest) {
       taxRate: item.taxRate ? Number(item.taxRate) : null,
       taxAmount: item.taxAmount ? Number(item.taxAmount) : null,
     }));
+    const hideTaxBreakdown = isConsumerFinalFiscalTaxProfile(
+      sale.customer.fiscalTaxProfile
+    );
+    const extraAmount = Number(sale.extraAmount ?? 0);
+    const adjustmentTotals =
+      extraAmount !== 0
+        ? [
+            {
+              label: getAdjustmentLabel(sale.extraType, extraAmount),
+              value: extraAmount,
+            },
+          ]
+        : [];
 
     const saleTitle = sale.saleNumber ? `Venta ${sale.saleNumber}` : "Venta";
 
@@ -123,27 +137,28 @@ export async function GET(req: NextRequest) {
             : new Date(sale.createdAt).toLocaleDateString("es-AR"),
           meta,
           items,
-          totals: [
-            { label: "Subtotal", value: Number(sale.subtotal ?? 0) },
-            { label: "Impuestos", value: Number(sale.taxes ?? 0) },
-            ...(Number(sale.extraAmount ?? 0) !== 0
-              ? [{
-                  label: getAdjustmentLabel(
-                    sale.extraType,
-                    Number(sale.extraAmount ?? 0),
-                  ),
-                  value: Number(sale.extraAmount ?? 0),
-                }]
-              : []),
-            ...(interestTotal > 0
-              ? [{ label: "Interes", value: interestTotal }]
-              : []),
-            { label: "Total", value: Number(sale.total ?? 0) },
-          ],
+          totals: hideTaxBreakdown
+            ? [
+                ...adjustmentTotals,
+                ...(interestTotal > 0
+                  ? [{ label: "Interes", value: interestTotal }]
+                  : []),
+                { label: "Total", value: Number(sale.total ?? 0) },
+              ]
+            : [
+                { label: "Subtotal", value: Number(sale.subtotal ?? 0) },
+                { label: "Impuestos", value: Number(sale.taxes ?? 0) },
+                ...adjustmentTotals,
+                ...(interestTotal > 0
+                  ? [{ label: "Interes", value: interestTotal }]
+                  : []),
+                { label: "Total", value: Number(sale.total ?? 0) },
+              ],
           currency: "ARS",
           logoSrc,
           taxColumnLabel: "IVA",
           totalColumnLabel: "Neto",
+          hideTaxBreakdown,
         }}
       />
     );

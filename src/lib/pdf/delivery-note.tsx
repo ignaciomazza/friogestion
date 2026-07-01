@@ -48,8 +48,8 @@ function normalizeMultilineDetail(value?: string | null) {
 
 const styles = StyleSheet.create({
   page: {
-    padding: 34,
-    fontSize: 9,
+    padding: 28,
+    fontSize: 8.5,
     fontFamily: "Helvetica",
     color: "#111827",
   },
@@ -57,25 +57,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 14,
+    marginBottom: 10,
   },
   logo: {
-    width: 120,
-    height: 40,
+    width: 112,
+    height: 36,
     objectFit: "contain",
   },
   title: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: 700,
   },
   legendBox: {
     borderWidth: 1,
     borderColor: "#fecaca",
     backgroundColor: "#fff1f2",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     borderRadius: 8,
-    marginBottom: 12,
+    marginBottom: 9,
   },
   legend: {
     fontSize: 10,
@@ -84,12 +84,12 @@ const styles = StyleSheet.create({
     color: "#b91c1c",
   },
   section: {
-    marginBottom: 14,
+    marginBottom: 10,
   },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 12,
+    gap: 10,
   },
   block: {
     width: "50%",
@@ -110,23 +110,23 @@ const styles = StyleSheet.create({
     borderColor: "#e5e7eb",
     backgroundColor: "#f9fafb",
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     flexDirection: "row",
     flexWrap: "wrap",
   },
   metaItem: {
     width: "33%",
     paddingVertical: 2,
-    paddingRight: 10,
+    paddingRight: 8,
   },
   tableHeader: {
     flexDirection: "row",
     backgroundColor: "#f3f4f6",
     borderRadius: 6,
-    paddingVertical: 6,
+    paddingVertical: 5,
     paddingHorizontal: 8,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   tableHeaderText: {
     fontSize: 8,
@@ -136,7 +136,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     borderBottomWidth: 1,
     borderBottomColor: "#e5e7eb",
-    paddingVertical: 7,
+    paddingVertical: 5,
     paddingHorizontal: 8,
   },
   tableRowAlt: {
@@ -150,8 +150,8 @@ const styles = StyleSheet.create({
     borderColor: "#e5e7eb",
     backgroundColor: "#f9fafb",
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
 });
 
@@ -234,6 +234,7 @@ export function DeliveryNotePdfDocument({ data }: { data: DeliveryNotePdfData })
           {data.items.map((item, index) => (
             <View
               key={`${item.description}-${index}`}
+              wrap={false}
               style={
                 index % 2 === 0
                   ? [styles.tableRow, styles.tableRowAlt]

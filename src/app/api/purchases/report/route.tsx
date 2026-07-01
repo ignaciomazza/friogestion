@@ -21,26 +21,29 @@ import { logServerError } from "@/lib/server/log";
 
 export const runtime = "nodejs";
 
+const PURCHASE_PDF_LIMIT = 44;
+const RETENTION_PDF_LIMIT = 24;
+
 const styles = StyleSheet.create({
   page: {
-    padding: 28,
-    fontSize: 9,
+    padding: 24,
+    fontSize: 8.5,
     color: "#27272a",
     fontFamily: "Helvetica",
   },
   title: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 700,
     marginBottom: 4,
   },
   subtitle: {
     color: "#71717a",
-    marginBottom: 18,
+    marginBottom: 12,
   },
   sectionTitle: {
-    marginTop: 14,
-    marginBottom: 6,
-    fontSize: 10,
+    marginTop: 10,
+    marginBottom: 4,
+    fontSize: 9.5,
     fontWeight: 700,
     textTransform: "uppercase",
     color: "#52525b",
@@ -48,12 +51,12 @@ const styles = StyleSheet.create({
   summaryGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
+    gap: 4,
   },
   summaryBox: {
     width: "24%",
     border: "1 solid #e4e4e7",
-    padding: 8,
+    padding: 6,
   },
   summaryLabel: {
     color: "#71717a",
@@ -62,7 +65,7 @@ const styles = StyleSheet.create({
     marginBottom: 3,
   },
   summaryValue: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: 700,
   },
   table: {
@@ -73,8 +76,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
   },
   headerCell: {
-    padding: 4,
-    fontSize: 7,
+    padding: 3,
+    fontSize: 6.5,
     fontWeight: 700,
     color: "#52525b",
     backgroundColor: "#f4f4f5",
@@ -82,8 +85,8 @@ const styles = StyleSheet.create({
     borderBottom: "1 solid #e4e4e7",
   },
   cell: {
-    padding: 4,
-    fontSize: 7,
+    padding: 3,
+    fontSize: 6.5,
     borderRight: "1 solid #e4e4e7",
     borderBottom: "1 solid #e4e4e7",
   },
@@ -177,7 +180,7 @@ function buildPurchasesReportPdf(
               Total
             </Text>
           </View>
-          {report.purchases.slice(0, 36).map((purchase) => (
+          {report.purchases.slice(0, PURCHASE_PDF_LIMIT).map((purchase) => (
             <View key={purchase.id} style={styles.row}>
               <Text style={[styles.cell, { width: "11%" }]}>
                 {formatDate(purchase.date)}
@@ -203,10 +206,10 @@ function buildPurchasesReportPdf(
             </View>
           ))}
         </View>
-        {report.purchases.length > 36 ? (
+        {report.purchases.length > PURCHASE_PDF_LIMIT ? (
           <Text style={[styles.subtitle, { marginTop: 6 }]}>
-            El PDF muestra las primeras 36 compras. El CSV incluye el detalle
-            completo.
+            El PDF muestra las primeras {PURCHASE_PDF_LIMIT} compras. El CSV
+            incluye el detalle completo.
           </Text>
         ) : null}
 
@@ -225,7 +228,7 @@ function buildPurchasesReportPdf(
               Importe
             </Text>
           </View>
-          {report.retentions.slice(0, 18).map((retention) => (
+          {report.retentions.slice(0, RETENTION_PDF_LIMIT).map((retention) => (
             <View key={retention.id} style={styles.row}>
               <Text style={[styles.cell, { width: "13%" }]}>
                 {formatDate(retention.date)}

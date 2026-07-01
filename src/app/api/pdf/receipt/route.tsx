@@ -6,6 +6,7 @@ import { requireAuth, requireOrg } from "@/lib/auth/tenant";
 import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
+import { isConsumerFinalFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
 
 export const runtime = "nodejs";
 
@@ -135,6 +136,9 @@ export async function GET(req: NextRequest) {
         taxAmount: null,
       };
     });
+    const hideTaxBreakdown = isConsumerFinalFiscalTaxProfile(
+      receipt.customer.fiscalTaxProfile
+    );
 
     const doc = (
       <CommercialPdfDocument
@@ -162,6 +166,7 @@ export async function GET(req: NextRequest) {
           totals: [{ label: "Total", value: Number(receipt.total ?? 0) }],
           currency: "ARS",
           logoSrc,
+          hideTaxBreakdown,
         }}
       />
     );

@@ -5,6 +5,9 @@ import {
   evaluateConsumerFinalRule,
   resolveFiscalRecipientDocument,
 } from "../src/lib/afip/consumer-final";
+import {
+  isConsumerFinalFiscalTaxProfile,
+} from "../src/lib/customers/fiscal-profile";
 
 test("consumer final requires identification at threshold and with deduction flag", () => {
   const atThreshold = evaluateConsumerFinalRule({
@@ -30,6 +33,12 @@ test("non consumer final does not force identification by threshold", () => {
   });
   assert.equal(rule.isConsumerFinal, false);
   assert.equal(rule.requireIdentification, false);
+});
+
+test("consumer final fiscal profile is recognized explicitly", () => {
+  assert.equal(isConsumerFinalFiscalTaxProfile("CONSUMIDOR_FINAL"), true);
+  assert.equal(isConsumerFinalFiscalTaxProfile("RESPONSABLE_INSCRIPTO"), false);
+  assert.equal(isConsumerFinalFiscalTaxProfile(null), false);
 });
 
 test("resolveFiscalRecipientDocument prioritizes explicit valid document", () => {

@@ -45,12 +45,13 @@ type CommercialPdfData = {
   logoSrc?: string | null;
   taxColumnLabel?: string;
   totalColumnLabel?: string;
+  hideTaxBreakdown?: boolean;
 };
 
 const styles = StyleSheet.create({
   page: {
-    padding: 34,
-    fontSize: 9,
+    padding: 28,
+    fontSize: 8.5,
     fontFamily: "Helvetica",
     color: "#172033",
     backgroundColor: "#ffffff",
@@ -59,17 +60,17 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#0f172a",
     borderRadius: 999,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 18,
+    marginBottom: 12,
   },
   logo: {
-    width: 150,
-    height: 56,
+    width: 136,
+    height: 50,
     objectFit: "contain",
   },
   issuerBrand: {
@@ -81,15 +82,15 @@ const styles = StyleSheet.create({
   },
   titleBlock: {
     alignItems: "flex-end",
-    gap: 4,
+    gap: 3,
     maxWidth: "52%",
   },
   title: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 700,
   },
   subtitle: {
-    fontSize: 9,
+    fontSize: 8.5,
     color: "#667085",
   },
   headerMeta: {
@@ -97,12 +98,12 @@ const styles = StyleSheet.create({
     color: "#667085",
   },
   section: {
-    marginBottom: 14,
+    marginBottom: 10,
   },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 16,
+    gap: 12,
   },
   label: {
     fontSize: 7,
@@ -121,19 +122,19 @@ const styles = StyleSheet.create({
     borderColor: "#e4e7ec",
     backgroundColor: "#fcfcfd",
     borderRadius: 10,
-    padding: 10,
-    minHeight: 94,
+    padding: 8,
+    minHeight: 78,
   },
   partyHeader: {
-    marginBottom: 6,
+    marginBottom: 4,
   },
   detailLine: {
-    marginTop: 4,
+    marginTop: 3,
     color: "#344054",
   },
   metaCard: {
-    paddingVertical: 9,
-    paddingHorizontal: 10,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
     backgroundColor: "#ffffff",
     borderRadius: 10,
     borderWidth: 1,
@@ -145,8 +146,8 @@ const styles = StyleSheet.create({
   },
   metaItem: {
     width: "33%",
-    paddingRight: 12,
-    paddingVertical: 2,
+    paddingRight: 10,
+    paddingVertical: 1,
   },
   tableContainer: {
     borderWidth: 1,
@@ -161,7 +162,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 11,
     borderBottomWidth: 1,
     borderBottomColor: "#d0d5dd",
-    paddingVertical: 6,
+    paddingVertical: 5,
     paddingHorizontal: 8,
   },
   tableHeaderText: {
@@ -170,7 +171,7 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
-    paddingVertical: 7,
+    paddingVertical: 5,
     paddingHorizontal: 8,
   },
   tableRowAlt: {
@@ -181,13 +182,14 @@ const styles = StyleSheet.create({
   colUnit: { width: "16%", textAlign: "right" },
   colTax: { width: "14%", textAlign: "right" },
   colTotal: { width: "16%", textAlign: "right" },
+  colTotalNoTax: { width: "30%" },
   subText: {
     fontSize: 7,
     color: "#667085",
     marginTop: 2,
   },
   totals: {
-    marginTop: 12,
+    marginTop: 8,
     marginLeft: "auto",
     width: "44%",
     borderWidth: 1,
@@ -195,19 +197,19 @@ const styles = StyleSheet.create({
     backgroundColor: "#f8fafc",
     borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   totalsLabel: {
     fontSize: 7,
     color: "#6b7280",
     textTransform: "uppercase",
     letterSpacing: 0.4,
-    marginBottom: 4,
+    marginBottom: 3,
   },
   totalsRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   totalHighlight: {
     fontSize: 10,
@@ -274,8 +276,11 @@ function PartyCard({
 
 export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
   const currency = data.currency === "USD" ? "USD" : "ARS";
+  const hideTaxBreakdown = data.hideTaxBreakdown === true;
   const taxColumnLabel = data.taxColumnLabel ?? "Imp.";
-  const totalColumnLabel = data.totalColumnLabel ?? "Total";
+  const totalColumnLabel = hideTaxBreakdown
+    ? "Total"
+    : data.totalColumnLabel ?? "Total";
 
   return (
     <Document>
@@ -347,10 +352,18 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
               <Text style={[styles.colDesc, styles.tableHeaderText]}>Detalle</Text>
               <Text style={[styles.colQty, styles.tableHeaderText]}>Cant.</Text>
               <Text style={[styles.colUnit, styles.tableHeaderText]}>Unit.</Text>
-              <Text style={[styles.colTax, styles.tableHeaderText]}>
-                {taxColumnLabel}
-              </Text>
-              <Text style={[styles.colTotal, styles.tableHeaderText]}>
+              {!hideTaxBreakdown ? (
+                <Text style={[styles.colTax, styles.tableHeaderText]}>
+                  {taxColumnLabel}
+                </Text>
+              ) : null}
+              <Text
+                style={[
+                  styles.colTotal,
+                  ...(hideTaxBreakdown ? [styles.colTotalNoTax] : []),
+                  styles.tableHeaderText,
+                ]}
+              >
                 {totalColumnLabel}
               </Text>
             </View>
@@ -365,10 +378,23 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
                   : taxRate !== null
                     ? item.qty * item.unitPrice * (taxRate / 100)
                     : null;
+              const unitTaxAmount =
+                taxAmount !== null && item.qty !== 0
+                  ? taxAmount / item.qty
+                  : taxRate !== null
+                    ? item.unitPrice * (taxRate / 100)
+                    : null;
+              const unitTotal =
+                unitTaxAmount !== null
+                  ? item.unitPrice + unitTaxAmount
+                  : item.unitPrice;
+              const lineTotal =
+                taxAmount !== null ? item.total + taxAmount : item.total;
 
               return (
                 <View
                   key={`${item.description}-${index}`}
+                  wrap={false}
                   style={
                     index % 2 === 0
                       ? [styles.tableRow, styles.tableRowAlt]
@@ -387,21 +413,34 @@ export function CommercialPdfDocument({ data }: { data: CommercialPdfData }) {
                         {item.model ? `Modelo ${item.model}` : ""}
                       </Text>
                     ) : null}
-                    {taxRate !== null ? (
+                    {!hideTaxBreakdown && taxRate !== null ? (
                       <Text style={styles.subText}>IVA {taxRate.toFixed(2)}%</Text>
                     ) : null}
                   </View>
                   <Text style={styles.colQty}>{item.qty.toFixed(2)}</Text>
                   <Text style={styles.colUnit}>
-                    {formatCurrency(item.unitPrice, currency)}
+                    {formatCurrency(
+                      hideTaxBreakdown ? unitTotal : item.unitPrice,
+                      currency
+                    )}
                   </Text>
-                  <Text style={styles.colTax}>
-                    {taxAmount !== null
-                      ? formatCurrency(taxAmount, currency)
-                      : "-"}
-                  </Text>
-                  <Text style={styles.colTotal}>
-                    {formatCurrency(item.total, currency)}
+                  {!hideTaxBreakdown ? (
+                    <Text style={styles.colTax}>
+                      {taxAmount !== null
+                        ? formatCurrency(taxAmount, currency)
+                        : "-"}
+                    </Text>
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.colTotal,
+                      ...(hideTaxBreakdown ? [styles.colTotalNoTax] : []),
+                    ]}
+                  >
+                    {formatCurrency(
+                      hideTaxBreakdown ? lineTotal : item.total,
+                      currency
+                    )}
                   </Text>
                 </View>
               );

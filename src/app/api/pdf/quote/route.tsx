@@ -7,6 +7,7 @@ import { CommercialPdfDocument } from "@/lib/pdf/commercial";
 import { resolveLogoSource } from "@/lib/pdf/assets";
 import { getAdjustmentLabel } from "@/lib/sale-adjustments";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
+import { isConsumerFinalFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
 
 export const runtime = "nodejs";
 
@@ -70,6 +71,19 @@ export async function GET(req: NextRequest) {
       taxRate: item.taxRate ? Number(item.taxRate) : null,
       taxAmount: item.taxAmount ? Number(item.taxAmount) : null,
     }));
+    const hideTaxBreakdown = isConsumerFinalFiscalTaxProfile(
+      quote.customer.fiscalTaxProfile
+    );
+    const extraAmount = Number(quote.extraAmount ?? 0);
+    const adjustmentTotals =
+      extraAmount !== 0
+        ? [
+            {
+              label: getAdjustmentLabel(quote.extraType, extraAmount),
+              value: extraAmount,
+            },
+          ]
+        : [];
 
     const quoteTitle = quote.quoteNumber
       ? `Presupuesto ${quote.quoteNumber}`
@@ -106,24 +120,22 @@ export async function GET(req: NextRequest) {
           ],
           meta: [],
           items,
-          totals: [
-            { label: "Subtotal", value: Number(quote.subtotal ?? 0) },
-            { label: "Impuestos", value: Number(quote.taxes ?? 0) },
-            ...(Number(quote.extraAmount ?? 0) !== 0
-              ? [{
-                  label: getAdjustmentLabel(
-                    quote.extraType,
-                    Number(quote.extraAmount ?? 0),
-                  ),
-                  value: Number(quote.extraAmount ?? 0),
-                }]
-              : []),
-            { label: "Total", value: Number(quote.total ?? 0) },
-          ],
+          totals: hideTaxBreakdown
+            ? [
+                ...adjustmentTotals,
+                { label: "Total", value: Number(quote.total ?? 0) },
+              ]
+            : [
+                { label: "Subtotal", value: Number(quote.subtotal ?? 0) },
+                { label: "Impuestos", value: Number(quote.taxes ?? 0) },
+                ...adjustmentTotals,
+                { label: "Total", value: Number(quote.total ?? 0) },
+              ],
           currency: "ARS",
           logoSrc,
           taxColumnLabel: "IVA",
           totalColumnLabel: "Neto",
+          hideTaxBreakdown,
         }}
       />
     );

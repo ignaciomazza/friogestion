@@ -61,12 +61,13 @@ type FiscalPdfData = {
   logoSrc?: string | null;
   qrBase64?: string | null;
   paymentMethod?: string | null;
+  hideTaxBreakdown?: boolean;
 };
 
 const styles = StyleSheet.create({
   page: {
-    padding: 34,
-    fontSize: 9,
+    padding: 28,
+    fontSize: 8.5,
     fontFamily: "Helvetica",
     color: "#172033",
     backgroundColor: "#ffffff",
@@ -75,17 +76,17 @@ const styles = StyleSheet.create({
     height: 4,
     backgroundColor: "#0f172a",
     borderRadius: 999,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 18,
+    marginBottom: 12,
   },
   logo: {
-    width: 150,
-    height: 56,
+    width: 136,
+    height: 50,
     objectFit: "contain",
   },
   issuerBrand: {
@@ -97,29 +98,29 @@ const styles = StyleSheet.create({
   },
   titleBlock: {
     alignItems: "flex-end",
-    gap: 4,
+    gap: 3,
     maxWidth: "52%",
   },
   title: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 700,
   },
   subtitle: {
-    fontSize: 9,
+    fontSize: 8.5,
     color: "#667085",
   },
   voucherNumber: {
-    fontSize: 10,
+    fontSize: 9.5,
     fontWeight: 700,
     color: "#172033",
   },
   section: {
-    marginBottom: 14,
+    marginBottom: 10,
   },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 16,
+    gap: 12,
   },
   label: {
     fontSize: 7,
@@ -141,8 +142,8 @@ const styles = StyleSheet.create({
     borderColor: "#e4e7ec",
     backgroundColor: "#fcfcfd",
     borderRadius: 10,
-    padding: 10,
-    minHeight: 94,
+    padding: 8,
+    minHeight: 78,
   },
   issuerColumn: {
     width: "50%",
@@ -150,21 +151,21 @@ const styles = StyleSheet.create({
   issuerPrimaryCard: {
     width: "100%",
     minHeight: 0,
-    marginBottom: 10,
+    marginBottom: 7,
   },
   issuerSecondaryCard: {
     width: "100%",
     minHeight: 0,
   },
   partyHeader: {
-    marginBottom: 6,
+    marginBottom: 4,
   },
   detailLine: {
-    marginTop: 4,
+    marginTop: 3,
     color: "#344054",
   },
   serviceDates: {
-    marginBottom: 12,
+    marginBottom: 8,
   },
   tableContainer: {
     borderWidth: 1,
@@ -179,7 +180,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 11,
     borderBottomWidth: 1,
     borderBottomColor: "#d0d5dd",
-    paddingVertical: 6,
+    paddingVertical: 5,
     paddingHorizontal: 8,
   },
   tableHeaderText: {
@@ -188,7 +189,7 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
-    paddingVertical: 7,
+    paddingVertical: 5,
     paddingHorizontal: 8,
   },
   tableRowAlt: {
@@ -206,18 +207,18 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   totals: {
-    marginTop: 8,
+    marginTop: 6,
     width: "100%",
     borderWidth: 1,
     borderColor: "#d0d5dd",
     backgroundColor: "#f8fafc",
     borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 5,
   },
   summaryRight: {
     width: "44%",
-    marginTop: 12,
+    marginTop: 8,
   },
   paymentBox: {
     borderWidth: 1,
@@ -225,7 +226,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#ffffff",
     borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   paymentLabel: {
     fontSize: 7,
@@ -241,7 +242,7 @@ const styles = StyleSheet.create({
   totalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   totalHighlight: {
     fontSize: 10,
@@ -250,22 +251,22 @@ const styles = StyleSheet.create({
   summaryRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 16,
+    gap: 12,
   },
   transparencyBox: {
     width: "52%",
-    marginTop: 12,
+    marginTop: 8,
     borderWidth: 1,
     borderColor: "#d0d5dd",
     backgroundColor: "#ffffff",
     borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   transparencyTitle: {
     fontSize: 8,
     fontWeight: 700,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   transparencyRow: {
     flexDirection: "row",
@@ -273,8 +274,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   footer: {
-    marginTop: 18,
-    paddingTop: 12,
+    marginTop: 12,
+    paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#d0d5dd",
     flexDirection: "row",
@@ -284,36 +285,36 @@ const styles = StyleSheet.create({
   authorization: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 10,
   },
   authorizationCard: {
-    width: 170,
+    width: 158,
     borderWidth: 1,
     borderColor: "#111827",
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
     backgroundColor: "#ffffff",
   },
   authorizationTitle: {
     fontSize: 8,
     color: "#667085",
-    marginBottom: 8,
+    marginBottom: 5,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
   authorizationValue: {
     fontSize: 10,
     fontWeight: 700,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   authorizationDue: {
     fontSize: 9,
     color: "#344054",
   },
   qr: {
-    width: 104,
-    height: 104,
+    width: 92,
+    height: 92,
   },
 });
 
@@ -369,9 +370,13 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
   ]
     .map((value) => normalizeComparableText(value))
     .join(" ");
-  const hideVatBreakdown =
-    data.transparency?.enabled === true ||
+  const isConsumerFinalReceiver =
     isConsumerFinalFiscalCondition(receiverIdentity);
+  const forceHideTaxBreakdown = data.hideTaxBreakdown === true;
+  const hideVatBreakdown =
+    forceHideTaxBreakdown ||
+    data.transparency?.enabled === true ||
+    isConsumerFinalReceiver;
   const issuerSocialMedia = normalizeMultilineDetail(data.issuer.socialMedia);
   const hasIssuerContactDetails = Boolean(
     data.issuer.address ||
@@ -395,7 +400,9 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
           (item.label === "Total" || Number(item.value) !== 0)
       );
   const transparency =
-    data.transparency?.enabled === true
+    data.transparency?.enabled === true &&
+    !forceHideTaxBreakdown &&
+    !isConsumerFinalReceiver
       ? {
           ivaContained:
             data.transparency.ivaContained ?? data.voucher.iva ?? 0,
@@ -561,6 +568,7 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
               return (
                 <View
                   key={`${item.description}-${index}`}
+                  wrap={false}
                   style={
                     index % 2 === 0
                       ? [styles.tableRow, styles.tableRowAlt]
