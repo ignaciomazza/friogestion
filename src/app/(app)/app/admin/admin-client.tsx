@@ -33,7 +33,7 @@ import {
   normalizeIntegerInput,
 } from "@/lib/input-format";
 import type { DolarBlueRate, DolarOfficialRate } from "@/lib/market/dolar-hoy";
-import { STOCK_ENABLED } from "@/lib/features";
+import { PRICE_PAGE_ENABLED, STOCK_ENABLED } from "@/lib/features";
 
 type UserRow = {
   id: string;
@@ -104,6 +104,7 @@ type AdminClientProps = {
     website?: string | null;
     socialMedia?: string | null;
     adjustStockOnQuoteConfirm: boolean;
+    singleCostInputInPrices: boolean;
   };
   users: UserRow[];
   afipStatus: {
@@ -429,6 +430,9 @@ export default function AdminClient({
   const [adjustStockOnQuoteConfirm, setAdjustStockOnQuoteConfirm] = useState(
     activeOrg.adjustStockOnQuoteConfirm,
   );
+  const [singleCostInputInPrices, setSingleCostInputInPrices] = useState(
+    activeOrg.singleCostInputInPrices,
+  );
   const [salesSettingsStatus, setSalesSettingsStatus] = useState<string | null>(
     null,
   );
@@ -634,6 +638,37 @@ export default function AdminClient({
       setSalesSettingsStatus("Configuracion guardada");
     } catch {
       setAdjustStockOnQuoteConfirm(previous);
+      setSalesSettingsStatus("No se pudo guardar configuracion");
+    } finally {
+      setIsSalesSettingsSaving(false);
+    }
+  };
+
+  const handleSingleCostInputInPrices = async (enabled: boolean) => {
+    if (isSalesSettingsSaving) return;
+    const previous = singleCostInputInPrices;
+    setSalesSettingsStatus(null);
+    setSingleCostInputInPrices(enabled);
+    setIsSalesSettingsSaving(true);
+    try {
+      const res = await fetch("/api/admin/organizations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ singleCostInputInPrices: enabled }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setSingleCostInputInPrices(previous);
+        setSalesSettingsStatus(data?.error ?? "No se pudo guardar configuracion");
+        return;
+      }
+
+      if (typeof data?.singleCostInputInPrices === "boolean") {
+        setSingleCostInputInPrices(data.singleCostInputInPrices);
+      }
+      setSalesSettingsStatus("Configuracion guardada");
+    } catch {
+      setSingleCostInputInPrices(previous);
       setSalesSettingsStatus("No se pudo guardar configuracion");
     } finally {
       setIsSalesSettingsSaving(false);
@@ -1420,52 +1455,101 @@ export default function AdminClient({
         </div>
       </div>
 
-      {!isSalesLimitedAdmin && STOCK_ENABLED ? (
+      {!isSalesLimitedAdmin && (STOCK_ENABLED || PRICE_PAGE_ENABLED) ? (
         <Section
-          title="Ventas y stock"
-          subtitle="Define si las ventas confirmadas desde presupuestos descuentan stock."
+          title="Ventas, stock y precios"
+          subtitle="Define reglas operativas para stock y precios."
           icon={<Cog6ToothIcon className="size-4" />}
         >
-          <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                  Ajuste automatico en presupuestos
-                </p>
-                <p className="text-xs text-zinc-500">
-                  Se aplica al confirmar y crear venta desde Presupuestos.
+          <div className="space-y-3">
+            {STOCK_ENABLED ? (
+              <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Ajuste automatico en presupuestos
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      Se aplica al confirmar y crear venta desde Presupuestos.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Ajustar stock al confirmar venta desde presupuestos"
+                    aria-checked={adjustStockOnQuoteConfirm}
+                    onClick={() =>
+                      handleAdjustStockOnQuoteConfirm(!adjustStockOnQuoteConfirm)
+                    }
+                    disabled={isSalesSettingsSaving}
+                    className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
+                      adjustStockOnQuoteConfirm
+                        ? "border-sky-300 bg-sky-100"
+                        : "border-zinc-300 bg-zinc-100"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+                        adjustStockOnQuoteConfirm
+                          ? "translate-x-5"
+                          : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-zinc-600">
+                  {adjustStockOnQuoteConfirm
+                    ? "Estado actual: activo (descuenta stock al confirmar venta)."
+                    : "Estado actual: desactivado (no descuenta stock al confirmar venta)."}
+                  {isSalesSettingsSaving ? " Guardando..." : ""}
                 </p>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-label="Ajustar stock al confirmar venta desde presupuestos"
-                aria-checked={adjustStockOnQuoteConfirm}
-                onClick={() =>
-                  handleAdjustStockOnQuoteConfirm(!adjustStockOnQuoteConfirm)
-                }
-                disabled={isSalesSettingsSaving}
-                className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
-                  adjustStockOnQuoteConfirm
-                    ? "border-sky-300 bg-sky-100"
-                    : "border-zinc-300 bg-zinc-100"
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
-                    adjustStockOnQuoteConfirm ? "translate-x-5" : "translate-x-0.5"
-                  }`}
-                />
-              </button>
-            </div>
-            <p className="mt-2 text-xs text-zinc-600">
-              {adjustStockOnQuoteConfirm
-                ? "Estado actual: activo (descuenta stock al confirmar venta)."
-                : "Estado actual: desactivado (no descuenta stock al confirmar venta)."}
-              {isSalesSettingsSaving ? " Guardando..." : ""}
-            </p>
+            ) : null}
+            {PRICE_PAGE_ENABLED ? (
+              <div className="rounded-2xl border border-zinc-200/70 bg-white/50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Costo unico en Precios
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      Muestra un monto con selector ARS/USD, salvo productos que ya tengan ambos costos.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Usar costo unico con selector de moneda en Precios"
+                    aria-checked={singleCostInputInPrices}
+                    onClick={() =>
+                      handleSingleCostInputInPrices(!singleCostInputInPrices)
+                    }
+                    disabled={isSalesSettingsSaving}
+                    className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 disabled:opacity-60 ${
+                      singleCostInputInPrices
+                        ? "border-sky-300 bg-sky-100"
+                        : "border-zinc-300 bg-zinc-100"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+                        singleCostInputInPrices
+                          ? "translate-x-5"
+                          : "translate-x-0.5"
+                      }`}
+                    />
+                  </button>
+                </div>
+                <p className="mt-2 text-xs text-zinc-600">
+                  {singleCostInputInPrices
+                    ? "Estado actual: activo (un input y selector de moneda)."
+                    : "Estado actual: desactivado (dos inputs de costo ARS/USD)."}
+                  {isSalesSettingsSaving ? " Guardando..." : ""}
+                </p>
+              </div>
+            ) : null}
             {salesSettingsStatus ? (
-              <p className="mt-2 text-xs text-zinc-500">{salesSettingsStatus}</p>
+              <p className="text-xs text-zinc-500">{salesSettingsStatus}</p>
             ) : null}
           </div>
         </Section>

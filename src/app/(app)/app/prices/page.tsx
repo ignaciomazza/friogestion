@@ -80,10 +80,12 @@ type ProductEditResponse = {
 
 type StockSaveStatus = "idle" | "queued" | "saving" | "saved" | "failed";
 type CalculatorPriceBasis = "ars" | "usd";
+type CostCurrency = "ARS" | "USD";
 
 type RowDraft = {
   cost: string;
   costUsd: string;
+  costInputCurrency: CostCurrency;
   percentages: Record<string, string>;
   adjustmentQty: string;
   adjustmentRequestId: string | null;
@@ -122,6 +124,7 @@ type StockListResponse = {
   hasMore: boolean;
   nextOffset: number | null;
   latestUsdRate: string | null;
+  singleCostInputInPrices: boolean;
 };
 
 type LoadStockOptions = {
@@ -188,6 +191,7 @@ const SEARCH_DEBOUNCE_MS = 260;
 const STOCK_SAVE_CONCURRENCY = 3;
 const STOCK_SORT_STORAGE_KEY = "friogestion.prices.sort";
 const STOCK_SAVE_TOAST_ID = "prices-save-queue";
+const COST_CURRENCY_OPTIONS: CostCurrency[] = ["ARS", "USD"];
 
 const INITIAL_SAVE_QUEUE_SUMMARY: StockSaveQueueSummary = {
   total: 0,
@@ -200,6 +204,7 @@ const INITIAL_SAVE_QUEUE_SUMMARY: StockSaveQueueSummary = {
 const createEmptyRowDraft = (overrides: Partial<RowDraft> = {}): RowDraft => ({
   cost: "",
   costUsd: "",
+  costInputCurrency: "ARS",
   percentages: {},
   adjustmentQty: "",
   adjustmentRequestId: null,
@@ -287,6 +292,22 @@ const normalizeStoredPriceString = (value: string | null | undefined) =>
 
 const normalizeDraftCostValue = (value: string | null | undefined) =>
   normalizeStoredPriceString(value) ?? "";
+
+const hasPositiveCostValue = (value: string | null | undefined) =>
+  parsePositivePriceNumber(value) !== null;
+
+const hasDualCostValues = (draft: Pick<RowDraft, "cost" | "costUsd">) =>
+  hasPositiveCostValue(draft.cost) && hasPositiveCostValue(draft.costUsd);
+
+const resolveSingleCostInputCurrency = (
+  draft: Pick<RowDraft, "cost" | "costUsd" | "costInputCurrency">,
+): CostCurrency => {
+  const hasCostArs = hasPositiveCostValue(draft.cost);
+  const hasCostUsd = hasPositiveCostValue(draft.costUsd);
+  if (hasCostUsd && !hasCostArs) return "USD";
+  if (hasCostArs && !hasCostUsd) return "ARS";
+  return draft.costInputCurrency;
+};
 
 const parsePositiveNumber = (value: string | number | null | undefined) => {
   if (value === null || value === undefined || value === "") return null;
@@ -790,6 +811,7 @@ export default function PricesPage() {
   const [saveQueueSummary, setSaveQueueSummary] =
     useState<StockSaveQueueSummary>(INITIAL_SAVE_QUEUE_SUMMARY);
   const [latestUsdRate, setLatestUsdRate] = useState<number | null>(null);
+  const [singleCostInputInPrices, setSingleCostInputInPrices] = useState(false);
   const [totalProducts, setTotalProducts] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -1036,6 +1058,14 @@ export default function PricesPage() {
           shouldKeepEditableDraft && previousDraft
             ? previousDraft.costUsd
             : normalizeDraftCostValue(product.costUsd),
+        costInputCurrency:
+          shouldKeepEditableDraft && previousDraft
+            ? previousDraft.costInputCurrency
+            : resolveSingleCostInputCurrency({
+                cost: normalizeDraftCostValue(product.cost),
+                costUsd: normalizeDraftCostValue(product.costUsd),
+                costInputCurrency: "ARS",
+              }),
         percentages: nextPercentages,
         adjustmentQty:
           shouldKeepEditableDraft && previousDraft
@@ -1128,6 +1158,7 @@ export default function PricesPage() {
 
         const usdRate = parsePositiveNumber(data.latestUsdRate);
         setLatestUsdRate(usdRate);
+        setSingleCostInputInPrices(data.singleCostInputInPrices);
         setPriceLists(data.priceLists);
         setTotalProducts(data.total);
         setHasMoreProducts(data.hasMore);
@@ -1434,6 +1465,39 @@ export default function PricesPage() {
     updateEditableRow(productId, {
       costUsd: normalizeMoney(value),
     });
+  };
+
+  const updateSingleCostCurrency = (
+    productId: string,
+    currency: CostCurrency,
+  ) => {
+    updateEditableRow(
+      productId,
+      currency === "ARS"
+        ? { costInputCurrency: "ARS", costUsd: "" }
+        : { costInputCurrency: "USD", cost: "" },
+    );
+  };
+
+  const updateSingleCostValue = (
+    productId: string,
+    currency: CostCurrency,
+    value: string,
+  ) => {
+    updateEditableRow(
+      productId,
+      currency === "ARS"
+        ? {
+            cost: normalizeMoney(value),
+            costUsd: "",
+            costInputCurrency: "ARS",
+          }
+        : {
+            cost: "",
+            costUsd: normalizeMoney(value),
+            costInputCurrency: "USD",
+          },
+    );
   };
 
   const clearZeroCostInput = (productId: string, field: "cost" | "costUsd") => {
@@ -2145,7 +2209,118 @@ export default function PricesPage() {
       ? "Recargar sin guardar"
       : "Salir sin guardar";
   const shouldWrapPriceLists = priceLists.length > 2;
-  const wrappedTableColumnCount = STOCK_ACCOUNTING_ENABLED ? 5 : 4;
+  const costColumnCount = singleCostInputInPrices ? 1 : 2;
+  const wrappedTableColumnCount =
+    costColumnCount + (STOCK_ACCOUNTING_ENABLED ? 3 : 2);
+
+  const renderCostField = ({
+    productId,
+    draft,
+    currency,
+    isRowSavePending,
+    className,
+  }: {
+    productId: string;
+    draft: RowDraft;
+    currency: CostCurrency;
+    isRowSavePending: boolean;
+    className: string;
+  }) => {
+    const isUsd = currency === "USD";
+    return (
+      <div className={className}>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          Costo {currency}
+        </p>
+        <MoneyInput
+          className="input no-spinner h-10 w-full px-1.5 text-right tabular-nums"
+          value={isUsd ? draft.costUsd : draft.cost}
+          onValueChange={(nextValue) =>
+            isUsd
+              ? updateUsdCost(productId, nextValue)
+              : updateEditableRow(productId, {
+                  cost: normalizeMoney(nextValue),
+                })
+          }
+          onBlur={() => clearZeroCostInput(productId, isUsd ? "costUsd" : "cost")}
+          placeholder={isUsd ? "USD 0,00" : "$ 0,00"}
+          maxDecimals={2}
+          prefix={isUsd ? "USD " : "$"}
+          caretToEndOnFocus
+          disabled={isRowSavePending}
+        />
+      </div>
+    );
+  };
+
+  const renderCostCurrencyToggle = (
+    productId: string,
+    selectedCurrency: CostCurrency,
+    isRowSavePending: boolean,
+  ) => (
+    <div className="flex h-10 shrink-0 items-center rounded-full border border-zinc-200 bg-zinc-50/80 p-1 text-[11px] font-semibold shadow-[inset_0_1px_2px_rgba(24,24,27,0.04)]">
+      {COST_CURRENCY_OPTIONS.map((currency) => {
+        const isActive = selectedCurrency === currency;
+        return (
+          <button
+            key={`${productId}-cost-currency-${currency}`}
+            type="button"
+            className={`h-8 rounded-full border px-3 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/35 ${
+              isActive
+                ? "border-sky-200 bg-white text-sky-800 shadow-[0_8px_18px_-14px_rgba(2,132,199,0.55)]"
+                : "border-transparent bg-transparent text-zinc-500 hover:bg-white/80 hover:text-zinc-700"
+            }`}
+            onClick={() => updateSingleCostCurrency(productId, currency)}
+            disabled={isRowSavePending}
+            aria-label={`Usar costo ${currency}`}
+            aria-pressed={isActive}
+          >
+            {currency}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderSingleCostControl = ({
+    productId,
+    draft,
+    isRowSavePending,
+    className,
+  }: {
+    productId: string;
+    draft: RowDraft;
+    isRowSavePending: boolean;
+    className: string;
+  }) => {
+    const currency = resolveSingleCostInputCurrency(draft);
+    const isUsd = currency === "USD";
+    return (
+      <div className={className}>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          Costo
+        </p>
+        <div className="flex items-center gap-1.5">
+          <MoneyInput
+            className="input no-spinner h-10 min-w-0 flex-1 px-1.5 text-right tabular-nums"
+            value={isUsd ? draft.costUsd : draft.cost}
+            onValueChange={(nextValue) =>
+              updateSingleCostValue(productId, currency, nextValue)
+            }
+            onBlur={() =>
+              clearZeroCostInput(productId, isUsd ? "costUsd" : "cost")
+            }
+            placeholder={isUsd ? "USD 0,00" : "$ 0,00"}
+            maxDecimals={2}
+            prefix={isUsd ? "USD " : "$"}
+            caretToEndOnFocus
+            disabled={isRowSavePending}
+          />
+          {renderCostCurrencyToggle(productId, currency, isRowSavePending)}
+        </div>
+      </div>
+    );
+  };
 
   if (!PRICE_PAGE_ENABLED) {
     return null;
@@ -2157,7 +2332,9 @@ export default function PricesPage() {
         <div>
           <h1 className="text-2xl font-semibold text-zinc-900">Precios</h1>
           <p className="mt-2 text-sm text-zinc-600">
-            Ajusta costo ARS/USD y precios por lista en una sola grilla.
+            {singleCostInputInPrices
+              ? "Ajusta costo con selector ARS/USD y precios por lista en una sola grilla."
+              : "Ajusta costo ARS/USD y precios por lista en una sola grilla."}
           </p>
         </div>
       </div>
@@ -2383,24 +2560,38 @@ export default function PricesPage() {
                 >
                   <span className="sr-only">Producto</span>
                 </th>
-                <th
-                  className={
-                    shouldWrapPriceLists
-                      ? "w-[14%] bg-white/95 py-2 pr-2"
-                      : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
-                  }
-                >
-                  <span className="sr-only">Costo ARS</span>
-                </th>
-                <th
-                  className={
-                    shouldWrapPriceLists
-                      ? "w-[14%] bg-white/95 py-2 pr-2"
-                      : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
-                  }
-                >
-                  <span className="sr-only">Costo USD</span>
-                </th>
+                {singleCostInputInPrices ? (
+                  <th
+                    className={
+                      shouldWrapPriceLists
+                        ? "w-[18%] bg-white/95 py-2 pr-2"
+                        : "w-[18%] min-w-[13rem] bg-white/95 py-2 pr-2"
+                    }
+                  >
+                    <span className="sr-only">Costo</span>
+                  </th>
+                ) : (
+                  <>
+                    <th
+                      className={
+                        shouldWrapPriceLists
+                          ? "w-[14%] bg-white/95 py-2 pr-2"
+                          : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
+                      }
+                    >
+                      <span className="sr-only">Costo ARS</span>
+                    </th>
+                    <th
+                      className={
+                        shouldWrapPriceLists
+                          ? "w-[14%] bg-white/95 py-2 pr-2"
+                          : "w-[14%] min-w-[10rem] bg-white/95 py-2 pr-2"
+                      }
+                    >
+                      <span className="sr-only">Costo USD</span>
+                    </th>
+                  </>
+                )}
                 {!shouldWrapPriceLists
                   ? (
                   priceLists.map((priceList) => (
@@ -2441,6 +2632,11 @@ export default function PricesPage() {
                   createEmptyRowDraft({
                     cost: normalizeDraftCostValue(product.cost),
                     costUsd: normalizeDraftCostValue(product.costUsd),
+                    costInputCurrency: resolveSingleCostInputCurrency({
+                      cost: normalizeDraftCostValue(product.cost),
+                      costUsd: normalizeDraftCostValue(product.costUsd),
+                      costInputCurrency: "ARS",
+                    }),
                     percentages: derivedPercentages,
                   });
                 const rowState = getStockRowChangeState(
@@ -2482,8 +2678,12 @@ export default function PricesPage() {
                     : rowState.computedPricesFromArs;
                 const calculatorPriceBasisLabel =
                   calculatorPriceBasis === "usd" ? "USD" : "ARS";
+                const showDualCostInputs =
+                  !singleCostInputInPrices || hasDualCostValues(draft);
                 const calculatorColSpan =
-                  (shouldWrapPriceLists ? 3 : priceLists.length + 2) +
+                  (shouldWrapPriceLists
+                    ? costColumnCount + 1
+                    : priceLists.length + costColumnCount) +
                   (STOCK_ACCOUNTING_ENABLED ? 1 : 0);
                 const hasRowChanges = rowState.hasRowChanges;
                 const isRowSavePending =
@@ -2555,46 +2755,34 @@ export default function PricesPage() {
                                 </span>
                               </p>
                             </div>
-                            <div className="w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1">
-                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                                Costo ARS
-                              </p>
-                              <MoneyInput
-                                className="input no-spinner w-full px-1.5 text-right tabular-nums"
-                                value={draft.cost}
-                                onValueChange={(nextValue) =>
-                                  updateEditableRow(product.id, {
-                                    cost: normalizeMoney(nextValue),
-                                  })
-                                }
-                                onBlur={() => clearZeroCostInput(product.id, "cost")}
-                                placeholder="$ 0,00"
-                                maxDecimals={2}
-                                prefix="$"
-                                caretToEndOnFocus
-                                disabled={isRowSavePending}
-                              />
-                            </div>
-                            <div className="w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1">
-                              <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                                Costo USD
-                              </p>
-                              <MoneyInput
-                                className="input no-spinner w-full px-1.5 text-right tabular-nums"
-                                value={draft.costUsd}
-                                onValueChange={(nextValue) =>
-                                  updateUsdCost(product.id, nextValue)
-                                }
-                                onBlur={() =>
-                                  clearZeroCostInput(product.id, "costUsd")
-                                }
-                                placeholder="USD 0,00"
-                                maxDecimals={2}
-                                prefix="USD "
-                                caretToEndOnFocus
-                                disabled={isRowSavePending}
-                              />
-                            </div>
+                            {showDualCostInputs ? (
+                              <>
+                                {renderCostField({
+                                  productId: product.id,
+                                  draft,
+                                  currency: "ARS",
+                                  isRowSavePending,
+                                  className:
+                                    "w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1",
+                                })}
+                                {renderCostField({
+                                  productId: product.id,
+                                  draft,
+                                  currency: "USD",
+                                  isRowSavePending,
+                                  className:
+                                    "w-full min-w-[8.25rem] max-w-[10.5rem] flex-1 space-y-1",
+                                })}
+                              </>
+                            ) : (
+                              renderSingleCostControl({
+                                productId: product.id,
+                                draft,
+                                isRowSavePending,
+                                className:
+                                  "w-full min-w-[13rem] max-w-[15rem] flex-1 space-y-1",
+                              })
+                            )}
                             {STOCK_ACCOUNTING_ENABLED ? (
                               <div className="min-w-[12rem] flex-1">
                                 <div className="flex min-h-10 flex-wrap items-center gap-2">
@@ -3347,58 +3535,59 @@ export default function PricesPage() {
                       </td>
                     ) : (
                       <>
-                        <td className="py-3 pr-2 align-top">
-                          <div className="mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1">
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                              Costo ARS
-                            </p>
-                            <MoneyInput
-                              className="input no-spinner w-full px-1.5 text-right tabular-nums"
-                              value={draft.cost}
-                              onValueChange={(nextValue) =>
-                                updateEditableRow(product.id, {
-                                  cost: normalizeMoney(nextValue),
-                                })
-                              }
-                              onBlur={() => clearZeroCostInput(product.id, "cost")}
-                              placeholder="$ 0,00"
-                              maxDecimals={2}
-                              prefix="$"
-                              caretToEndOnFocus
-                              disabled={isRowSavePending}
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="block min-h-4"
-                            />
-                          </div>
-                        </td>
-                        <td className="py-3 pr-2 align-top">
-                          <div className="mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1">
-                            <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-                              Costo USD
-                            </p>
-                            <MoneyInput
-                              className="input no-spinner w-full px-1.5 text-right tabular-nums"
-                              value={draft.costUsd}
-                              onValueChange={(nextValue) =>
-                                updateUsdCost(product.id, nextValue)
-                              }
-                              onBlur={() =>
-                                clearZeroCostInput(product.id, "costUsd")
-                              }
-                              placeholder="USD 0,00"
-                              maxDecimals={2}
-                              prefix="USD "
-                              caretToEndOnFocus
-                              disabled={isRowSavePending}
-                            />
-                            <span
-                              aria-hidden="true"
-                              className="block min-h-4"
-                            />
-                          </div>
-                        </td>
+                        {singleCostInputInPrices ? (
+                          <td className="py-3 pr-2 align-top">
+                            {showDualCostInputs ? (
+                              <div className="mx-auto w-full min-w-[13rem] max-w-[15rem] space-y-2">
+                                {renderCostField({
+                                  productId: product.id,
+                                  draft,
+                                  currency: "ARS",
+                                  isRowSavePending,
+                                  className: "w-full space-y-1",
+                                })}
+                                {renderCostField({
+                                  productId: product.id,
+                                  draft,
+                                  currency: "USD",
+                                  isRowSavePending,
+                                  className: "w-full space-y-1",
+                                })}
+                              </div>
+                            ) : (
+                              renderSingleCostControl({
+                                productId: product.id,
+                                draft,
+                                isRowSavePending,
+                                className:
+                                  "mx-auto w-full min-w-[13rem] max-w-[15rem] space-y-1",
+                              })
+                            )}
+                          </td>
+                        ) : (
+                          <>
+                            <td className="py-3 pr-2 align-top">
+                              {renderCostField({
+                                productId: product.id,
+                                draft,
+                                currency: "ARS",
+                                isRowSavePending,
+                                className:
+                                  "mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1",
+                              })}
+                            </td>
+                            <td className="py-3 pr-2 align-top">
+                              {renderCostField({
+                                productId: product.id,
+                                draft,
+                                currency: "USD",
+                                isRowSavePending,
+                                className:
+                                  "mx-auto w-full min-w-[8.25rem] max-w-[10.5rem] space-y-1",
+                              })}
+                            </td>
+                          </>
+                        )}
                         {shouldWrapPriceLists ? (
                           <td className="py-3 pr-2 align-top">
                             <div
@@ -3886,7 +4075,9 @@ export default function PricesPage() {
                     colSpan={
                       shouldWrapPriceLists
                         ? wrappedTableColumnCount
-                        : priceLists.length + (STOCK_ACCOUNTING_ENABLED ? 5 : 4)
+                        : priceLists.length +
+                          costColumnCount +
+                          (STOCK_ACCOUNTING_ENABLED ? 3 : 2)
                     }
                   >
                     No hay productos para mostrar.

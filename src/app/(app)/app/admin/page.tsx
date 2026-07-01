@@ -64,6 +64,8 @@ export default async function AdminPage() {
     socialMedia: activeMembership.organization.socialMedia,
     adjustStockOnQuoteConfirm:
       activeMembership.organization.adjustStockOnQuoteConfirm,
+    singleCostInputInPrices:
+      activeMembership.organization.singleCostInputInPrices,
   };
 
   if (activeMembership.role === "SALES") {

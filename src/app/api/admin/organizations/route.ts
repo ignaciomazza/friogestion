@@ -15,6 +15,7 @@ const orgSchema = z.object({
 
 const orgSettingsSchema = z.object({
   adjustStockOnQuoteConfirm: z.boolean().optional(),
+  singleCostInputInPrices: z.boolean().optional(),
   address: z.string().max(200).nullable().optional(),
   phone: z.string().max(80).nullable().optional(),
   email: z.string().max(160).nullable().optional(),
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest) {
         activityStart: membership.organization.activityStart?.toISOString() ?? null,
         website: membership.organization.website,
         socialMedia: membership.organization.socialMedia,
+        singleCostInputInPrices: membership.organization.singleCostInputInPrices,
       }))
     );
   } catch {
@@ -100,6 +102,7 @@ export async function POST(req: NextRequest) {
       activityStart: organization.activityStart?.toISOString() ?? null,
       website: organization.website,
       socialMedia: organization.socialMedia,
+      singleCostInputInPrices: organization.singleCostInputInPrices,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -115,6 +118,7 @@ export async function PATCH(req: NextRequest) {
     const body = orgSettingsSchema.parse(await req.json());
     const updateData: {
       adjustStockOnQuoteConfirm?: boolean;
+      singleCostInputInPrices?: boolean;
       address?: string | null;
       phone?: string | null;
       email?: string | null;
@@ -125,6 +129,9 @@ export async function PATCH(req: NextRequest) {
 
     if (typeof body.adjustStockOnQuoteConfirm === "boolean") {
       updateData.adjustStockOnQuoteConfirm = body.adjustStockOnQuoteConfirm;
+    }
+    if (typeof body.singleCostInputInPrices === "boolean") {
+      updateData.singleCostInputInPrices = body.singleCostInputInPrices;
     }
 
     const address = normalizeNullableText(body.address);
@@ -164,6 +171,7 @@ export async function PATCH(req: NextRequest) {
       select: {
         id: true,
         adjustStockOnQuoteConfirm: true,
+        singleCostInputInPrices: true,
         address: true,
         phone: true,
         email: true,

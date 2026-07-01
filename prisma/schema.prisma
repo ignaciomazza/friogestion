@@ -338,6 +338,7 @@ model Organization {
   receiptApprovalRoles           String[]  @default([])
   receiptDoubleCheckRoles        String[]  @default([])
   adjustStockOnQuoteConfirm      Boolean   @default(true)
+  singleCostInputInPrices        Boolean   @default(false)
   defaultDeliveryNotePointOfSale Int       @default(1)
   createdAt                      DateTime  @default(now())
   updatedAt                      DateTime  @updatedAt

@@ -157,7 +157,7 @@ export async function GET(req: NextRequest) {
       products = pagedProducts;
     }
 
-    const [priceLists, latestUsdRate] = await Promise.all([
+    const [priceLists, latestUsdRate, organization] = await Promise.all([
       prisma.priceList.findMany({
         where: { organizationId, isActive: true },
         orderBy: PRICE_LIST_ORDER_BY,
@@ -169,6 +169,10 @@ export async function GET(req: NextRequest) {
           quoteCode: "ARS",
         },
         orderBy: { asOf: "desc" },
+      }),
+      prisma.organization.findUnique({
+        where: { id: organizationId },
+        select: { singleCostInputInPrices: true },
       }),
     ]);
     const productIds = products.map((product) => product.id);
@@ -229,6 +233,8 @@ export async function GET(req: NextRequest) {
       hasMore,
       nextOffset: hasMore ? offset + products.length : null,
       latestUsdRate: latestUsdRate?.rate?.toString() ?? null,
+      singleCostInputInPrices:
+        organization?.singleCostInputInPrices ?? false,
       priceLists: priceLists.map((priceList) => ({
         id: priceList.id,
         name: priceList.name,
