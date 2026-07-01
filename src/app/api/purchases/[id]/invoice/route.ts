@@ -331,18 +331,7 @@ export async function PATCH(
             } ${updated.invoiceNumber ?? purchase.id}`,
           },
         });
-        if (isCreditNote) {
-          await tx.purchaseInvoice.update({
-            where: { id: purchase.id },
-            data: {
-              paidTotal: totalAmount.toFixed(2),
-              balance: "0.00",
-              paymentStatus: "PAID",
-            },
-          });
-        } else {
-          await recalcPurchaseTotals(tx, purchase.id);
-        }
+        await recalcPurchaseTotals(tx, purchase.id);
       });
     }
 

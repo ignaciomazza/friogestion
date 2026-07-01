@@ -21,6 +21,7 @@ import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { STOCK_ENABLED } from "@/lib/features";
 import { formatCurrencyARS } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
+import { isPurchaseCreditNote } from "@/lib/purchases";
 import {
   applyPurchaseItemDiscount,
   calculateGlobalPurchaseDiscount,
@@ -556,12 +557,13 @@ const inferPurchasePaymentMode = (purchase: PurchaseRow): PurchasePaymentMode =>
 };
 
 const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
+  const isCreditNote = isPurchaseCreditNote(purchase.documentType);
   if (purchase.impactsAccount) {
     const normalizedPaymentStatus = purchase.paymentStatus?.toUpperCase();
     const paymentMethodLabel = purchase.immediatePaymentMethodName?.trim();
     if (normalizedPaymentStatus === "PAID") {
       return {
-        label: paymentMethodLabel || "Pagada",
+        label: paymentMethodLabel || (isCreditNote ? "Aplicada" : "Pagada"),
         tone: "immediate" as const,
       };
     }
@@ -569,7 +571,9 @@ const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
       return {
         label: paymentMethodLabel
           ? `${paymentMethodLabel} (Parcial)`
-          : "Cta. Cte (Parcial)",
+          : isCreditNote
+            ? "NC parcial"
+            : "Cta. Cte (Parcial)",
         tone: "current-account" as const,
       };
     }
@@ -580,7 +584,7 @@ const getPurchasePaymentStatus = (purchase: PurchaseRow) => {
       };
     }
     return {
-      label: "Cta. Cte",
+      label: isCreditNote ? "Crédito" : "Cta. Cte",
       tone: "current-account" as const,
     };
   }

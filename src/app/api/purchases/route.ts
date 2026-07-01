@@ -383,7 +383,6 @@ export async function GET(req: NextRequest) {
             purchase.allocations as SupplierPaymentAllocationCandidate[],
           );
         const impactsAccount = purchase.currentAccountEntries.length > 0;
-        const isCreditNote = purchase.documentType === "CREDIT_NOTE";
         const paymentMethodName = impactsAccount
           ? supplierAllocatedPaymentMethodName ?? immediatePaymentMethodName
           : immediatePaymentMethodName ?? persistedImmediatePaymentLabel;
@@ -392,11 +391,9 @@ export async function GET(req: NextRequest) {
         const allocatedPaidTotal = (
           purchase.allocations as Array<{ amount: unknown }>
         ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
-        const effectivePaidTotal = isCreditNote
-          ? totalAmount
-          : impactsAccount
-            ? roundToTwo(allocatedPaidTotal)
-            : roundToTwo(storedPaidTotal);
+        const effectivePaidTotal = impactsAccount
+          ? roundToTwo(allocatedPaidTotal)
+          : roundToTwo(storedPaidTotal);
         const effectiveBalance = roundToTwo(
           Math.max(totalAmount - effectivePaidTotal, 0),
         );
@@ -727,7 +724,7 @@ export async function POST(req: NextRequest) {
       : null;
     const isCreditNote = body.documentType === "CREDIT_NOTE";
     const purchaseEntryDirection = isCreditNote ? "DEBIT" : "CREDIT";
-    const leavesPayableBalance = impactCurrentAccount && !isCreditNote;
+    const leavesPayableBalance = impactCurrentAccount;
 
     const productIds = Array.from(
       new Set([
@@ -885,23 +882,6 @@ export async function POST(req: NextRequest) {
         },
         include: { supplier: true, items: true, fiscalLines: true },
       });
-
-      if (purchaseItems.length) {
-        const latestCostsByProductId = new Map<string, number>();
-        for (const item of purchaseItems) {
-          latestCostsByProductId.set(item.productId, item.unitCost);
-        }
-
-        await Promise.all(
-          Array.from(latestCostsByProductId.entries()).map(
-            ([productId, unitCost]) =>
-              tx.product.updateMany({
-                where: { id: productId, organizationId },
-                data: { cost: unitCost.toFixed(2) },
-              }),
-          ),
-        );
-      }
 
       if (impactCurrentAccount) {
         await tx.currentAccountEntry.create({

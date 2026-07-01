@@ -409,7 +409,7 @@ export async function PATCH(
     const hasCurrentAccountImpact = purchase.currentAccountEntries.length > 0;
     const isCreditNote = body.documentType === "CREDIT_NOTE";
     const purchaseEntryDirection = isCreditNote ? "DEBIT" : "CREDIT";
-    const leavesPayableBalance = hasCurrentAccountImpact && !isCreditNote;
+    const leavesPayableBalance = hasCurrentAccountImpact;
 
     await prisma.$transaction(async (tx) => {
       await tx.purchaseInvoice.update({
@@ -530,25 +530,6 @@ export async function PATCH(
             };
           }),
         });
-
-        const latestCostsByProductId = new Map<string, number>();
-        for (const item of purchaseItems) {
-          latestCostsByProductId.set(item.productId, item.unitCost);
-        }
-        await Promise.all(
-          Array.from(latestCostsByProductId.entries()).map(
-            ([productId, unitCost]) =>
-              tx.product.updateMany({
-                where: {
-                  id: productId,
-                  organizationId: membership.organizationId,
-                },
-                data: {
-                  cost: unitCost.toFixed(2),
-                },
-              }),
-          ),
-        );
       }
 
       if (hasCurrentAccountImpact) {
@@ -568,7 +549,7 @@ export async function PATCH(
             }`,
           },
         });
-        if (allocatedTotal > 0.005 && !isCreditNote) {
+        if (allocatedTotal > 0.005) {
           await recalcPurchaseTotals(tx, purchase.id);
         } else if (leavesPayableBalance) {
           await tx.purchaseInvoice.update({

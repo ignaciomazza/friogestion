@@ -5,7 +5,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { parseOptionalDate } from "@/lib/validation";
-import { recalcPurchaseTotals } from "@/lib/purchases";
+import {
+  getPurchaseOpenBalance,
+  getSignedPurchaseAllocationAmount,
+  recalcPurchaseTotals,
+} from "@/lib/purchases";
 
 const lineSchema = z.object({
   paymentMethodId: z.string().min(1),
@@ -224,8 +228,18 @@ export async function POST(req: NextRequest) {
           },
           select: {
             id: true,
+            documentType: true,
             total: true,
-            paidTotal: true,
+            allocations: {
+              where: {
+                supplierPayment: {
+                  status: "CONFIRMED",
+                },
+              },
+              select: {
+                amount: true,
+              },
+            },
             currentAccountEntries: {
               where: { sourceType: "PURCHASE" },
               select: { id: true },
@@ -242,7 +256,7 @@ export async function POST(req: NextRequest) {
     }
     const purchaseById = new Map(purchases.map((purchase) => [purchase.id, purchase]));
 
-    let allocationsTotal = 0;
+    let allocationsNetTotal = 0;
     for (const allocation of allocationsInput) {
       const purchase = purchaseById.get(allocation.purchaseInvoiceId);
       if (!purchase) {
@@ -257,19 +271,35 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
-      const total = Number(purchase.total ?? 0);
-      const paid = Number(purchase.paidTotal ?? 0);
-      const open = Math.max(total - paid, 0);
+      const allocatedTotal = purchase.allocations.reduce(
+        (sum, item) => sum + Number(item.amount ?? 0),
+        0
+      );
+      const open = getPurchaseOpenBalance({
+        total: purchase.total?.toString() ?? null,
+        paidTotal: allocatedTotal,
+        balance: null,
+      });
       if (allocation.amount > open + 0.005) {
         return NextResponse.json(
           { error: "El pago excede el saldo de la compra" },
           { status: 400 }
         );
       }
-      allocationsTotal += allocation.amount;
+      allocationsNetTotal += getSignedPurchaseAllocationAmount(
+        purchase.documentType,
+        allocation.amount
+      );
     }
 
-    if (allocationsTotal > totalBase + withheldTotal + 0.005) {
+    if (allocationsNetTotal < -0.005) {
+      return NextResponse.json(
+        { error: "Las notas de credito superan las facturas imputadas" },
+        { status: 400 }
+      );
+    }
+
+    if (allocationsNetTotal > totalBase + withheldTotal + 0.005) {
       return NextResponse.json(
         { error: "El total asignado supera el pago" },
         { status: 400 }

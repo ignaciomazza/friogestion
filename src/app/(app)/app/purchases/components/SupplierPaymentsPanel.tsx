@@ -5,6 +5,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { formatCurrencyARS, formatCurrencyUSD } from "@/lib/format";
 import { normalizeDecimalInput } from "@/lib/input-format";
+import {
+  getPurchaseOpenBalance,
+  getSignedPurchaseAllocationAmount,
+  isPurchaseCreditNote,
+} from "@/lib/purchases";
+import { PURCHASE_DOCUMENT_TYPE_LABELS } from "@/lib/purchases/fiscal";
 import type { PurchaseRow, SupplierOption } from "../types";
 import { formatSupplierLabel, normalizeQuery } from "../utils";
 import { PurchaseSelect } from "./PurchaseSelect";
@@ -180,12 +186,7 @@ export function SupplierPaymentsPanel({
       if (purchase.supplierId !== supplierId) return false;
       if (purchase.status === "CANCELLED") return false;
       if (purchase.impactsAccount === false) return false;
-      const total = Number(purchase.total ?? 0);
-      const paid = Number(purchase.paidTotal ?? 0);
-      const storedBalance = Number(purchase.balance ?? 0);
-      const balance =
-        storedBalance > 0 ? storedBalance : Math.max(total - paid, 0);
-      return balance > 0.005;
+      return getPurchaseOpenBalance(purchase) > 0.005;
     });
   }, [purchases, supplierId]);
 
@@ -371,11 +372,16 @@ export function SupplierPaymentsPanel({
   }, [lines]);
 
   const allocationsTotal = useMemo(() => {
-    return Object.values(allocations).reduce(
-      (sum, value) => sum + Number(value || 0),
+    return openPurchases.reduce(
+      (sum, purchase) =>
+        sum +
+        getSignedPurchaseAllocationAmount(
+          purchase.documentType,
+          allocations[purchase.id] ?? 0,
+        ),
       0,
     );
-  }, [allocations]);
+  }, [allocations, openPurchases]);
 
   const retentionsTotal = useMemo(() => {
     return retentions.reduce(
@@ -432,18 +438,18 @@ export function SupplierPaymentsPanel({
 
     const allocationList = openPurchases
       .map((purchase) => {
-        const total = Number(purchase.total ?? 0);
-        const paid = Number(purchase.paidTotal ?? 0);
-        const storedBalance = Number(purchase.balance ?? 0);
-        const balance =
-          storedBalance > 0 ? storedBalance : Math.max(total - paid, 0);
         return {
           purchaseInvoiceId: purchase.id,
           amount: Number(allocations[purchase.id] || 0),
-          balance,
+          balance: getPurchaseOpenBalance(purchase),
         };
       })
       .filter((allocation) => allocation.amount > 0);
+
+    if (allocationsTotal < -0.005) {
+      setStatus("Las notas de credito superan las facturas imputadas");
+      return;
+    }
 
     const hasInvalid = normalizedLines.some((line) => {
       if (!line.paymentMethodId) return true;
@@ -877,22 +883,19 @@ export function SupplierPaymentsPanel({
             </p>
             <p>Retenciones: {formatCurrencyARS(retentionsTotal)}</p>
             <p>Total impacto: {formatCurrencyARS(totalImpact)}</p>
-            <p>Asignado a compras: {formatCurrencyARS(allocationsTotal)}</p>
+            <p>Neto imputado: {formatCurrencyARS(allocationsTotal)}</p>
             <p>Sin asignar: {formatCurrencyARS(remaining)}</p>
           </div>
 
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-              Asignar a compras abiertas
+              Asignar facturas y notas abiertas
             </p>
             {openPurchases.length ? (
               <div className="space-y-2">
                 {openPurchases.map((purchase) => {
-                  const total = Number(purchase.total ?? 0);
-                  const paid = Number(purchase.paidTotal ?? 0);
-                  const storedBalance = Number(purchase.balance ?? 0);
-                  const balance =
-                    storedBalance > 0 ? storedBalance : Math.max(total - paid, 0);
+                  const balance = getPurchaseOpenBalance(purchase);
+                  const isCredit = isPurchaseCreditNote(purchase.documentType);
                   return (
                     <div
                       key={purchase.id}
@@ -903,7 +906,13 @@ export function SupplierPaymentsPanel({
                           {purchase.invoiceNumber ?? purchase.id}
                         </p>
                         <p className="text-[11px] text-zinc-500">
-                          Saldo {formatCurrencyARS(balance)}
+                          {
+                            PURCHASE_DOCUMENT_TYPE_LABELS[
+                              purchase.documentType ?? "INVOICE"
+                            ]
+                          }{" "}
+                          · {isCredit ? "Credito disponible" : "Saldo"}{" "}
+                          {formatCurrencyARS(balance)}
                         </p>
                       </div>
                       <label className="flex flex-col gap-2 text-[11px] text-zinc-500">

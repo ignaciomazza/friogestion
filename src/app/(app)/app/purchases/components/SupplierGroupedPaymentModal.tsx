@@ -2,6 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { TrashIcon } from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
+import {
+  getPurchaseOpenBalance,
+  getSignedPurchaseAllocationAmount,
+  isPurchaseCreditNote,
+} from "@/lib/purchases";
+import { PURCHASE_DOCUMENT_TYPE_LABELS } from "@/lib/purchases/fiscal";
 import type { PurchaseRow } from "../types";
 import { PurchaseSelect } from "./PurchaseSelect";
 
@@ -95,14 +101,6 @@ const buildCashOutLine = (
   };
 };
 
-const getPurchaseOpenBalance = (purchase: PurchaseRow) => {
-  const total = Number(purchase.total ?? 0);
-  const paid = Number(purchase.paidTotal ?? 0);
-  const storedBalance = Number(purchase.balance ?? 0);
-  const computedBalance = Math.max(total - paid, 0);
-  return storedBalance > 0 ? storedBalance : computedBalance;
-};
-
 export default function SupplierGroupedPaymentModal({
   purchase,
   purchases,
@@ -116,6 +114,7 @@ export default function SupplierGroupedPaymentModal({
     paymentMethods.length ? [buildCashOutLine(paymentMethods, accounts)] : [],
   );
   const [allocations, setAllocations] = useState<Record<string, string>>({});
+  const [paymentTotalEdited, setPaymentTotalEdited] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const arsAccounts = useMemo(
@@ -140,11 +139,16 @@ export default function SupplierGroupedPaymentModal({
 
   const allocationTotal = useMemo(
     () =>
-      Object.values(allocations).reduce(
-        (sum, value) => sum + Number(value || 0),
+      openPurchases.reduce(
+        (sum, candidate) =>
+          sum +
+          getSignedPurchaseAllocationAmount(
+            candidate.documentType,
+            allocations[candidate.id] ?? 0,
+          ),
         0,
       ),
-    [allocations],
+    [allocations, openPurchases],
   );
 
   const remaining = lineTotal - allocationTotal;
@@ -156,16 +160,14 @@ export default function SupplierGroupedPaymentModal({
 
   useEffect(() => {
     if (lines.length !== 1) return;
-    if (allocationTotal <= 0.005) return;
-    const currentAmount = Number(lines[0]?.amount || 0);
-    if (currentAmount > 0.005) return;
+    if (paymentTotalEdited) return;
+    const syncedAmount = allocationTotal > 0.005 ? toMoneyValue(allocationTotal) : "";
     setLines((prev) => {
       if (prev.length !== 1) return prev;
-      const current = Number(prev[0]?.amount || 0);
-      if (current > 0.005) return prev;
-      return [{ ...prev[0], amount: toMoneyValue(allocationTotal) }];
+      if (prev[0]?.amount === syncedAmount) return prev;
+      return [{ ...prev[0], amount: syncedAmount }];
     });
-  }, [allocationTotal, lines]);
+  }, [allocationTotal, lines.length, paymentTotalEdited]);
 
   useEffect(() => {
     if (!purchase) return;
@@ -179,6 +181,7 @@ export default function SupplierGroupedPaymentModal({
     setLines(
       paymentMethods.length ? [buildCashOutLine(paymentMethods, accounts)] : [],
     );
+    setPaymentTotalEdited(false);
 
     const currentBalance = getPurchaseOpenBalance(purchase);
     setAllocations(
@@ -190,15 +193,33 @@ export default function SupplierGroupedPaymentModal({
 
   if (!purchase) return null;
 
+  const isAllocationSelected = (purchaseId: string) =>
+    purchaseId in allocations;
+
+  const syncPaymentTotalToAllocation = () => {
+    if (lines.length !== 1) return;
+    const syncedAmount = allocationTotal > 0.005 ? toMoneyValue(allocationTotal) : "";
+    setPaymentTotalEdited(false);
+    setLines((prev) => {
+      if (prev.length !== 1) return prev;
+      return [{ ...prev[0], amount: syncedAmount }];
+    });
+  };
+
   const addLine = () => {
+    setPaymentTotalEdited(true);
     setLines((prev) => [...prev, buildCashOutLine(paymentMethods, accounts)]);
   };
 
   const removeLine = (index: number) => {
+    setPaymentTotalEdited(true);
     setLines((prev) => prev.filter((_, currentIndex) => currentIndex !== index));
   };
 
   const updateLine = (index: number, updates: Partial<CashOutLineForm>) => {
+    if (updates.amount !== undefined) {
+      setPaymentTotalEdited(true);
+    }
     setLines((prev) => {
       const next = [...prev];
       const current = next[index];
@@ -212,6 +233,22 @@ export default function SupplierGroupedPaymentModal({
         );
       }
       next[index] = updated;
+      return next;
+    });
+  };
+
+  const handleAllocationToggle = (candidate: PurchaseRow, checked: boolean) => {
+    setAllocations((prev) => {
+      const next = { ...prev };
+      if (!checked) {
+        delete next[candidate.id];
+        return next;
+      }
+      const currentAmount = Number(next[candidate.id] || 0);
+      next[candidate.id] =
+        currentAmount > 0
+          ? next[candidate.id]
+          : toMoneyValue(getPurchaseOpenBalance(candidate));
       return next;
     });
   };
@@ -286,16 +323,32 @@ export default function SupplierGroupedPaymentModal({
       return;
     }
 
-    const allocationList = openPurchases
+    const selectedOpenPurchases = openPurchases.filter((candidate) =>
+      isAllocationSelected(candidate.id),
+    );
+    const invalidSelectedAmount = selectedOpenPurchases.some(
+      (candidate) => Number(allocations[candidate.id] || 0) <= 0,
+    );
+
+    if (invalidSelectedAmount) {
+      setStatus("Revisa los montos seleccionados");
+      return;
+    }
+
+    const allocationList = selectedOpenPurchases
       .map((candidate) => ({
         purchaseInvoiceId: candidate.id,
         amount: Number(allocations[candidate.id] || 0),
         balance: getPurchaseOpenBalance(candidate),
       }))
-      .filter((allocation) => allocation.amount > 0);
 
     if (!allocationList.length) {
-      setStatus("Ingresa al menos una compra a imputar");
+      setStatus("Selecciona al menos una compra o nota a imputar");
+      return;
+    }
+
+    if (allocationTotal <= 0.005) {
+      setStatus("Las notas de credito deben compensarse con facturas.");
       return;
     }
 
@@ -308,8 +361,8 @@ export default function SupplierGroupedPaymentModal({
       return;
     }
 
-    if (remaining < -0.01) {
-      setStatus("El total asignado supera el pago");
+    if (Math.abs(remaining) > 0.01) {
+      setStatus("El monto de pago y el neto imputado deben coincidir");
       return;
     }
 
@@ -474,37 +527,76 @@ export default function SupplierGroupedPaymentModal({
 
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                Imputar a compras abiertas
+                Imputar facturas y notas abiertas
               </p>
               <div className="space-y-2">
                 {openPurchases.length ? (
                   openPurchases.map((candidate) => {
                     const balance = getPurchaseOpenBalance(candidate);
+                    const isCredit = isPurchaseCreditNote(candidate.documentType);
+                    const isSelected = isAllocationSelected(candidate.id);
                     return (
                       <div
                         key={candidate.id}
-                        className="grid gap-3 rounded-xl border border-zinc-200/70 bg-white/40 p-3 text-xs text-zinc-600 sm:grid-cols-[minmax(0,1fr)_170px] sm:items-center"
+                        className="grid gap-3 rounded-xl border border-zinc-200/70 bg-white/40 p-3 text-xs text-zinc-600 sm:grid-cols-[128px_minmax(0,1fr)_170px] sm:items-center"
                       >
+                        <div className="inline-flex items-center gap-2 text-xs text-zinc-700">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={isSelected}
+                            aria-label={`Seleccionar ${
+                              candidate.invoiceNumber ?? "compra"
+                            }`}
+                            className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40 ${
+                              isSelected
+                                ? "border-sky-300 bg-sky-100"
+                                : "border-zinc-300 bg-zinc-100"
+                            }`}
+                            onClick={() =>
+                              handleAllocationToggle(candidate, !isSelected)
+                            }
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.16)] transition-transform ${
+                                isSelected ? "translate-x-4" : "translate-x-0.5"
+                              }`}
+                            />
+                          </button>
+                          <span className="font-semibold">
+                            {isSelected ? "Seleccionada" : "Seleccionar"}
+                          </span>
+                        </div>
                         <div className="min-w-0">
                           <p className="font-semibold text-zinc-900">
                             {candidate.invoiceNumber ?? "Sin comprobante fiscal"}
                           </p>
                           <p className="text-[11px] text-zinc-500">
-                            Saldo {formatCurrencyARS(balance)}
+                            {
+                              PURCHASE_DOCUMENT_TYPE_LABELS[
+                                candidate.documentType ?? "INVOICE"
+                              ]
+                            }{" "}
+                            · {isCredit ? "Credito disponible" : "Saldo"}{" "}
+                            {formatCurrencyARS(balance)}
                           </p>
                         </div>
-                        <label className="field-stack min-w-0">
-                          <span className="input-label">Monto</span>
-                          <MoneyInput
-                            className="input w-full min-w-0 text-right tabular-nums"
-                            value={allocations[candidate.id] ?? ""}
-                            onValueChange={(nextValue) =>
-                              handleAllocationChange(candidate.id, nextValue)
-                            }
-                            placeholder="0,00"
-                            maxDecimals={2}
-                          />
-                        </label>
+                        {isSelected ? (
+                          <label className="field-stack min-w-0">
+                            <span className="input-label">Monto</span>
+                            <MoneyInput
+                              className="input w-full min-w-0 text-right tabular-nums"
+                              value={allocations[candidate.id] ?? ""}
+                              onValueChange={(nextValue) =>
+                                handleAllocationChange(candidate.id, nextValue)
+                              }
+                              placeholder="0,00"
+                              maxDecimals={2}
+                            />
+                          </label>
+                        ) : (
+                          <div className="hidden sm:block" />
+                        )}
                       </div>
                     );
                   })
@@ -518,14 +610,27 @@ export default function SupplierGroupedPaymentModal({
             </div>
 
             <div className="rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-600">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p>
+                  Total lineas:{" "}
+                  <span className="font-semibold text-zinc-900">
+                    {formatCurrencyARS(lineTotal)}
+                  </span>
+                </p>
+                {lines.length === 1 &&
+                allocationTotal > 0.005 &&
+                Math.abs(remaining) > 0.01 ? (
+                  <button
+                    type="button"
+                    className="text-[11px] font-semibold text-sky-700 hover:text-sky-900"
+                    onClick={syncPaymentTotalToAllocation}
+                  >
+                    Igualar al neto
+                  </button>
+                ) : null}
+              </div>
               <p>
-                Total lineas:{" "}
-                <span className="font-semibold text-zinc-900">
-                  {formatCurrencyARS(lineTotal)}
-                </span>
-              </p>
-              <p>
-                Asignado a compras:{" "}
+                Neto imputado:{" "}
                 <span className="font-semibold text-zinc-900">
                   {formatCurrencyARS(allocationTotal)}
                 </span>
@@ -552,12 +657,12 @@ export default function SupplierGroupedPaymentModal({
               ) : null}
               {allocationTotal <= 0 ? (
                 <p className="mt-1 text-[11px] text-rose-600">
-                  Falta asignar el pago a al menos una compra.
+                  Falta imputar facturas por encima de las notas de credito.
                 </p>
               ) : null}
               {lineTotal > 0.005 && allocationTotal > 0 && Math.abs(remaining) > 0.01 ? (
                 <p className="mt-1 text-[11px] text-rose-600">
-                  El monto de pago y el monto asignado deben coincidir.
+                  El monto de pago y el neto imputado deben coincidir.
                 </p>
               ) : null}
             </div>

@@ -571,7 +571,7 @@ export async function PATCH(
           });
         }
 
-        if (hasConfirmedAllocations && !isCreditNote) {
+        if (hasConfirmedAllocations) {
           await tx.purchaseInvoice.update({
             where: { id: purchase.id },
             data: {
@@ -579,23 +579,13 @@ export async function PATCH(
             },
           });
           await recalcPurchaseTotals(tx, purchase.id);
-        } else if (!isCreditNote) {
+        } else {
           await tx.purchaseInvoice.update({
             where: { id: purchase.id },
             data: {
               paidTotal: "0.00",
               balance: total.toFixed(2),
               paymentStatus: "UNPAID",
-              immediatePaymentLabel: null,
-            },
-          });
-        } else {
-          await tx.purchaseInvoice.update({
-            where: { id: purchase.id },
-            data: {
-              paidTotal: total.toFixed(2),
-              balance: "0.00",
-              paymentStatus: "PAID",
               immediatePaymentLabel: null,
             },
           });

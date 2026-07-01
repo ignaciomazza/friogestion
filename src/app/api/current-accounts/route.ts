@@ -6,6 +6,10 @@ import { requireOrg } from "@/lib/auth/tenant";
 import { reconcileAgingWithBalance } from "@/lib/current-accounts/aging";
 import { logServerError } from "@/lib/server/log";
 import { authErrorStatus, isAuthError } from "@/lib/auth/errors";
+import {
+  getPurchaseAllocationSign,
+  getPurchaseOpenBalance,
+} from "@/lib/purchases";
 
 const parseNumber = (value?: string | null) => {
   if (!value) return null;
@@ -244,15 +248,28 @@ export async function GET(req: NextRequest) {
             organizationId,
             supplierId: { in: supplierIds },
             status: "CONFIRMED",
-            balance: { gt: 0 },
+            currentAccountEntries: {
+              some: {
+                sourceType: "PURCHASE",
+              },
+            },
           },
           select: {
             supplierId: true,
-            balance: true,
+            documentType: true,
             invoiceDate: true,
             createdAt: true,
             total: true,
-            paidTotal: true,
+            allocations: {
+              where: {
+                supplierPayment: {
+                  status: "CONFIRMED",
+                },
+              },
+              select: {
+                amount: true,
+              },
+            },
           },
         })
       : [];
@@ -269,12 +286,19 @@ export async function GET(req: NextRequest) {
         (now.getTime() - date.getTime()) / 86_400_000
       );
       const bucket = bucketForAge(ageDays);
-      const balance = resolveOpenBalance(
-        purchase.balance,
-        purchase.total,
-        purchase.paidTotal
+      const allocatedTotal = purchase.allocations.reduce(
+        (sum, item) => sum + Number(item.amount ?? 0),
+        0
       );
-      if (!purchase.supplierId || balance <= 0) continue;
+      const balance =
+        getPurchaseOpenBalance({
+          total: purchase.total?.toString() ?? null,
+          paidTotal: allocatedTotal,
+          balance: null,
+        }) *
+        getPurchaseAllocationSign(purchase.documentType);
+      if (!purchase.supplierId || Math.abs(balance) <= PAYMENT_SETTLEMENT_TOLERANCE)
+        continue;
       const current = aging.get(purchase.supplierId) ?? {
         bucket0: 0,
         bucket30: 0,
