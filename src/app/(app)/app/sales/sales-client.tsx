@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Cog6ToothIcon } from "@/components/icons";
+import { DailyCashPanel } from "./components/DailyCashPanel";
+import { NewSaleForm } from "./components/NewSaleForm";
 import { SalesEvents } from "./components/SalesEvents";
 import { SalesRecentTable } from "./components/SalesRecentTable";
 import { SalesStats } from "./components/SalesStats";
@@ -10,6 +12,7 @@ import type { SaleEventRow, SaleRow } from "./types";
 import type { SalesStatsSummary } from "@/lib/sales/list";
 
 const PAGE_SIZE = 25;
+type SalesView = "daily" | "complete" | "list";
 
 const formatDateInput = (value: Date) => {
   const year = value.getFullYear();
@@ -79,6 +82,7 @@ export default function SalesClient({
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [activeView, setActiveView] = useState<SalesView>("daily");
   const didMountRef = useRef(false);
 
   const canManage = useMemo(
@@ -233,11 +237,57 @@ export default function SalesClient({
         </p>
       </div>
 
-      <SalesStats
-        totalSales={stats.totalSales}
-        openBalanceSales={stats.openBalanceSales}
-        totalRevenue={stats.totalRevenue}
-      />
+      <div className="grid w-full grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-white p-1">
+        {[
+          { id: "daily" as const, label: "Caja diaria" },
+          { id: "complete" as const, label: "Venta completa" },
+          { id: "list" as const, label: "Lista de ventas" },
+        ].map((view) => (
+          <button
+            key={view.id}
+            type="button"
+            className={`flex min-w-0 items-center justify-center rounded-xl px-2 py-2 text-center text-xs font-semibold transition sm:text-sm ${
+              activeView === view.id
+                ? "bg-sky-100 text-sky-900"
+                : "text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900"
+            }`}
+            onClick={() => setActiveView(view.id)}
+            aria-pressed={activeView === view.id}
+          >
+            {view.label}
+          </button>
+        ))}
+      </div>
+
+      {activeView === "daily" && canManage ? (
+        <DailyCashPanel
+          paymentMethods={paymentMethods}
+          accounts={accounts}
+          currencies={currencies}
+          latestUsdRate={latestUsdRate}
+          onSalesChanged={reloadLoadedSales}
+        />
+      ) : null}
+
+      {activeView === "complete" && canManage ? (
+        <NewSaleForm
+          paymentMethods={paymentMethods}
+          accounts={accounts}
+          currencies={currencies}
+          latestUsdRate={latestUsdRate}
+          onSaleCreated={reloadLoadedSales}
+        />
+      ) : null}
+
+      {activeView === "list" ? (
+        <>
+      {canViewActivity ? (
+        <SalesStats
+          totalSales={stats.totalSales}
+          openBalanceSales={stats.openBalanceSales}
+          totalRevenue={stats.totalRevenue}
+        />
+      ) : null}
 
       <div className="card space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -386,8 +436,10 @@ export default function SalesClient({
         latestUsdRate={latestUsdRate}
         onReceiptsUpdated={reloadLoadedSales}
       />
+        </>
+      ) : null}
 
-      {canViewActivity ? (
+      {activeView === "list" && canViewActivity ? (
         <div className="card p-0 border-dashed border-sky-200">
           <button
             type="button"

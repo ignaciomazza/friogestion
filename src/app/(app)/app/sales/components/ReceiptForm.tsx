@@ -1,14 +1,18 @@
 "use client";
 
-import type { FormEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
-import { TrashIcon } from "@/components/icons";
+import type { FormEvent, ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CurrencyDollarIcon,
+  PlusIcon,
+  TrashIcon,
+  XMarkIcon,
+} from "@/components/icons";
 import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
-import {
-  normalizeDecimalInput,
-  normalizeIntegerInput,
-} from "@/lib/input-format";
+import { normalizeIntegerInput } from "@/lib/input-format";
 
 type PaymentMethodOption = {
   id: string;
@@ -73,9 +77,117 @@ type ReceiptFormProps = {
   receipt?: EditableReceipt;
   allowFinancing?: boolean;
   submitLabel?: string;
+  secondaryAction?: {
+    label: string;
+    icon?: ReactNode;
+    onClick: () => void;
+    disabled?: boolean;
+  };
   onCancel?: () => void;
   onCreated: () => void;
 };
+
+type ReceiptSelectOption = {
+  value: string;
+  label: ReactNode;
+  disabled?: boolean;
+};
+
+function ReceiptSelect({
+  value,
+  options,
+  onValueChange,
+  ariaLabel,
+  placeholder = "Seleccionar",
+  disabled = false,
+  buttonClassName = "",
+  menuClassName = "",
+}: {
+  value: string;
+  options: ReceiptSelectOption[];
+  onValueChange: (value: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+  disabled?: boolean;
+  buttonClassName?: string;
+  menuClassName?: string;
+}) {
+  const id = useId();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const selectedOption =
+    options.find((option) => option.value === value) ?? null;
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative min-w-0">
+      <button
+        type="button"
+        className={`input flex min-h-11 w-full min-w-0 items-center justify-between gap-2 text-left text-sm ${buttonClassName}`}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={`${id}-options`}
+        disabled={disabled}
+        onClick={() => setOpen((previous) => !previous)}
+      >
+        <span className="min-w-0 truncate">
+          {selectedOption?.label ?? placeholder}
+        </span>
+        <ChevronDownIcon
+          className={`size-4 shrink-0 text-zinc-500 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+      {open ? (
+        <div
+          id={`${id}-options`}
+          role="listbox"
+          className={`absolute left-0 right-0 top-full z-[160] mt-2 max-h-64 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-1 shadow-[0_18px_32px_-22px_rgba(39,39,42,0.55)] ${menuClassName}`}
+        >
+          {options.map((option) => {
+            const isSelected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                disabled={option.disabled}
+                className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
+                  isSelected
+                    ? "bg-sky-50 text-sky-950"
+                    : "text-zinc-700 hover:bg-zinc-50"
+                } ${
+                  option.disabled ? "cursor-not-allowed opacity-50" : ""
+                }`}
+                onClick={() => {
+                  if (option.disabled) return;
+                  onValueChange(option.value);
+                  setOpen(false);
+                }}
+              >
+                <span className="min-w-0 truncate">{option.label}</span>
+                {isSelected ? <CheckIcon className="size-4 shrink-0" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const buildLine = (
   paymentMethods: PaymentMethodOption[],
@@ -144,6 +256,7 @@ export function ReceiptForm({
   receipt,
   allowFinancing = true,
   submitLabel,
+  secondaryAction,
   onCancel,
   onCreated,
 }: ReceiptFormProps) {
@@ -309,6 +422,14 @@ export function ReceiptForm({
       }
       if (updates.currencyCode && updates.currencyCode !== "ARS") {
         updated.fxRateUsed = updated.fxRateUsed || latestUsdRate || "";
+      }
+      if (updates.currencyCode && updated.accountId) {
+        const selectedAccount = accounts.find(
+          (account) => account.id === updated.accountId,
+        );
+        if (selectedAccount?.currencyCode !== updates.currencyCode) {
+          updated.accountId = "";
+        }
       }
       next[index] = updated;
       return next;
@@ -525,13 +646,13 @@ export function ReceiptForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3">
+    <form onSubmit={handleSubmit} className="space-y-5">
       {isEditing ? (
-        <label className="field-stack max-w-48">
+        <label className="field-stack max-w-56">
           <span className="input-label">Fecha de cobro</span>
           <input
             type="date"
-            className="input cursor-pointer text-xs"
+            className="input cursor-pointer text-sm"
             value={receivedAtInput}
             onChange={(event) => setReceivedAtInput(event.target.value)}
             required
@@ -539,7 +660,7 @@ export function ReceiptForm({
         </label>
       ) : null}
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {lines.map((line, index) => {
           const isInstallmentLine =
             canUseFinancing && line.mode === "INSTALLMENTS";
@@ -558,10 +679,10 @@ export function ReceiptForm({
           return (
             <div
               key={`${line.paymentMethodId}-${index}`}
-              className="flex flex-wrap items-end gap-3 rounded-2xl border border-sky-200 bg-white/70 p-3"
+              className="flex flex-wrap items-end gap-4 rounded-[22px] border border-sky-200 bg-white/75 p-4"
             >
               {canUseFinancing ? (
-                <div className="field-stack min-w-36">
+                <div className="field-stack w-full sm:w-44">
                   <span className="input-label">Modo</span>
                   <div className="segmented-toggle">
                     <span
@@ -603,88 +724,86 @@ export function ReceiptForm({
               ) : null}
 
               {!isInstallmentLine ? (
-                <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
-                  Metodo
-                  <select
-                    className="input text-xs"
+                <div className="field-stack w-full sm:w-56">
+                  <span className="input-label">Metodo</span>
+                  <ReceiptSelect
                     value={line.paymentMethodId}
-                    onChange={(event) =>
-                      updateLine(index, { paymentMethodId: event.target.value })
+                    options={paymentMethods.map((methodOption) => ({
+                      value: methodOption.id,
+                      label: methodOption.name,
+                    }))}
+                    onValueChange={(value) =>
+                      updateLine(index, { paymentMethodId: value })
                     }
-                  >
-                    {paymentMethods.map((methodOption) => (
-                      <option key={methodOption.id} value={methodOption.id}>
-                        {methodOption.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    ariaLabel="Metodo de cobro"
+                  />
+                </div>
               ) : null}
 
               {!isInstallmentLine && requiresAccount ? (
-                <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-44">
-                  Cuenta
-                  <select
-                    className="input text-xs"
+                <div className="field-stack w-full sm:w-56">
+                  <span className="input-label">Cuenta</span>
+                  <ReceiptSelect
                     value={line.accountId}
-                    onChange={(event) =>
-                      updateLine(index, { accountId: event.target.value })
+                    options={[
+                      { value: "", label: "Seleccionar" },
+                      ...currencyAccounts.map((account) => ({
+                        value: account.id,
+                        label: account.name,
+                      })),
+                    ]}
+                    onValueChange={(value) =>
+                      updateLine(index, { accountId: value })
                     }
-                    required
-                  >
-                    <option value="">Seleccionar</option>
-                    {currencyAccounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                    ariaLabel="Cuenta de cobro"
+                  />
+                </div>
               ) : null}
 
-              <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
-                Moneda
-                <select
-                  className="input text-xs"
+              <div className="field-stack w-full sm:w-32">
+                <span className="input-label">Moneda</span>
+                <ReceiptSelect
                   value={line.currencyCode}
-                  onChange={(event) =>
-                    updateLine(index, { currencyCode: event.target.value })
+                  options={currencies.map((currency) => ({
+                    value: currency.code,
+                    label: currency.code,
+                  }))}
+                  onValueChange={(value) =>
+                    updateLine(index, { currencyCode: value })
                   }
-                >
-                  {currencies.map((currency) => (
-                    <option key={currency.id} value={currency.code}>
-                      {currency.code}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  ariaLabel="Moneda del cobro"
+                />
+              </div>
 
-              <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-28">
-                Importe
+              <label className="field-stack w-full sm:w-40">
+                <span className="input-label">Importe</span>
                 <MoneyInput
-                  className="input text-xs"
+                  className="input text-sm"
                   value={line.amount}
                   onValueChange={(nextValue) => {
                     updateLine(index, { amount: nextValue });
                   }}
                   placeholder="0,00"
                   maxDecimals={2}
+                  caretToEndOnFocus
                   required
                 />
               </label>
 
               {line.currencyCode !== "ARS" ? (
-                <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-28">
-                  Cotizacion
-                  <input
-                    className="input text-xs"
-                    inputMode="decimal"
+                <label className="field-stack w-full sm:w-40">
+                  <span className="input-label">Cotizacion</span>
+                  <MoneyInput
+                    className="input text-sm"
                     value={line.fxRateUsed}
-                    onChange={(event) =>
+                    onValueChange={(value) =>
                       updateLine(index, {
-                        fxRateUsed: normalizeDecimalInput(event.target.value, 6),
+                        fxRateUsed: value,
                       })
                     }
+                    placeholder="0,00"
+                    maxDecimals={6}
+                    caretToEndOnFocus
                     required
                   />
                 </label>
@@ -692,10 +811,10 @@ export function ReceiptForm({
 
               {isFinancingConfigHost ? (
                 <>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
-                    Cuotas
+                  <label className="field-stack w-full sm:w-32">
+                    <span className="input-label">Cuotas</span>
                     <input
-                      className="input text-xs"
+                      className="input text-sm"
                       inputMode="numeric"
                       value={financingForm.installmentsCount}
                       onChange={(event) =>
@@ -706,25 +825,27 @@ export function ReceiptForm({
                       }
                     />
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-24">
-                    Interes %
-                    <input
-                      className="input text-xs"
-                      inputMode="decimal"
+                  <label className="field-stack w-full sm:w-36">
+                    <span className="input-label">Interes %</span>
+                    <MoneyInput
+                      className="input text-sm"
                       placeholder="0,00"
                       value={financingForm.interestRate}
-                      onChange={(event) =>
+                      onValueChange={(value) =>
                         setFinancingForm((prev) => ({
                           ...prev,
-                          interestRate: normalizeDecimalInput(event.target.value, 2),
+                          interestRate: value,
                         }))
                       }
+                      maxDecimals={2}
+                      suffix="%"
+                      caretToEndOnFocus
                     />
                   </label>
-                  <label className="flex w-full flex-col gap-2 text-[11px] text-zinc-500 sm:w-36">
-                    Primera cuota
+                  <label className="field-stack w-full sm:w-44">
+                    <span className="input-label">Primera cuota</span>
                     <input
-                      className="input text-xs"
+                      className="input cursor-pointer text-sm"
                       type="date"
                       value={financingForm.startDate}
                       onChange={(event) =>
@@ -735,15 +856,15 @@ export function ReceiptForm({
                       }
                     />
                   </label>
-                  <div className="text-[11px] text-zinc-500">
+                  <div className="min-w-36 text-xs text-zinc-500">
                     Total con interes
-                    <p className="text-sm font-semibold text-zinc-900">
+                    <p className="text-base font-semibold text-zinc-900">
                       {formatCurrencyARS(financingTotal)}
                     </p>
                   </div>
-                  <div className="text-[11px] text-zinc-500">
+                  <div className="min-w-36 text-xs text-zinc-500">
                     Cuota estimada
-                    <p className="text-sm font-semibold text-zinc-900">
+                    <p className="text-base font-semibold text-zinc-900">
                       {formatCurrencyARS(financingInstallmentValue)}
                     </p>
                   </div>
@@ -751,9 +872,9 @@ export function ReceiptForm({
               ) : null}
 
               {!isInstallmentLine ? (
-                <div className="text-[11px] text-zinc-500">
+                <div className="min-w-32 text-xs text-zinc-500">
                   Base ARS
-                  <p className="text-sm font-semibold text-zinc-900">
+                  <p className="text-base font-semibold text-zinc-900">
                     {formatCurrencyARS(base)}
                   </p>
                 </div>
@@ -774,8 +895,9 @@ export function ReceiptForm({
         })}
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-500">
-        <button type="button" className="btn text-xs" onClick={addLine}>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-zinc-500">
+        <button type="button" className="btn h-10 px-3.5 text-sm" onClick={addLine}>
+          <PlusIcon className="size-4" />
           Agregar linea
         </button>
         <span>
@@ -784,29 +906,50 @@ export function ReceiptForm({
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        {status ? <span className="text-xs text-zinc-500">{status}</span> : null}
-        {onCancel ? (
+      <div className="flex flex-col gap-3 border-t border-zinc-200/70 pt-4 sm:flex-row sm:items-center sm:justify-between">
+        {status ? <span className="text-sm text-zinc-500">{status}</span> : <span />}
+        <div
+          className={`gap-2 sm:flex sm:justify-end ${
+            onCancel || secondaryAction
+              ? "grid grid-cols-2"
+              : "flex justify-end"
+          }`}
+        >
+          {onCancel ? (
+            <button
+              type="button"
+              className="btn h-10 px-4 text-sm"
+              onClick={onCancel}
+              disabled={isSubmitting}
+            >
+              <XMarkIcon className="size-4" />
+              Cancelar
+            </button>
+          ) : null}
+          {secondaryAction ? (
+            <button
+              type="button"
+              className="btn h-10 px-4 text-sm"
+              onClick={secondaryAction.onClick}
+              disabled={isSubmitting || secondaryAction.disabled}
+            >
+              {secondaryAction.icon}
+              {secondaryAction.label}
+            </button>
+          ) : null}
           <button
-            type="button"
-            className="btn text-xs"
-            onClick={onCancel}
+            type="submit"
+            className="btn btn-sky h-10 px-4 text-sm"
             disabled={isSubmitting}
           >
-            Cancelar
+            <CurrencyDollarIcon className="size-4" />
+            {isSubmitting
+              ? isEditing
+                ? "Guardando..."
+                : "Registrando..."
+              : submitLabel ?? (isEditing ? "Guardar cobro" : "Registrar cobro")}
           </button>
-        ) : null}
-        <button
-          type="submit"
-          className="btn btn-sky ml-auto"
-          disabled={isSubmitting}
-        >
-          {isSubmitting
-            ? isEditing
-              ? "Guardando..."
-              : "Registrando..."
-            : submitLabel ?? (isEditing ? "Guardar cobro" : "Registrar cobro")}
-        </button>
+        </div>
       </div>
     </form>
   );

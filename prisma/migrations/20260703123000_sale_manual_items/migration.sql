@@ -1,0 +1,2 @@
+ALTER TABLE "SaleItem" ADD COLUMN "description" TEXT;
+ALTER TABLE "SaleItem" ALTER COLUMN "productId" DROP NOT NULL;

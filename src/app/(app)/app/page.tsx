@@ -161,6 +161,7 @@ export default async function AppDashboardPage() {
       },
       select: {
         total: true,
+        description: true,
         product: { select: { name: true } },
         sale: { select: { createdAt: true, saleDate: true } },
       },
@@ -191,7 +192,7 @@ export default async function AppDashboardPage() {
   }));
 
   const saleItemsData = saleItemsWindow.map((item) => ({
-    productName: item.product.name,
+    productName: item.product?.name ?? item.description ?? "Item manual",
     total: toNumber(item.total),
     occurredAt: (item.sale.saleDate ?? item.sale.createdAt).toISOString(),
   }));

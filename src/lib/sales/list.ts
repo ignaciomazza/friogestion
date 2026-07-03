@@ -17,8 +17,22 @@ export const salesListInclude = Prisma.validator<Prisma.SaleInclude>()({
   receipts: {
     where: { status: "CONFIRMED" },
     select: {
+      id: true,
+      receiptNumber: true,
+      total: true,
+      receivedAt: true,
       lines: {
         select: {
+          id: true,
+          currencyCode: true,
+          amount: true,
+          amountBase: true,
+          paymentMethod: {
+            select: { id: true, name: true },
+          },
+          account: {
+            select: { id: true, name: true },
+          },
           accountMovement: {
             select: { verifiedAt: true },
           },
@@ -232,9 +246,24 @@ export const serializeSaleListItem = (sale: SalesListRecord) => ({
   paymentStatus: sale.paymentStatus,
   status: sale.status,
   billingStatus: sale.billingStatus,
+  payments: sale.receipts.flatMap((receipt) =>
+    receipt.lines.map((line) => ({
+      receiptId: receipt.id,
+      receiptNumber: receipt.receiptNumber,
+      receivedAt: receipt.receivedAt.toISOString(),
+      paymentMethodId: line.paymentMethod.id,
+      paymentMethodName: line.paymentMethod.name,
+      accountId: line.account?.id ?? null,
+      accountName: line.account?.name ?? null,
+      currencyCode: line.currencyCode,
+      amount: line.amount.toString(),
+      amountBase: line.amountBase.toString(),
+    })),
+  ),
   items: sale.items.map((item) => ({
     id: item.id,
-    productName: item.product.name,
+    productName: item.product?.name ?? item.description ?? "Item manual",
+    description: item.description,
     qty: item.qty.toString(),
     unitPrice: item.unitPrice.toString(),
     total: item.total.toString(),

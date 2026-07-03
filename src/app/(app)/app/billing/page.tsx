@@ -196,7 +196,8 @@ export default async function BillingPage() {
         billingStatus: sale.billingStatus,
         items: sale.items.map((item) => ({
           id: item.id,
-          productName: item.product.name,
+          productName: item.product?.name ?? item.description ?? "Item manual",
+          description: item.description,
           qty: item.qty.toString(),
           unitPrice: item.unitPrice.toString(),
           total: item.total.toString(),

@@ -63,10 +63,10 @@ export async function GET(req: NextRequest) {
     });
 
     const items = sale.items.map((item) => ({
-      description: item.product.name,
-      sku: item.product.sku ?? null,
-      brand: item.product.brand ?? null,
-      model: item.product.model ?? null,
+      description: item.product?.name ?? item.description ?? "Item manual",
+      sku: item.product?.sku ?? null,
+      brand: item.product?.brand ?? null,
+      model: item.product?.model ?? null,
       qty: Number(item.qty),
       unitPrice: Number(item.unitPrice),
       total: Number(item.total),

@@ -126,7 +126,7 @@ export async function GET(
     });
 
     const items = creditNote.sale?.items.map((item) => ({
-      description: item.product.name,
+      description: item.product?.name ?? item.description ?? "Item manual",
       qty: Number(item.qty),
       unitPrice: Number(item.unitPrice),
       total: Number(item.total),

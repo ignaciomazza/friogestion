@@ -30,17 +30,36 @@ import {
 } from "@/lib/sales/list";
 import { recordOperationEvent } from "@/lib/operation-events";
 
-const saleItemSchema = z.object({
-  productId: z.string().min(1),
-  qty: z.coerce.number().positive(),
-  unitPrice: z.coerce.number().positive(),
-  taxRate: z.coerce.number().min(0).max(100),
-});
+const saleItemSchema = z
+  .object({
+    productId: z.string().min(1).optional(),
+    description: z.string().trim().min(1).max(140).optional(),
+    qty: z.coerce.number().positive(),
+    unitPrice: z.coerce.number().positive(),
+    taxRate: z.coerce.number().min(0).max(100),
+  })
+  .refine((item) => Boolean(item.productId || item.description), {
+    message: "Producto o descripcion requerido",
+    path: ["description"],
+  });
 
-const saleItemUpdateSchema = z.object({
-  id: z.string().min(1),
-  unitPrice: z.coerce.number().positive(),
-});
+const saleItemUpdateSchema = z
+  .object({
+    id: z.string().min(1),
+    qty: z.coerce.number().positive().optional(),
+    unitPrice: z.coerce.number().positive().optional(),
+    taxRate: z.coerce.number().min(0).max(100).optional(),
+  })
+  .refine(
+    (item) =>
+      item.qty !== undefined ||
+      item.unitPrice !== undefined ||
+      item.taxRate !== undefined,
+    {
+      message: "Sin cambios",
+      path: ["unitPrice"],
+    },
+  );
 
 const saleSchema = z.object({
   customerId: z.string().min(1),
@@ -137,7 +156,8 @@ const serializeSale = (
     billingStatus: string;
     items: Array<{
       id: string;
-      product: { name: string };
+      product: { name: string } | null;
+      description: string | null;
       qty: Prisma.Decimal;
       unitPrice: Prisma.Decimal;
       total: Prisma.Decimal;
@@ -190,7 +210,8 @@ const serializeSale = (
   billingStatus: sale.billingStatus,
   items: sale.items.map((item) => ({
     id: item.id,
-    productName: item.product.name,
+    productName: item.product?.name ?? item.description ?? "Item manual",
+    description: item.description,
     qty: item.qty.toString(),
     unitPrice: item.unitPrice.toString(),
     total: item.total.toString(),
@@ -265,6 +286,7 @@ export async function GET(req: NextRequest) {
     const limit = parseSalesLimit(req.nextUrl.searchParams.get("limit"));
     const offset = parseSalesOffset(req.nextUrl.searchParams.get("offset"));
     const sort = parseSalesSort(req.nextUrl.searchParams.get("sort"));
+    const origin = req.nextUrl.searchParams.get("origin");
     const dateFromResult = parseOptionalDate(
       req.nextUrl.searchParams.get("dateFrom") ?? undefined,
     );
@@ -276,12 +298,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Fecha invalida" }, { status: 400 });
     }
 
-    const where = buildSalesWhere({
-      organizationId,
-      query,
-      dateFrom: dateFromResult.date,
-      dateTo: dateToResult.date ? endOfDay(dateToResult.date) : null,
-    });
+    const where: Prisma.SaleWhereInput = {
+      ...buildSalesWhere({
+        organizationId,
+        query,
+        dateFrom: dateFromResult.date,
+        dateTo: dateToResult.date ? endOfDay(dateToResult.date) : null,
+      }),
+      ...(origin === "DAILY_CASH"
+        ? { saleEvents: { some: { action: "DAILY_CASH_CREATED" } } }
+        : {}),
+    };
 
     const [total, sales, stats] = await Promise.all([
       prisma.sale.count({ where }),
@@ -329,19 +356,25 @@ export async function POST(req: NextRequest) {
     }
 
     const productIds = Array.from(
-      new Set(body.items.map((item) => item.productId))
+      new Set(
+        body.items
+          .map((item) => item.productId)
+          .filter((productId): productId is string => Boolean(productId)),
+      ),
     );
 
-    const products = await prisma.product.findMany({
-      where: { organizationId, id: { in: productIds } },
-      select: { id: true },
-    });
+    if (productIds.length) {
+      const products = await prisma.product.findMany({
+        where: { organizationId, id: { in: productIds } },
+        select: { id: true },
+      });
 
-    if (products.length !== productIds.length) {
-      return NextResponse.json(
-        { error: "Producto invalido" },
-        { status: 400 }
-      );
+      if (products.length !== productIds.length) {
+        return NextResponse.json(
+          { error: "Producto invalido" },
+          { status: 400 },
+        );
+      }
     }
 
     const { subtotal, taxes, extraAmount, total } = calculateTotals(
@@ -423,7 +456,10 @@ export async function POST(req: NextRequest) {
           paymentStatus: "UNPAID",
           items: {
             create: body.items.map((item) => ({
-              productId: item.productId,
+              productId: item.productId ?? undefined,
+              description: item.productId
+                ? undefined
+                : item.description?.trim() || undefined,
               qty: item.qty.toFixed(3),
               unitPrice: item.unitPrice.toFixed(2),
               total: (item.qty * item.unitPrice).toFixed(2),
@@ -436,7 +472,26 @@ export async function POST(req: NextRequest) {
             })),
           },
         },
-        include: { customer: true, items: true },
+        include: {
+          customer: true,
+          items: { include: { product: true } },
+          fiscalInvoice: {
+            select: { type: true, pointOfSale: true, number: true },
+          },
+          saleCharges: { select: { amount: true } },
+          receipts: {
+            where: { status: "CONFIRMED" },
+            select: {
+              lines: {
+                select: {
+                  accountMovement: {
+                    select: { verifiedAt: true },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
 
       await tx.currentAccountEntry.create({
@@ -458,11 +513,13 @@ export async function POST(req: NextRequest) {
           organizationId,
           occurredAt: created.saleDate ?? new Date(),
           note: `Salida por venta ${created.saleNumber ?? created.id}`,
-          items: created.items.map((item) => ({
-            id: item.id,
-            productId: item.productId,
-            qty: Number(item.qty),
-          })),
+          items: created.items
+            .filter((item) => item.productId)
+            .map((item) => ({
+              id: item.id,
+              productId: item.productId as string,
+              qty: Number(item.qty),
+            })),
         });
         if (stockMovements.length) {
           await tx.stockMovement.createMany({ data: stockMovements });
@@ -487,28 +544,7 @@ export async function POST(req: NextRequest) {
       return created;
     });
 
-    return NextResponse.json({
-      id: sale.id,
-      customerName: sale.customer.displayName,
-      customerPhone: sale.customer.phone,
-      saleNumber: sale.saleNumber,
-      fiscalInvoiceType: null,
-      fiscalInvoicePointOfSale: null,
-      fiscalInvoiceNumber: null,
-      saleDate: sale.saleDate?.toISOString() ?? null,
-      createdAt: sale.createdAt.toISOString(),
-      subtotal: sale.subtotal?.toString() ?? null,
-      taxes: sale.taxes?.toString() ?? null,
-      extraType: sale.extraType ?? null,
-      extraValue: sale.extraValue?.toString() ?? null,
-      extraAmount: sale.extraAmount?.toString() ?? null,
-      total: sale.total?.toString() ?? null,
-      paidTotal: sale.paidTotal?.toString() ?? "0",
-      balance: normalizeBalanceForDisplay(sale.balance),
-      paymentStatus: sale.paymentStatus,
-      status: sale.status,
-      billingStatus: sale.billingStatus,
-    });
+    return NextResponse.json(serializeSale(sale));
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: "Datos invalidos" }, { status: 400 });
@@ -612,7 +648,7 @@ export async function PATCH(req: NextRequest) {
 
       if (body.items?.length) {
         const updatesByItemId = new Map(
-          body.items.map((item) => [item.id, item.unitPrice])
+          body.items.map((item) => [item.id, item])
         );
         const invalidItem = body.items.find(
           (item) => !existing.items.some((saleItem) => saleItem.id === item.id)
@@ -623,9 +659,10 @@ export async function PATCH(req: NextRequest) {
 
         const recalculatedItems = existing.items.map((item) => ({
           id: item.id,
-          qty: Number(item.qty),
-          unitPrice: updatesByItemId.get(item.id) ?? Number(item.unitPrice),
-          taxRate: Number(item.taxRate ?? 0),
+          qty: updatesByItemId.get(item.id)?.qty ?? Number(item.qty),
+          unitPrice:
+            updatesByItemId.get(item.id)?.unitPrice ?? Number(item.unitPrice),
+          taxRate: updatesByItemId.get(item.id)?.taxRate ?? Number(item.taxRate ?? 0),
         }));
 
         const { subtotal, taxes, extraAmount, total } = calculateTotals(
@@ -663,7 +700,9 @@ export async function PATCH(req: NextRequest) {
           await tx.saleItem.update({
             where: { id: item.id },
             data: {
+              qty: item.qty.toFixed(3),
               unitPrice: item.unitPrice.toFixed(2),
+              taxRate: item.taxRate.toFixed(2),
               total: round2(item.qty * item.unitPrice).toFixed(2),
               taxAmount: round2(
                 item.qty * item.unitPrice * (item.taxRate / 100)

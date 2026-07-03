@@ -182,11 +182,13 @@ export async function POST(req: NextRequest) {
           organizationId,
           occurredAt: created.saleDate ?? new Date(),
           note: `Salida por venta ${created.saleNumber ?? created.id}`,
-          items: created.items.map((item) => ({
-            id: item.id,
-            productId: item.productId,
-            qty: Number(item.qty),
-          })),
+          items: created.items
+            .filter((item) => item.productId)
+            .map((item) => ({
+              id: item.id,
+              productId: item.productId as string,
+              qty: Number(item.qty),
+            })),
         });
         if (saleStock.length) {
           await tx.stockMovement.createMany({ data: saleStock });

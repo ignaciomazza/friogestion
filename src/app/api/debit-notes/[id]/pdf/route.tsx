@@ -121,7 +121,8 @@ export async function GET(
           fiscalTaxProfile: string | null;
         };
         items: Array<{
-          product: { name: string };
+          product: { name: string } | null;
+          description: string | null;
           qty: string | number;
           unitPrice: string | number;
           total: string | number;
@@ -192,7 +193,7 @@ export async function GET(
     });
 
     const items = debitNote.sale?.items.map((item) => ({
-      description: item.product.name,
+      description: item.product?.name ?? item.description ?? "Item manual",
       qty: Number(item.qty),
       unitPrice: Number(item.unitPrice),
       total: Number(item.total),

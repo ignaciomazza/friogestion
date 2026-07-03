@@ -2637,11 +2637,13 @@ export async function markStorefrontOrderPaymentApproved(
         organizationId: order.organizationId,
         occurredAt: now,
         note: `Venta web ${order.displayNumber || order.id}`,
-        items: sale.items.map((item) => ({
-          id: item.id,
-          productId: item.productId,
-          qty: item.qty.toString(),
-        })),
+        items: sale.items
+          .filter((item) => item.productId)
+          .map((item) => ({
+            id: item.id,
+            productId: item.productId as string,
+            qty: item.qty.toString(),
+          })),
       });
       await tx.stockMovement.createMany({ data: movements });
     }

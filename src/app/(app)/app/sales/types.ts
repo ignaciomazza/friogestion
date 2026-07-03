@@ -24,9 +24,22 @@ export type SaleRow = {
   hasPendingDoubleCheck?: boolean | null;
   status: string;
   billingStatus: string;
+  payments?: Array<{
+    receiptId: string;
+    receiptNumber: string | null;
+    receivedAt: string;
+    paymentMethodId: string;
+    paymentMethodName: string;
+    accountId: string | null;
+    accountName: string | null;
+    currencyCode: string;
+    amount: string;
+    amountBase: string;
+  }>;
   items?: Array<{
     id?: string;
     productName: string;
+    description?: string | null;
     qty: string;
     unitPrice: string;
     total: string;
@@ -69,8 +82,10 @@ export type ProductOption = {
 };
 
 export type SaleItemForm = {
-  productId: string;
+  productId?: string;
+  description?: string;
   productSearch: string;
   qty: string;
   unitPrice: string;
+  taxRate?: string;
 };
