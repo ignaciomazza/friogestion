@@ -1,3 +1,5 @@
+import type { CustomerFiscalTaxProfile } from "@/lib/customers/fiscal-profile";
+
 export type SaleRow = {
   id: string;
   customerName: string;
@@ -69,16 +71,38 @@ export type CustomerOption = {
   phone: string | null;
   address: string | null;
   type: string;
+  fiscalTaxProfile?: CustomerFiscalTaxProfile | null;
+  systemKey?: string | null;
+  defaultPriceListId?: string | null;
 };
 
 export type ProductOption = {
   id: string;
   name: string;
   sku: string | null;
+  purchaseCode?: string | null;
   brand: string | null;
   model: string | null;
   unit: string | null;
+  cost?: string | null;
+  costUsd?: string | null;
   price: string | null;
+  isActive?: boolean;
+  prices?: Array<{
+    priceListId: string;
+    price: string | null;
+    percentage?: string | null;
+  }>;
+};
+
+export type PriceListOption = {
+  id: string;
+  name: string;
+  currencyCode: string;
+  isDefault: boolean;
+  isConsumerFinal: boolean;
+  isActive: boolean;
+  sortOrder: number;
 };
 
 export type SaleItemForm = {

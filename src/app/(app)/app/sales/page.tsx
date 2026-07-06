@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth/jwt";
+import { PRICE_LIST_ORDER_BY } from "@/lib/price-lists";
 import SalesClient from "./sales-client";
 import { backfillPendingReceipts } from "@/lib/receipts/backfill";
 import {
@@ -47,7 +48,16 @@ export default async function SalesPage() {
   const canViewActivity = ACTIVITY_ROLES.includes(membership.role);
   await backfillPendingReceipts(membership.organizationId, payload.userId);
 
-  const [sales, stats, events, paymentMethods, accounts, currencies, rate] =
+  const [
+    sales,
+    stats,
+    events,
+    paymentMethods,
+    accounts,
+    currencies,
+    rate,
+    priceLists,
+  ] =
     await Promise.all([
     prisma.sale.findMany({
       where: { organizationId: membership.organizationId },
@@ -86,6 +96,10 @@ export default async function SalesPage() {
         quoteCode: "ARS",
       },
       orderBy: { asOf: "desc" },
+    }),
+    prisma.priceList.findMany({
+      where: { organizationId: membership.organizationId, isActive: true },
+      orderBy: PRICE_LIST_ORDER_BY,
     }),
   ]);
 
@@ -136,6 +150,15 @@ export default async function SalesPage() {
         isDefault: currency.isDefault,
       }))}
       latestUsdRate={rate?.rate?.toString() ?? null}
+      initialPriceLists={priceLists.map((priceList) => ({
+        id: priceList.id,
+        name: priceList.name,
+        currencyCode: priceList.currencyCode,
+        isDefault: priceList.isDefault,
+        isConsumerFinal: priceList.isConsumerFinal,
+        isActive: priceList.isActive,
+        sortOrder: priceList.sortOrder,
+      }))}
     />
   );
 }

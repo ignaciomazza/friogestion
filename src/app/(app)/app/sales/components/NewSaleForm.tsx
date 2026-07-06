@@ -9,6 +9,7 @@ import {
   ChevronRightIcon,
   ClockIcon,
   DocumentTextIcon,
+  ExclamationTriangleIcon,
   PlusIcon,
   TrashIcon,
   XMarkIcon,
@@ -20,11 +21,20 @@ import {
 } from "@/lib/afip/totals";
 import { cn } from "@/lib/cn";
 import {
+  hasTaxpayerLookupError,
+  readTaxpayerLookupWarnings,
+  summarizeTaxpayerLookupWarnings,
+} from "@/lib/arca/taxpayer-lookup-feedback";
+import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
+  CUSTOMER_FISCAL_TAX_PROFILE_VALUES,
+  inferFiscalTaxProfileFromArcaTaxStatus,
   normalizeCustomerFiscalTaxProfile,
   requiresRecipientTaxIdForFiscalTaxProfile,
   resolveInvoiceTypeFromFiscalTaxProfile,
+  type CustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
+import { CUSTOMER_SYSTEM_KEYS } from "@/lib/customers/system-keys";
 import { formatCurrencyARS } from "@/lib/format";
 import {
   formatPercentInput,
@@ -39,7 +49,17 @@ import {
   isSubtotalDiscountAdjustment,
   isTotalDiscountAdjustment,
 } from "@/lib/sale-adjustments";
-import type { CustomerOption, ProductOption, SaleRow } from "../types";
+import {
+  type SuggestedProductPriceCostCurrency,
+  resolveSuggestedProductPrice,
+} from "@/lib/pricing";
+import type {
+  CustomerOption,
+  PriceListOption,
+  ProductOption,
+  SaleRow,
+} from "../types";
+import { InlineCustomerForm } from "../../quotes/components/InlineCustomerForm";
 import { ReceiptForm } from "./ReceiptForm";
 
 type PaymentMethodOption = {
@@ -81,11 +101,30 @@ type ProductSearchOption = ProductOption & {
   isActive?: boolean;
 };
 
+type CustomerFormState = {
+  displayName: string;
+  defaultPriceListId: string;
+  fiscalTaxProfile: CustomerFiscalTaxProfile;
+  email: string;
+  phone: string;
+  taxId: string;
+  address: string;
+};
+
+type CustomerArcaValidation = {
+  status: "idle" | "loading" | "ok" | "warning" | "error";
+  message: string | null;
+  suggestedFiscalTaxProfile: CustomerFiscalTaxProfile | null;
+  source: string | null;
+  checkedAt: string | null;
+};
+
 type NewSaleFormProps = {
   paymentMethods: PaymentMethodOption[];
   accounts: AccountOption[];
   currencies: CurrencyOption[];
   latestUsdRate: string | null;
+  priceLists: PriceListOption[];
   onSaleCreated: () => Promise<void> | void;
 };
 
@@ -259,6 +298,44 @@ function SaleSelect<T extends string>({
           })}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function InlineDataNotice({
+  tone = "amber",
+  title,
+  message,
+  children,
+}: {
+  tone?: "amber" | "rose" | "zinc";
+  title: string;
+  message: string;
+  children?: ReactNode;
+}) {
+  const toneClass =
+    tone === "rose"
+      ? "border-rose-200 text-rose-800"
+      : tone === "zinc"
+        ? "border-zinc-200 text-zinc-700"
+        : "border-amber-200 text-amber-800";
+
+  return (
+    <div className={`rounded-xl border bg-white px-3 py-2 ${toneClass}`}>
+      <div className="flex items-start gap-2">
+        <ExclamationTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide">
+              {title}
+            </span>
+            <span className="text-xs leading-relaxed text-zinc-600">
+              {message}
+            </span>
+          </div>
+          {children ? <div className="mt-2">{children}</div> : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -457,6 +534,9 @@ const formatProductLabel = (product: ProductSearchOption) =>
     .filter(Boolean)
     .join(" - ");
 
+const formatCustomerLabel = (customer: CustomerOption) =>
+  `${customer.displayName}${customer.taxId ? ` - ${customer.taxId}` : ""}`;
+
 const readApiError = async (res: Response, fallback: string) => {
   try {
     const data = (await res.json()) as { error?: string };
@@ -471,8 +551,13 @@ export function NewSaleForm({
   accounts,
   currencies,
   latestUsdRate,
+  priceLists,
   onSaleCreated,
 }: NewSaleFormProps) {
+  const initialPriceListId =
+    priceLists.find((priceList) => priceList.isDefault)?.id ??
+    priceLists.find((priceList) => priceList.isConsumerFinal)?.id ??
+    "";
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [selectedCustomer, setSelectedCustomer] =
@@ -482,10 +567,49 @@ export function NewSaleForm({
   const [isCustomerLoading, setIsCustomerLoading] = useState(false);
   const [isResolvingConsumerFinal, setIsResolvingConsumerFinal] =
     useState(false);
+  const [selectedPriceListId, setSelectedPriceListId] =
+    useState(initialPriceListId);
+  const [customerForm, setCustomerForm] = useState<CustomerFormState>({
+    displayName: "",
+    defaultPriceListId: initialPriceListId,
+    fiscalTaxProfile: "CONSUMIDOR_FINAL",
+    email: "",
+    phone: "",
+    taxId: "",
+    address: "",
+  });
+  const [customerStatus, setCustomerStatus] = useState<string | null>(null);
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+  const [isCustomerLookupLoading, setIsCustomerLookupLoading] = useState(false);
+  const [showCustomerForm, setShowCustomerForm] = useState(false);
+  const [selectedCustomerDisplayName, setSelectedCustomerDisplayName] =
+    useState("");
+  const [selectedCustomerAddress, setSelectedCustomerAddress] = useState("");
+  const [selectedCustomerTaxId, setSelectedCustomerTaxId] = useState("");
+  const [selectedCustomerFiscalTaxProfile, setSelectedCustomerFiscalTaxProfile] =
+    useState<CustomerFiscalTaxProfile>("CONSUMIDOR_FINAL");
+  const [selectedCustomerDataStatus, setSelectedCustomerDataStatus] = useState<
+    string | null
+  >(null);
+  const [isUpdatingSelectedCustomer, setIsUpdatingSelectedCustomer] =
+    useState(false);
+  const [
+    isValidatingSelectedCustomerArca,
+    setIsValidatingSelectedCustomerArca,
+  ] = useState(false);
+  const [customerArcaValidation, setCustomerArcaValidation] =
+    useState<CustomerArcaValidation>({
+      status: "idle",
+      message: null,
+      suggestedFiscalTaxProfile: null,
+      source: null,
+      checkedAt: null,
+    });
 
   const [saleDate, setSaleDate] = useState(todayInputValue);
   const [lines, setLines] = useState<SaleLineDraft[]>(() => [createLine()]);
   const [openProductIndex, setOpenProductIndex] = useState<number | null>(null);
+  const [products, setProducts] = useState<ProductSearchOption[]>([]);
   const [productMatches, setProductMatches] = useState<ProductSearchOption[]>(
     [],
   );
@@ -518,6 +642,53 @@ export function NewSaleForm({
   const [invoiceWarnings, setInvoiceWarnings] = useState<string[]>([]);
   const [invoiceResolution, setInvoiceResolution] =
     useState<InvoiceResolution | null>(null);
+  const skipNextCustomerArcaAutoValidationRef = useRef<{
+    customerId: string;
+    taxId: string;
+    fiscalTaxProfile: CustomerFiscalTaxProfile;
+  } | null>(null);
+  const pendingSelectedCustomerIdentityDraftRef = useRef<{
+    customerId: string;
+    displayName: string;
+    address: string;
+  } | null>(null);
+
+  const productMap = useMemo(
+    () => new Map(products.map((product) => [product.id, product])),
+    [products],
+  );
+  const priceListOrderIds = useMemo(
+    () => priceLists.map((priceList) => priceList.id),
+    [priceLists],
+  );
+  const defaultPriceListId =
+    priceLists.find((priceList) => priceList.isDefault)?.id ?? null;
+  const consumerFinalPriceListId =
+    priceLists.find((priceList) => priceList.isConsumerFinal)?.id ?? null;
+  const selectedPriceList =
+    priceLists.find((priceList) => priceList.id === selectedPriceListId) ?? null;
+  const customerDefaultPriceList = selectedCustomer?.defaultPriceListId
+    ? priceLists.find(
+        (priceList) => priceList.id === selectedCustomer.defaultPriceListId,
+      ) ?? null
+    : null;
+  const isPriceListMismatch = Boolean(
+    selectedCustomer &&
+      customerDefaultPriceList &&
+      selectedPriceList &&
+      selectedPriceList.id !== customerDefaultPriceList.id,
+  );
+  const isSelectedAnonymousConsumerFinal =
+    selectedCustomer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON;
+  const latestUsdRateValue = useMemo(() => {
+    if (!latestUsdRate) return null;
+    const parsed = Number(latestUsdRate);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [latestUsdRate]);
+  const selectedCustomerIdForValidation = selectedCustomer?.id ?? null;
+  const selectedCustomerTaxIdForValidation = selectedCustomer?.taxId ?? null;
+  const selectedCustomerFiscalProfileForValidation =
+    selectedCustomer?.fiscalTaxProfile ?? null;
 
   const subtotal = useMemo(
     () => lines.reduce((sum, line) => sum + lineTotals(line).net, 0),
@@ -760,6 +931,111 @@ export function NewSaleForm({
   const fiscalPreview =
     invoiceDraftPreview?.ok === true ? invoiceDraftPreview.fiscalTotals : null;
 
+  const upsertCustomer = useCallback((customer: CustomerOption) => {
+    setCustomerMatches((previous) => {
+      const byId = new Map(previous.map((candidate) => [candidate.id, candidate]));
+      byId.set(customer.id, customer);
+      return Array.from(byId.values());
+    });
+    setSelectedCustomer((previous) =>
+      previous?.id === customer.id ? customer : previous,
+    );
+  }, []);
+
+  const upsertProducts = useCallback((nextProducts: ProductSearchOption[]) => {
+    if (!nextProducts.length) return;
+    setProducts((previous) => {
+      const byId = new Map(previous.map((product) => [product.id, product]));
+      for (const product of nextProducts) {
+        byId.set(product.id, product);
+      }
+      return Array.from(byId.values());
+    });
+  }, []);
+
+  const resolvePreferredPriceListId = (customer: CustomerOption | null) => {
+    if (customer?.defaultPriceListId) {
+      const hasPriceList = priceLists.some(
+        (priceList) => priceList.id === customer.defaultPriceListId,
+      );
+      if (hasPriceList) return customer.defaultPriceListId;
+    }
+    if (
+      customer?.systemKey === CUSTOMER_SYSTEM_KEYS.CONSUMER_FINAL_ANON &&
+      consumerFinalPriceListId
+    ) {
+      return consumerFinalPriceListId;
+    }
+    return defaultPriceListId ?? consumerFinalPriceListId ?? "";
+  };
+
+  const getSuggestedProductPrice = ({
+    product,
+    preferredPriceListId,
+    customerPriceListId,
+    preferredCostCurrency,
+  }: {
+    product: ProductSearchOption;
+    preferredPriceListId: string;
+    customerPriceListId?: string | null;
+    preferredCostCurrency?: SuggestedProductPriceCostCurrency;
+  }) =>
+    resolveSuggestedProductPrice({
+      prices: product.prices ?? [],
+      productCost: product.cost,
+      productCostUsd: product.costUsd,
+      productPrice: product.price,
+      preferredPriceListId,
+      customerPriceListId:
+        customerPriceListId === undefined
+          ? selectedCustomer?.defaultPriceListId ?? null
+          : customerPriceListId,
+      defaultPriceListId,
+      usdRateArs: latestUsdRateValue,
+      priceListOrderIds,
+      preferredCostCurrency,
+    });
+
+  const getSuggestedProductAmount = (
+    product: ProductSearchOption,
+    line: SaleLineDraft,
+    preferredPriceListId = selectedPriceListId,
+    customerPriceListId?: string | null,
+  ) => {
+    const suggestedPrice = getSuggestedProductPrice({
+      product,
+      preferredPriceListId,
+      customerPriceListId,
+      preferredCostCurrency: "ARS",
+    });
+    return suggestedProductAmount(suggestedPrice ?? product.price ?? null, line);
+  };
+
+  const applyPriceListAndRefreshLines = ({
+    nextPriceListId,
+    customerPriceListId,
+  }: {
+    nextPriceListId: string;
+    customerPriceListId?: string | null;
+  }) => {
+    setSelectedPriceListId(nextPriceListId);
+    setLines((previous) =>
+      previous.map((line) => {
+        if (!line.productId) return line;
+        const product = productMap.get(line.productId);
+        if (!product) return line;
+        const nextAmount = getSuggestedProductAmount(
+          product,
+          line,
+          nextPriceListId,
+          customerPriceListId,
+        );
+        if (!nextAmount || nextAmount === line.amount) return line;
+        return { ...line, amount: nextAmount };
+      }),
+    );
+  };
+
   const loadCustomers = useCallback(async (query: string) => {
     setIsCustomerLoading(true);
     try {
@@ -794,6 +1070,7 @@ export function NewSaleForm({
         limit: "8",
         offset: "0",
         sort: "relevance",
+        includePrices: "1",
         q: query.trim(),
       });
       const res = await fetch(`/api/products?${params.toString()}`, {
@@ -804,11 +1081,13 @@ export function NewSaleForm({
         return;
       }
       const data = (await res.json()) as { items?: ProductSearchOption[] };
-      setProductMatches(data.items ?? []);
+      const items = data.items ?? [];
+      setProductMatches(items);
+      upsertProducts(items);
     } finally {
       setIsProductLoading(false);
     }
-  }, []);
+  }, [upsertProducts]);
 
   useEffect(() => {
     if (!isCustomerOpen) return;
@@ -827,10 +1106,185 @@ export function NewSaleForm({
     return () => window.clearTimeout(timeoutId);
   }, [lines, loadProducts, openProductIndex]);
 
+  useEffect(() => {
+    if (!selectedCustomer || isSelectedAnonymousConsumerFinal) {
+      setSelectedCustomerDisplayName("");
+      setSelectedCustomerAddress("");
+      setSelectedCustomerTaxId("");
+      setSelectedCustomerFiscalTaxProfile("CONSUMIDOR_FINAL");
+      setSelectedCustomerDataStatus(null);
+      setCustomerArcaValidation({
+        status: "idle",
+        message: null,
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    const pendingIdentityDraft = pendingSelectedCustomerIdentityDraftRef.current;
+    if (
+      pendingIdentityDraft &&
+      pendingIdentityDraft.customerId === selectedCustomer.id
+    ) {
+      setSelectedCustomerDisplayName(pendingIdentityDraft.displayName);
+      setSelectedCustomerAddress(pendingIdentityDraft.address);
+      pendingSelectedCustomerIdentityDraftRef.current = null;
+    } else {
+      setSelectedCustomerDisplayName(selectedCustomer.displayName);
+      setSelectedCustomerAddress(selectedCustomer.address ?? "");
+    }
+    setSelectedCustomerTaxId(normalizeTaxId(selectedCustomer.taxId ?? ""));
+    setSelectedCustomerFiscalTaxProfile(
+      normalizeCustomerFiscalTaxProfile(selectedCustomer.fiscalTaxProfile) ??
+        "CONSUMIDOR_FINAL",
+    );
+    setSelectedCustomerDataStatus(null);
+  }, [isSelectedAnonymousConsumerFinal, selectedCustomer]);
+
+  useEffect(() => {
+    if (!selectedCustomerIdForValidation || isSelectedAnonymousConsumerFinal) {
+      return;
+    }
+
+    const taxId = normalizeTaxId(selectedCustomerTaxIdForValidation ?? "");
+    if (!taxId) {
+      setCustomerArcaValidation({
+        status: "warning",
+        message: "El cliente no tiene CUIT cargado.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    const savedFiscalTaxProfile = normalizeCustomerFiscalTaxProfile(
+      selectedCustomerFiscalProfileForValidation,
+    );
+    const skipNext = skipNextCustomerArcaAutoValidationRef.current;
+    if (
+      skipNext &&
+      skipNext.customerId === selectedCustomerIdForValidation &&
+      skipNext.taxId === taxId &&
+      skipNext.fiscalTaxProfile === savedFiscalTaxProfile
+    ) {
+      skipNextCustomerArcaAutoValidationRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setCustomerArcaValidation((previous) => ({
+        ...previous,
+        status: "loading",
+        message: "Validando CUIT en ARCA...",
+      }));
+
+      try {
+        const res = await fetch("/api/arca/taxpayer-lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taxId }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (!res.ok) {
+          setCustomerArcaValidation({
+            status: "error",
+            message: data?.error ?? "No se pudo validar CUIT en ARCA.",
+            suggestedFiscalTaxProfile: null,
+            source: null,
+            checkedAt: null,
+          });
+          return;
+        }
+
+        const arcaTaxStatus =
+          typeof data?.taxpayer?.taxStatus === "string"
+            ? data.taxpayer.taxStatus
+            : null;
+        const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+        const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+        const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
+        const suggestedFiscalTaxProfile =
+          inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
+        const currentProfile = normalizeCustomerFiscalTaxProfile(
+          selectedCustomerFiscalProfileForValidation,
+        );
+        const source = typeof data?.source === "string" ? data.source : null;
+        const checkedAt =
+          typeof data?.checkedAt === "string" ? data.checkedAt : null;
+
+        if (!suggestedFiscalTaxProfile) {
+          setCustomerArcaValidation({
+            status: hasLookupError ? "error" : "warning",
+            message:
+              lookupWarningText ||
+              "No pudimos identificar automaticamente la condicion frente al IVA. Revisala en la ficha del cliente.",
+            suggestedFiscalTaxProfile: null,
+            source,
+            checkedAt,
+          });
+          return;
+        }
+
+        if (currentProfile && suggestedFiscalTaxProfile !== currentProfile) {
+          setCustomerArcaValidation({
+            status: "warning",
+            message: `ARCA sugiere ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile]} y la ficha tiene ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[currentProfile]}.${
+              lookupWarningText ? ` ${lookupWarningText}` : ""
+            }`,
+            suggestedFiscalTaxProfile,
+            source,
+            checkedAt,
+          });
+          return;
+        }
+
+        setCustomerArcaValidation({
+          status: hasLookupError
+            ? "error"
+            : lookupWarnings.length
+              ? "warning"
+              : "ok",
+          message: lookupWarnings.length
+            ? `CUIT validado con ARCA. ${lookupWarningText}`
+            : "CUIT validado con ARCA.",
+          suggestedFiscalTaxProfile,
+          source,
+          checkedAt,
+        });
+      } catch {
+        if (cancelled) return;
+        setCustomerArcaValidation({
+          status: "error",
+          message: "No se pudo validar CUIT en ARCA.",
+          suggestedFiscalTaxProfile: null,
+          source: null,
+          checkedAt: null,
+        });
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [
+    isSelectedAnonymousConsumerFinal,
+    selectedCustomerIdForValidation,
+    selectedCustomerTaxIdForValidation,
+    selectedCustomerFiscalProfileForValidation,
+  ]);
+
   const resetForm = () => {
     setCustomerSearch("");
     setCustomerId("");
     setSelectedCustomer(null);
+    setSelectedPriceListId(defaultPriceListId ?? consumerFinalPriceListId ?? "");
     setSaleDate(todayInputValue());
     setLines([createLine()]);
     setExtraType("NONE");
@@ -840,9 +1294,15 @@ export function NewSaleForm({
   };
 
   const selectCustomer = (customer: CustomerOption) => {
+    upsertCustomer(customer);
+    const nextPriceListId = resolvePreferredPriceListId(customer);
     setCustomerId(customer.id);
     setSelectedCustomer(customer);
-    setCustomerSearch(customer.displayName);
+    setCustomerSearch(formatCustomerLabel(customer));
+    applyPriceListAndRefreshLines({
+      nextPriceListId,
+      customerPriceListId: customer.defaultPriceListId ?? null,
+    });
     setIsCustomerOpen(false);
   };
 
@@ -870,6 +1330,10 @@ export function NewSaleForm({
       setCustomerSearch("");
       setCustomerId("");
       setSelectedCustomer(null);
+      applyPriceListAndRefreshLines({
+        nextPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
+        customerPriceListId: null,
+      });
       return;
     }
     void resolveConsumerFinal();
@@ -894,6 +1358,7 @@ export function NewSaleForm({
   };
 
   const selectProduct = (index: number, product: ProductSearchOption) => {
+    upsertProducts([product]);
     setLines((previous) =>
       previous.map((line, lineIndex) =>
         lineIndex === index
@@ -901,7 +1366,7 @@ export function NewSaleForm({
               ...line,
               productId: product.id,
               productSearch: formatProductLabel(product),
-              amount: suggestedProductAmount(product.price ?? null, line),
+              amount: getSuggestedProductAmount(product, line),
             }
           : line,
       ),
@@ -918,6 +1383,484 @@ export function NewSaleForm({
         ? previous.map(() => createLine())
         : previous.filter((_, lineIndex) => lineIndex !== index),
     );
+  };
+
+  const handleSelectedPriceListChange = (nextPriceListId: string) => {
+    applyPriceListAndRefreshLines({
+      nextPriceListId,
+      customerPriceListId: selectedCustomer?.defaultPriceListId ?? null,
+    });
+  };
+
+  const handleCustomerFieldChange = (
+    field: keyof CustomerFormState,
+    value: string,
+  ) => {
+    setCustomerForm((previous) => {
+      if (field === "taxId") {
+        return { ...previous, taxId: normalizeTaxId(value) };
+      }
+      if (field === "fiscalTaxProfile") {
+        return {
+          ...previous,
+          fiscalTaxProfile: value as CustomerFiscalTaxProfile,
+        };
+      }
+      return { ...previous, [field]: value };
+    });
+  };
+
+  const handleLookupCustomerByTaxId = async () => {
+    const taxId = normalizeTaxId(customerForm.taxId);
+    if (!taxId) {
+      setCustomerStatus("Ingresa un CUIT para buscar.");
+      return;
+    }
+    setCustomerStatus(null);
+    setIsCustomerLookupLoading(true);
+    try {
+      const res = await fetch("/api/arca/taxpayer-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taxId, forceRefresh: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCustomerStatus(data?.error ?? "No se pudo consultar ARCA");
+        return;
+      }
+      const taxpayer = data?.taxpayer;
+      const lookupWarnings = readTaxpayerLookupWarnings(taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      if (taxpayer?.status === "NO_ENCONTRADO") {
+        setCustomerStatus(
+          lookupWarningText ||
+            "ARCA no encontro un contribuyente para ese CUIT. Revisa que este bien escrito.",
+        );
+        return;
+      }
+      const displayName = taxpayer?.legalName ?? taxpayer?.displayName ?? "";
+      const address = taxpayer?.address ?? "";
+      const fiscalTaxProfile = inferFiscalTaxProfileFromArcaTaxStatus(
+        typeof taxpayer?.taxStatus === "string" ? taxpayer.taxStatus : null,
+      );
+      setCustomerForm((previous) => ({
+        ...previous,
+        taxId,
+        displayName: previous.displayName || displayName,
+        address: previous.address || address,
+        fiscalTaxProfile: fiscalTaxProfile ?? previous.fiscalTaxProfile,
+      }));
+      const statusText = fiscalTaxProfile
+        ? `Condicion fiscal aplicada al formulario: ${CUSTOMER_FISCAL_TAX_PROFILE_LABELS[fiscalTaxProfile]}.`
+        : lookupWarningText ||
+          "No pudimos identificar automaticamente la condicion frente al IVA. Elegila manualmente antes de guardar.";
+      setCustomerStatus(
+        `Datos ARCA actualizados (${data.source}). ${statusText}${
+          lookupWarningText && fiscalTaxProfile ? ` ${lookupWarningText}` : ""
+        }`,
+      );
+    } catch {
+      setCustomerStatus("No se pudo consultar ARCA");
+    } finally {
+      setIsCustomerLookupLoading(false);
+    }
+  };
+
+  const handleSubmitCustomer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCustomerStatus(null);
+    setIsCreatingCustomer(true);
+    if (!customerForm.displayName.trim()) {
+      setCustomerStatus("Nombre requerido");
+      setIsCreatingCustomer(false);
+      return;
+    }
+    try {
+      const res = await fetch("/api/customers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: customerForm.displayName,
+          defaultPriceListId: customerForm.defaultPriceListId || undefined,
+          email: customerForm.email || undefined,
+          phone: customerForm.phone || undefined,
+          taxId: customerForm.taxId || undefined,
+          address: customerForm.address || undefined,
+          fiscalTaxProfile: customerForm.fiscalTaxProfile,
+        }),
+      });
+      const data = (await res.json()) as CustomerOption | { error?: string };
+      if (!res.ok) {
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : null;
+        setCustomerStatus(errorMessage ?? "No se pudo crear");
+        return;
+      }
+
+      const createdCustomer = data as CustomerOption;
+      selectCustomer(createdCustomer);
+      setShowCustomerForm(false);
+      setCustomerStatus("Cliente creado y seleccionado.");
+      setCustomerForm({
+        displayName: "",
+        defaultPriceListId: defaultPriceListId ?? consumerFinalPriceListId ?? "",
+        fiscalTaxProfile: "CONSUMIDOR_FINAL",
+        email: "",
+        phone: "",
+        taxId: "",
+        address: "",
+      });
+    } catch {
+      setCustomerStatus("No se pudo crear");
+    } finally {
+      setIsCreatingCustomer(false);
+    }
+  };
+
+  const updateSelectedCustomer = async ({
+    displayName,
+    address,
+    taxId,
+    fiscalTaxProfile,
+    defaultPriceListId: nextDefaultPriceListId,
+    successMessage,
+  }: {
+    displayName?: string;
+    address?: string;
+    taxId?: string;
+    fiscalTaxProfile?: CustomerFiscalTaxProfile;
+    defaultPriceListId?: string | null;
+    successMessage?: string;
+  }) => {
+    if (!selectedCustomer || isSelectedAnonymousConsumerFinal) return null;
+
+    setSelectedCustomerDataStatus(null);
+    setIsUpdatingSelectedCustomer(true);
+    try {
+      const nextTaxId =
+        taxId !== undefined
+          ? normalizeTaxId(taxId)
+          : normalizeTaxId(selectedCustomer.taxId ?? "");
+      const nextFiscalTaxProfile =
+        fiscalTaxProfile ??
+        normalizeCustomerFiscalTaxProfile(selectedCustomer.fiscalTaxProfile) ??
+        "CONSUMIDOR_FINAL";
+      const nextDisplayName =
+        displayName !== undefined
+          ? displayName.trim()
+          : selectedCustomer.displayName;
+      const nextAddress =
+        address !== undefined ? address.trim() : selectedCustomer.address ?? "";
+
+      if (nextDisplayName.length < 2) {
+        setSelectedCustomerDataStatus("Razon social requerida.");
+        return null;
+      }
+
+      const res = await fetch("/api/customers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: selectedCustomer.id,
+          displayName: nextDisplayName,
+          defaultPriceListId:
+            nextDefaultPriceListId === undefined
+              ? selectedCustomer.defaultPriceListId ?? undefined
+              : nextDefaultPriceListId || undefined,
+          email: selectedCustomer.email ?? undefined,
+          phone: selectedCustomer.phone ?? undefined,
+          taxId: nextTaxId || undefined,
+          address: nextAddress || undefined,
+          fiscalTaxProfile: nextFiscalTaxProfile,
+        }),
+      });
+      const data = (await res.json()) as CustomerOption | { error?: string };
+      if (!res.ok) {
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof data.error === "string"
+            ? data.error
+            : "No se pudo actualizar cliente";
+        setSelectedCustomerDataStatus(errorMessage);
+        return null;
+      }
+
+      const updatedCustomer = data as CustomerOption;
+      upsertCustomer(updatedCustomer);
+      setSelectedCustomer(updatedCustomer);
+      setCustomerSearch(formatCustomerLabel(updatedCustomer));
+      const pendingIdentityDraft = pendingSelectedCustomerIdentityDraftRef.current;
+      if (
+        pendingIdentityDraft &&
+        pendingIdentityDraft.customerId === updatedCustomer.id
+      ) {
+        setSelectedCustomerDisplayName(pendingIdentityDraft.displayName);
+        setSelectedCustomerAddress(pendingIdentityDraft.address);
+      } else {
+        setSelectedCustomerDisplayName(updatedCustomer.displayName);
+        setSelectedCustomerAddress(updatedCustomer.address ?? "");
+      }
+      setSelectedCustomerTaxId(normalizeTaxId(updatedCustomer.taxId ?? ""));
+      setSelectedCustomerFiscalTaxProfile(
+        normalizeCustomerFiscalTaxProfile(updatedCustomer.fiscalTaxProfile) ??
+          "CONSUMIDOR_FINAL",
+      );
+      setSelectedCustomerDataStatus(successMessage ?? "Ficha actualizada.");
+      return updatedCustomer;
+    } catch {
+      setSelectedCustomerDataStatus("No se pudo actualizar cliente");
+      return null;
+    } finally {
+      setIsUpdatingSelectedCustomer(false);
+    }
+  };
+
+  const handleSaveSelectedCustomerFiscalData = async () => {
+    await updateSelectedCustomer({
+      displayName: selectedCustomerDisplayName,
+      address: selectedCustomerAddress,
+      taxId: selectedCustomerTaxId,
+      fiscalTaxProfile: selectedCustomerFiscalTaxProfile,
+    });
+  };
+
+  const handleSelectedCustomerTaxIdChange = (value: string) => {
+    const nextTaxId = normalizeTaxId(value);
+    setSelectedCustomerTaxId(nextTaxId);
+    setSelectedCustomerDataStatus(null);
+
+    if (nextTaxId !== normalizeTaxId(selectedCustomer?.taxId ?? "")) {
+      setCustomerArcaValidation({
+        status: "idle",
+        message: null,
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+    }
+  };
+
+  const handleSelectedCustomerFiscalTaxProfileChange = (
+    nextFiscalTaxProfile: CustomerFiscalTaxProfile,
+  ) => {
+    setSelectedCustomerFiscalTaxProfile(nextFiscalTaxProfile);
+    setSelectedCustomerDataStatus(null);
+    setCustomerArcaValidation({
+      status: "idle",
+      message: null,
+      suggestedFiscalTaxProfile: null,
+      source: null,
+      checkedAt: null,
+    });
+  };
+
+  const handleValidateSelectedCustomerArca = async () => {
+    const taxId = normalizeTaxId(selectedCustomerTaxId);
+    if (!taxId) {
+      setCustomerArcaValidation({
+        status: "warning",
+        message: "Ingresa un CUIT para validar en ARCA.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+      return;
+    }
+
+    setSelectedCustomerDataStatus(null);
+    setIsValidatingSelectedCustomerArca(true);
+    setCustomerArcaValidation({
+      status: "loading",
+      message: "Validando CUIT en ARCA...",
+      suggestedFiscalTaxProfile: null,
+      source: null,
+      checkedAt: null,
+    });
+
+    try {
+      const res = await fetch("/api/arca/taxpayer-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ taxId, forceRefresh: true }),
+      });
+      const data = await res.json();
+      const source = typeof data?.source === "string" ? data.source : null;
+      const checkedAt =
+        typeof data?.checkedAt === "string" ? data.checkedAt : null;
+      const lookupWarnings = readTaxpayerLookupWarnings(data?.taxpayer);
+      const lookupWarningText = summarizeTaxpayerLookupWarnings(lookupWarnings);
+      const hasLookupError = hasTaxpayerLookupError(lookupWarnings);
+
+      if (!res.ok) {
+        setCustomerArcaValidation({
+          status: "error",
+          message: data?.error ?? "No se pudo validar CUIT en ARCA.",
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      if (data?.taxpayer?.status === "NO_ENCONTRADO") {
+        setCustomerArcaValidation({
+          status: "error",
+          message:
+            lookupWarningText ||
+            "ARCA no encontro un contribuyente para ese CUIT. Revisa que este bien escrito.",
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      const arcaTaxStatus =
+        typeof data?.taxpayer?.taxStatus === "string"
+          ? data.taxpayer.taxStatus
+          : null;
+      const arcaDisplayName =
+        typeof data?.taxpayer?.legalName === "string"
+          ? data.taxpayer.legalName
+          : typeof data?.taxpayer?.displayName === "string"
+            ? data.taxpayer.displayName
+            : "";
+      const arcaAddress =
+        typeof data?.taxpayer?.address === "string" ? data.taxpayer.address : "";
+      if (arcaDisplayName) setSelectedCustomerDisplayName(arcaDisplayName);
+      if (arcaAddress) setSelectedCustomerAddress(arcaAddress);
+      const suggestedFiscalTaxProfile =
+        inferFiscalTaxProfileFromArcaTaxStatus(arcaTaxStatus);
+
+      if (!suggestedFiscalTaxProfile) {
+        setCustomerArcaValidation({
+          status: hasLookupError ? "error" : "warning",
+          message:
+            lookupWarningText ||
+            (arcaDisplayName || arcaAddress
+              ? "No pudimos identificar automaticamente la condicion frente al IVA. Revisa razon social, direccion y condicion fiscal antes de guardar."
+              : "No pudimos identificar automaticamente la condicion frente al IVA. Elegila manualmente antes de guardar."),
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      const savedFiscalTaxProfile =
+        normalizeCustomerFiscalTaxProfile(selectedCustomer?.fiscalTaxProfile) ??
+        selectedCustomerFiscalTaxProfile;
+      const didFiscalTaxProfileChange =
+        suggestedFiscalTaxProfile !== savedFiscalTaxProfile;
+      const didTaxIdChange =
+        taxId !== normalizeTaxId(selectedCustomer?.taxId ?? "");
+      const suggestedLabel =
+        CUSTOMER_FISCAL_TAX_PROFILE_LABELS[suggestedFiscalTaxProfile];
+      const savedLabel =
+        CUSTOMER_FISCAL_TAX_PROFILE_LABELS[savedFiscalTaxProfile];
+      if (selectedCustomer && (arcaDisplayName || arcaAddress)) {
+        pendingSelectedCustomerIdentityDraftRef.current = {
+          customerId: selectedCustomer.id,
+          displayName:
+            arcaDisplayName ||
+            selectedCustomerDisplayName ||
+            selectedCustomer.displayName,
+          address:
+            arcaAddress ||
+            selectedCustomerAddress ||
+            (selectedCustomer.address ?? ""),
+        };
+      }
+
+      setSelectedCustomerFiscalTaxProfile(suggestedFiscalTaxProfile);
+      const updatedCustomer = await updateSelectedCustomer({
+        taxId,
+        fiscalTaxProfile: suggestedFiscalTaxProfile,
+        successMessage:
+          didTaxIdChange || didFiscalTaxProfileChange
+            ? "Ficha actualizada con ARCA."
+            : "CUIT validado con ARCA.",
+      });
+
+      if (!updatedCustomer) {
+        setCustomerArcaValidation({
+          status: "warning",
+          message:
+            "CUIT validado con ARCA, pero no se pudo actualizar la ficha.",
+          suggestedFiscalTaxProfile,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      skipNextCustomerArcaAutoValidationRef.current = {
+        customerId: updatedCustomer.id,
+        taxId,
+        fiscalTaxProfile: suggestedFiscalTaxProfile,
+      };
+
+      if (didFiscalTaxProfileChange) {
+        setCustomerArcaValidation({
+          status: "warning",
+          message: `ARCA indica ${suggestedLabel}; la ficha tenia ${savedLabel}. Se actualizo automaticamente.${
+            lookupWarningText ? ` ${lookupWarningText}` : ""
+          }`,
+          suggestedFiscalTaxProfile: null,
+          source,
+          checkedAt,
+        });
+        return;
+      }
+
+      setCustomerArcaValidation({
+        status: hasLookupError
+          ? "error"
+          : lookupWarnings.length
+            ? "warning"
+            : "ok",
+        message: lookupWarnings.length
+          ? `CUIT validado con ARCA. Condicion fiscal: ${suggestedLabel}. ${lookupWarningText}`
+          : `CUIT validado con ARCA. Condicion fiscal: ${suggestedLabel}.`,
+        suggestedFiscalTaxProfile: null,
+        source,
+        checkedAt,
+      });
+    } catch {
+      setCustomerArcaValidation({
+        status: "error",
+        message: "No se pudo validar CUIT en ARCA.",
+        suggestedFiscalTaxProfile: null,
+        source: null,
+        checkedAt: null,
+      });
+    } finally {
+      setIsValidatingSelectedCustomerArca(false);
+    }
+  };
+
+  const handleApplyCustomerArcaSuggestion = async () => {
+    if (!customerArcaValidation.suggestedFiscalTaxProfile) return;
+    setSelectedCustomerFiscalTaxProfile(
+      customerArcaValidation.suggestedFiscalTaxProfile,
+    );
+    await updateSelectedCustomer({
+      fiscalTaxProfile: customerArcaValidation.suggestedFiscalTaxProfile,
+    });
+  };
+
+  const handleSaveSelectedCustomerPriceList = async () => {
+    await updateSelectedCustomer({
+      defaultPriceListId: selectedPriceListId || null,
+    });
   };
 
   const buildPayloadItems = () => {
@@ -1336,15 +2279,225 @@ export function NewSaleForm({
     }
   };
 
+  const priceListOptions: Array<SaleSelectOption<string>> = priceLists.length
+    ? priceLists.map((priceList) => ({
+        value: priceList.id,
+        label: (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="min-w-0 truncate">{priceList.name}</span>
+            {priceList.isDefault ? (
+              <span className="shrink-0 text-[10px] font-semibold text-sky-700">
+                Default
+              </span>
+            ) : null}
+            {priceList.isConsumerFinal ? (
+              <span className="shrink-0 text-[10px] font-semibold text-emerald-700">
+                CF
+              </span>
+            ) : null}
+          </span>
+        ),
+      }))
+    : [{ value: "", label: "Sin listas activas", disabled: true }];
+  const selectedCustomerSavedTaxId = normalizeTaxId(
+    selectedCustomer?.taxId ?? "",
+  );
+  const selectedCustomerDraftTaxId = normalizeTaxId(selectedCustomerTaxId);
+  const selectedCustomerSavedDisplayName =
+    selectedCustomer?.displayName.trim() ?? "";
+  const selectedCustomerDraftDisplayName = selectedCustomerDisplayName.trim();
+  const selectedCustomerSavedAddress = selectedCustomer?.address?.trim() ?? "";
+  const selectedCustomerDraftAddress = selectedCustomerAddress.trim();
+  const selectedCustomerSavedProfile = normalizeCustomerFiscalTaxProfile(
+    selectedCustomer?.fiscalTaxProfile,
+  );
+  const selectedCustomerProfile =
+    normalizeCustomerFiscalTaxProfile(selectedCustomerFiscalTaxProfile) ??
+    selectedCustomerSavedProfile;
+  const hasUnsavedSelectedCustomerFiscalData = Boolean(
+    selectedCustomer &&
+      !isSelectedAnonymousConsumerFinal &&
+      (selectedCustomerDraftTaxId !== selectedCustomerSavedTaxId ||
+        selectedCustomerProfile !== selectedCustomerSavedProfile),
+  );
+  const hasUnsavedSelectedCustomerIdentityData = Boolean(
+    selectedCustomer &&
+      !isSelectedAnonymousConsumerFinal &&
+      (selectedCustomerDraftDisplayName !== selectedCustomerSavedDisplayName ||
+        selectedCustomerDraftAddress !== selectedCustomerSavedAddress),
+  );
+  const shouldShowCustomerDataNotice = Boolean(
+    selectedCustomer &&
+      !isSelectedAnonymousConsumerFinal &&
+      (!selectedCustomerDraftTaxId ||
+        !selectedCustomerProfile ||
+        hasUnsavedSelectedCustomerFiscalData ||
+        hasUnsavedSelectedCustomerIdentityData ||
+        customerArcaValidation.status === "loading" ||
+        customerArcaValidation.status === "warning" ||
+        customerArcaValidation.status === "error"),
+  );
+  const customerDataNoticeTone =
+    customerArcaValidation.status === "error" ? "rose" : "amber";
+  const customerArcaMessage =
+    customerArcaValidation.message && hasUnsavedSelectedCustomerIdentityData
+      ? `${customerArcaValidation.message} Guarda si queres actualizar razon social o direccion.`
+      : customerArcaValidation.message;
+  const customerDataNoticeMessage = !selectedCustomerDraftTaxId
+    ? "Falta CUIT para validar y facturar con menos friccion."
+    : !selectedCustomerProfile
+      ? "Falta condicion fiscal en la ficha del cliente."
+      : customerArcaMessage ??
+        (hasUnsavedSelectedCustomerIdentityData
+          ? "Revisa razon social y direccion; guarda si queres actualizar la ficha."
+          : hasUnsavedSelectedCustomerFiscalData
+            ? "Valida el CUIT en ARCA para guardar automaticamente la condicion fiscal."
+            : "Revisa los datos fiscales antes de guardar la venta.");
+  const customerDataNotice = shouldShowCustomerDataNotice ? (
+    <InlineDataNotice
+      tone={customerDataNoticeTone}
+      title="Datos fiscales"
+      message={customerDataNoticeMessage}
+    >
+      <div className="grid gap-2 sm:grid-cols-[minmax(120px,0.8fr)_minmax(150px,1fr)_auto]">
+        <input
+          className="input h-8 text-xs"
+          value={selectedCustomerTaxId}
+          onChange={(event) =>
+            handleSelectedCustomerTaxIdChange(event.target.value)
+          }
+          placeholder="CUIT"
+          inputMode="numeric"
+        />
+        <select
+          className="input h-8 cursor-pointer text-xs"
+          value={selectedCustomerFiscalTaxProfile}
+          onChange={(event) =>
+            handleSelectedCustomerFiscalTaxProfileChange(
+              event.target.value as CustomerFiscalTaxProfile,
+            )
+          }
+        >
+          {CUSTOMER_FISCAL_TAX_PROFILE_VALUES.map((profile) => (
+            <option key={profile} value={profile}>
+              {CUSTOMER_FISCAL_TAX_PROFILE_LABELS[profile]}
+            </option>
+          ))}
+        </select>
+        <div className="flex flex-wrap gap-1.5">
+          {customerArcaValidation.suggestedFiscalTaxProfile ? (
+            <button
+              type="button"
+              className="btn h-8 px-2 text-[11px]"
+              onClick={handleApplyCustomerArcaSuggestion}
+              disabled={isUpdatingSelectedCustomer}
+            >
+              Aplicar ARCA
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleValidateSelectedCustomerArca}
+            disabled={
+              isUpdatingSelectedCustomer || isValidatingSelectedCustomerArca
+            }
+          >
+            {isValidatingSelectedCustomerArca ? "Validando..." : "Validar ARCA"}
+          </button>
+          <button
+            type="button"
+            className="btn h-8 px-2 text-[11px]"
+            onClick={handleSaveSelectedCustomerFiscalData}
+            disabled={
+              isUpdatingSelectedCustomer || isValidatingSelectedCustomerArca
+            }
+          >
+            {isUpdatingSelectedCustomer ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="input-label text-[10px]">Razon social</span>
+          <input
+            className="input h-8 text-xs"
+            value={selectedCustomerDisplayName}
+            onChange={(event) => {
+              setSelectedCustomerDisplayName(event.target.value);
+              setSelectedCustomerDataStatus(null);
+            }}
+            placeholder="Razon social"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="input-label text-[10px]">Direccion</span>
+          <input
+            className="input h-8 text-xs"
+            value={selectedCustomerAddress}
+            onChange={(event) => {
+              setSelectedCustomerAddress(event.target.value);
+              setSelectedCustomerDataStatus(null);
+            }}
+            placeholder="Direccion"
+          />
+        </label>
+      </div>
+      {selectedCustomerDataStatus ? (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {selectedCustomerDataStatus}
+        </p>
+      ) : null}
+    </InlineDataNotice>
+  ) : null;
+  const priceListNotice = isPriceListMismatch ? (
+    <InlineDataNotice
+      title="Lista distinta"
+      message={`La ficha usa ${
+        customerDefaultPriceList?.name ?? "otra lista"
+      } y esta venta usa ${selectedPriceList?.name ?? "la lista seleccionada"}.`}
+    >
+      <button
+        type="button"
+        className="btn h-8 px-2 text-[11px]"
+        onClick={handleSaveSelectedCustomerPriceList}
+        disabled={isUpdatingSelectedCustomer}
+      >
+        <CheckIcon className="size-3.5" />
+        {isUpdatingSelectedCustomer ? "Guardando..." : "Guardar en cliente"}
+      </button>
+      {selectedCustomerDataStatus ? (
+        <p className="mt-1.5 text-[11px] text-zinc-500">
+          {selectedCustomerDataStatus}
+        </p>
+      ) : null}
+    </InlineDataNotice>
+  ) : null;
+
   return (
     <>
+    <InlineCustomerForm
+      form={customerForm}
+      priceLists={priceLists}
+      defaultPriceListId={defaultPriceListId}
+      status={customerStatus}
+      isSubmitting={isCreatingCustomer}
+      isLookupLoading={isCustomerLookupLoading}
+      show={showCustomerForm}
+      autoFocusName={showCustomerForm}
+      onToggle={() => setShowCustomerForm((previous) => !previous)}
+      onFormChange={handleCustomerFieldChange}
+      onLookupByTaxId={handleLookupCustomerByTaxId}
+      onSubmit={handleSubmitCustomer}
+    />
+
     <div className="card space-y-6 p-4 sm:p-6 lg:p-7">
       <div>
         <h2 className="text-lg font-semibold text-zinc-900">Nueva venta</h2>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-8">
-        <div className="grid gap-6 lg:grid-cols-[2fr_1fr] lg:items-start">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1.55fr)_minmax(13rem,0.7fr)_minmax(10rem,0.45fr)] lg:items-start">
           <div className="field-stack">
             <span className="input-label">Cliente</span>
             <div className="relative">
@@ -1385,22 +2538,35 @@ export function NewSaleForm({
                       Buscando...
                     </p>
                   ) : customerMatches.length ? (
-                    customerMatches.map((customer) => (
-                      <button
-                        key={customer.id}
-                        type="button"
-                        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition hover:bg-white/70"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => selectCustomer(customer)}
-                      >
-                        <span className="min-w-0 truncate font-medium text-zinc-900">
-                          {customer.displayName}
-                        </span>
-                        <span className="shrink-0 text-xs text-zinc-500">
-                          {customer.taxId || customer.phone || customer.type}
-                        </span>
-                      </button>
-                    ))
+                    customerMatches.map((customer) => {
+                      const customerPriceList = customer.defaultPriceListId
+                        ? priceLists.find(
+                            (priceList) =>
+                              priceList.id === customer.defaultPriceListId,
+                          )
+                        : null;
+                      return (
+                        <button
+                          key={customer.id}
+                          type="button"
+                          className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition hover:bg-white/70"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => selectCustomer(customer)}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium text-zinc-900">
+                              {customer.displayName}
+                            </span>
+                            <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                              {customerPriceList?.name ?? "Sin lista por defecto"}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-xs font-medium text-zinc-500">
+                            {customer.taxId ? `CUIT ${customer.taxId}` : "Sin CUIT"}
+                          </span>
+                        </button>
+                      );
+                    })
                   ) : (
                     <p className="px-3 py-2 text-xs text-zinc-500">
                       Sin resultados.
@@ -1442,19 +2608,31 @@ export function NewSaleForm({
                 </span>
               ) : null}
             </div>
+            {customerDataNotice}
           </div>
 
           <div className="field-stack">
-            <label className="field-stack">
-              <span className="input-label">Fecha</span>
-              <input
-                type="date"
-                className="input w-full cursor-pointer"
-                value={saleDate}
-                onChange={(event) => setSaleDate(event.target.value)}
-              />
-            </label>
+            <span className="input-label">Lista de precios</span>
+            <SaleSelect
+              value={selectedPriceListId}
+              options={priceListOptions}
+              onValueChange={handleSelectedPriceListChange}
+              ariaLabel="Lista de precios"
+              buttonClassName="px-3"
+              optionClassName="px-2 py-1.5 text-xs"
+            />
+            {priceListNotice}
           </div>
+
+          <label className="field-stack">
+            <span className="input-label">Fecha</span>
+            <input
+              type="date"
+              className="input w-full cursor-pointer"
+              value={saleDate}
+              onChange={(event) => setSaleDate(event.target.value)}
+            />
+          </label>
         </div>
 
         <div className="subtle-divider" />
@@ -1518,24 +2696,44 @@ export function NewSaleForm({
                                 Buscando...
                               </p>
                             ) : productMatches.length ? (
-                              productMatches.map((product) => (
-                                <button
-                                  key={product.id}
-                                  type="button"
-                                  className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition hover:bg-white/70"
-                                  onMouseDown={(event) =>
-                                    event.preventDefault()
-                                  }
-                                  onClick={() => selectProduct(index, product)}
-                                >
-                                  <span className="min-w-0 truncate font-medium text-zinc-900">
-                                    {formatProductLabel(product)}
-                                  </span>
-                                  <span className="shrink-0 text-xs text-zinc-500">
-                                    {product.unit ?? "Producto"}
-                                  </span>
-                                </button>
-                              ))
+                              productMatches.map((product) => {
+                                const suggestedPrice = getSuggestedProductPrice({
+                                  product,
+                                  preferredPriceListId: selectedPriceListId,
+                                  preferredCostCurrency: "ARS",
+                                });
+                                const suggestedPriceNumber = Number(
+                                  suggestedPrice ?? 0,
+                                );
+                                return (
+                                  <button
+                                    key={product.id}
+                                    type="button"
+                                    className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl px-3 py-2 text-left text-sm transition hover:bg-white/70"
+                                    onMouseDown={(event) =>
+                                      event.preventDefault()
+                                    }
+                                    onClick={() => selectProduct(index, product)}
+                                  >
+                                    <span className="min-w-0 truncate font-medium text-zinc-900">
+                                      {formatProductLabel(product)}
+                                    </span>
+                                    <span className="shrink-0 text-right text-xs text-zinc-500">
+                                      <span className="block">
+                                        {product.unit ?? "Producto"}
+                                      </span>
+                                      {Number.isFinite(suggestedPriceNumber) &&
+                                      suggestedPriceNumber > 0 ? (
+                                        <span className="block font-medium text-zinc-700">
+                                          {formatCurrencyARS(
+                                            suggestedPriceNumber,
+                                          )}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                  </button>
+                                );
+                              })
                             ) : line.productSearch.trim() ? (
                               <p className="px-3 py-2 text-xs text-zinc-500">
                                 Se guardara como concepto manual.

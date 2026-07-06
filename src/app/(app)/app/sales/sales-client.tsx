@@ -8,7 +8,7 @@ import { NewSaleForm } from "./components/NewSaleForm";
 import { SalesEvents } from "./components/SalesEvents";
 import { SalesRecentTable } from "./components/SalesRecentTable";
 import { SalesStats } from "./components/SalesStats";
-import type { SaleEventRow, SaleRow } from "./types";
+import type { PriceListOption, SaleEventRow, SaleRow } from "./types";
 import type { SalesStatsSummary } from "@/lib/sales/list";
 
 const PAGE_SIZE = 25;
@@ -51,6 +51,7 @@ type SalesClientProps = {
     isDefault: boolean;
   }>;
   latestUsdRate: string | null;
+  initialPriceLists: PriceListOption[];
 };
 
 export default function SalesClient({
@@ -65,6 +66,7 @@ export default function SalesClient({
   accounts,
   currencies,
   latestUsdRate,
+  initialPriceLists,
 }: SalesClientProps) {
   const [sales, setSales] = useState<SaleRow[]>(initialSales);
   const [stats, setStats] = useState<SalesStatsSummary>(initialStats);
@@ -275,6 +277,7 @@ export default function SalesClient({
           accounts={accounts}
           currencies={currencies}
           latestUsdRate={latestUsdRate}
+          priceLists={initialPriceLists}
           onSaleCreated={reloadLoadedSales}
         />
       ) : null}
