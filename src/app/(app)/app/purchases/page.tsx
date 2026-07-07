@@ -1,7 +1,7 @@
 "use client";
 
 import type { ChangeEvent, FormEvent, KeyboardEvent, ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
@@ -90,6 +90,8 @@ const PurchaseDetailModal = dynamic(
   () => import("./components/PurchaseDetailModal"),
   { ssr: false },
 );
+
+const PURCHASE_LIST_PAGE_SIZE = 50;
 
 type PaymentMethodOption = {
   id: string;
@@ -235,6 +237,33 @@ type PreparedPurchase = {
   productTotal: number;
   fiscalOtherTotal: number;
   fiscalDifference: number;
+};
+
+type PurchasesListSummary = {
+  totalAmount: string;
+  impactCount: number;
+};
+
+type PurchasesListResponse = {
+  items: PurchaseRow[];
+  total: number;
+  nextOffset: number | null;
+  hasMore: boolean;
+  summary?: PurchasesListSummary;
+};
+
+const appendUniquePurchaseRows = (
+  current: PurchaseRow[],
+  incoming: PurchaseRow[],
+) => {
+  const seen = new Set(current.map((purchase) => purchase.id));
+  const next = [...current];
+  for (const purchase of incoming) {
+    if (seen.has(purchase.id)) continue;
+    seen.add(purchase.id);
+    next.push(purchase);
+  }
+  return next;
 };
 
 type PurchaseQrImportResponse = {
@@ -1424,6 +1453,17 @@ export default function PurchasesPage() {
   const [isSupplierMatchesLoading, setIsSupplierMatchesLoading] = useState(false);
   const [isProductMatchesLoading, setIsProductMatchesLoading] = useState(false);
   const [purchases, setPurchases] = useState<PurchaseRow[]>([]);
+  const [purchasesTotalResults, setPurchasesTotalResults] = useState(0);
+  const [purchasesNextOffset, setPurchasesNextOffset] = useState<number | null>(
+    null,
+  );
+  const [purchasesHasMore, setPurchasesHasMore] = useState(false);
+  const [purchasesSummary, setPurchasesSummary] = useState<PurchasesListSummary>({
+    totalAmount: "0",
+    impactCount: 0,
+  });
+  const [isLoadingPurchases, setIsLoadingPurchases] = useState(false);
+  const [isLoadingMorePurchases, setIsLoadingMorePurchases] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>(
     [],
   );
@@ -1607,6 +1647,7 @@ export default function PurchasesPage() {
   const qrScannerIntervalRef = useRef<number | null>(null);
   const qrScannerBusyRef = useRef(false);
   const detailRequestRef = useRef(0);
+  const purchasesLengthRef = useRef(0);
   const importQrTextHandlerRef = useRef<(qrText: string) => Promise<void>>(
     async () => undefined,
   );
@@ -1702,15 +1743,61 @@ export default function PurchasesPage() {
       ? "border-rose-400 ring-2 ring-rose-200 focus-visible:ring-rose-300/60"
       : "";
 
-  const loadPurchases = async () => {
-    const res = await fetch("/api/purchases", { cache: "no-store" });
-    if (res.ok) {
-      const data = (await res.json()) as PurchaseRow[];
-      setPurchases(data);
+  const loadPurchases = useCallback(async ({
+    offset = 0,
+    append = false,
+    limit,
+  }: {
+    offset?: number;
+    append?: boolean;
+    limit?: number;
+  } = {}) => {
+    const pageLimit =
+      limit ??
+      (append
+        ? PURCHASE_LIST_PAGE_SIZE
+        : Math.max(purchasesLengthRef.current, PURCHASE_LIST_PAGE_SIZE));
+    const params = new URLSearchParams();
+    params.set("limit", String(pageLimit));
+    params.set("offset", String(offset));
+
+    if (append) {
+      setIsLoadingMorePurchases(true);
+    } else {
+      setIsLoadingPurchases(true);
     }
+
+    try {
+      const res = await fetch(`/api/purchases?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as PurchasesListResponse;
+      setPurchases((current) => {
+        const next = append
+          ? appendUniquePurchaseRows(current, data.items)
+          : data.items;
+        purchasesLengthRef.current = next.length;
+        return next;
+      });
+      setPurchasesTotalResults(data.total);
+      setPurchasesNextOffset(data.nextOffset);
+      setPurchasesHasMore(data.hasMore);
+      if (data.summary) {
+        setPurchasesSummary(data.summary);
+      }
+    } finally {
+      setIsLoadingPurchases(false);
+      setIsLoadingMorePurchases(false);
+    }
+  }, []);
+
+  const handleLoadMorePurchases = async () => {
+    if (purchasesNextOffset === null || isLoadingMorePurchases) return;
+    await loadPurchases({ offset: purchasesNextOffset, append: true });
   };
 
-  const loadFinance = async () => {
+  const loadFinance = useCallback(async () => {
     const [methodsRes, accountsRes] =
       await Promise.all([
         fetch("/api/payment-methods", { cache: "no-store" }),
@@ -1725,7 +1812,7 @@ export default function PurchasesPage() {
       const data = (await accountsRes.json()) as AccountOption[];
       setAccounts(data.filter((account) => account.isActive !== false));
     }
-  };
+  }, []);
 
   const stopQrScanner = () => {
     if (qrScannerIntervalRef.current) {
@@ -1746,7 +1833,7 @@ export default function PurchasesPage() {
   useEffect(() => {
     loadPurchases().catch(() => undefined);
     loadFinance().catch(() => undefined);
-  }, []);
+  }, [loadFinance, loadPurchases]);
 
   useEffect(() => {
     if (!paymentMethods.length) return;
@@ -4672,13 +4759,9 @@ export default function PurchasesPage() {
     window.location.href = `/api/purchases/report?${params.toString()}`;
   };
 
-  const totalPurchases = purchases.length;
-  const totalAmountRegistered = purchases.reduce((sum, purchase) => {
-    const value = Number(purchase.total ?? 0);
-    return Number.isFinite(value) ? sum + value : sum;
-  }, 0);
-  const impactCount = purchases.filter((purchase) => purchase.impactsAccount)
-    .length;
+  const totalPurchases = purchasesTotalResults || purchases.length;
+  const totalAmountRegistered = Number(purchasesSummary.totalAmount ?? 0);
+  const impactCount = purchasesSummary.impactCount;
 
   const filteredPurchases = useMemo(() => {
     const normalized = normalizeQuery(query);
@@ -6475,9 +6558,16 @@ export default function PurchasesPage() {
 
           <div className="card space-y-4 p-4 sm:p-6">
             <div className="grid gap-3 lg:grid-cols-[minmax(200px,auto)_minmax(0,1fr)] lg:items-center">
-              <h2 className="min-w-0 text-sm font-semibold uppercase tracking-wide text-zinc-500">
-                Compras registradas
-              </h2>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+                  Compras registradas
+                </h2>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {isLoadingPurchases && purchases.length === 0
+                    ? "Cargando compras..."
+                    : `${purchases.length} de ${totalPurchases} cargadas`}
+                </p>
+              </div>
               <div className="grid w-full gap-2 sm:grid-cols-2 lg:grid-cols-[220px_minmax(0,1fr)_180px]">
                 <div className="relative inline-grid h-[38px] w-full shrink-0 grid-cols-2 rounded-full border border-zinc-200/70 bg-white/55 p-1">
                   <span
@@ -6760,6 +6850,18 @@ export default function PurchasesPage() {
               </table>
               </div>
             </div>
+            {purchasesHasMore ? (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  className="btn btn-sky w-full text-xs sm:w-auto"
+                  onClick={() => handleLoadMorePurchases().catch(() => undefined)}
+                  disabled={isLoadingPurchases || isLoadingMorePurchases}
+                >
+                  {isLoadingMorePurchases ? "Cargando..." : "Ver mas"}
+                </button>
+              </div>
+            ) : null}
           </div>
         </>
       )}

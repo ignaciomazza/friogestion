@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireOrg, requireRole } from "@/lib/auth/tenant";
 import { WRITE_ROLES } from "@/lib/auth/rbac";
@@ -81,6 +82,67 @@ const cashOutLineSchema = z.object({
   accountId: z.string().optional(),
   amount: z.coerce.number().positive(),
 });
+
+const PURCHASES_PAGE_SIZE = 50;
+const MAX_PURCHASES_PAGE_SIZE = 100;
+
+const parsePurchasesLimit = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return PURCHASES_PAGE_SIZE;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 1) return 1;
+  if (normalized > MAX_PURCHASES_PAGE_SIZE) return MAX_PURCHASES_PAGE_SIZE;
+  return normalized;
+};
+
+const parsePurchasesOffset = (value: string | null) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.trunc(parsed);
+  if (normalized < 0) return 0;
+  return normalized;
+};
+
+const purchaseListInclude = Prisma.validator<Prisma.PurchaseInvoiceInclude>()({
+  supplier: true,
+  items: true,
+  currentAccountEntries: {
+    where: { sourceType: "PURCHASE" },
+    select: { id: true },
+    take: 1,
+  },
+  allocations: {
+    where: {
+      supplierPayment: {
+        status: "CONFIRMED",
+      },
+    },
+    include: {
+      supplierPayment: {
+        select: {
+          id: true,
+          paidAt: true,
+          createdAt: true,
+          lines: {
+            select: {
+              paymentMethod: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  fiscalLines: true,
+});
+
+const purchaseListOrderBy: Prisma.PurchaseInvoiceOrderByWithRelationInput[] = [
+  { createdAt: "desc" },
+  { id: "asc" },
+];
 
 const purchaseSchema = z.object({
   supplierId: z.string().min(1),
@@ -266,46 +328,41 @@ const resolveSupplierAllocatedPaymentMethodName = (
 export async function GET(req: NextRequest) {
   try {
     const organizationId = await requireOrg(req);
-    const purchases = await prisma.purchaseInvoice.findMany({
-      where: { organizationId },
-      include: {
-        supplier: true,
-        items: true,
-        currentAccountEntries: {
-          where: { sourceType: "PURCHASE" },
-          select: { id: true },
-          take: 1,
-        },
-        allocations: {
-          where: {
-            supplierPayment: {
-              status: "CONFIRMED",
-            },
-          },
-          include: {
-            supplierPayment: {
-              select: {
-                id: true,
-                paidAt: true,
-                createdAt: true,
-                lines: {
-                  select: {
-                    paymentMethod: {
-                      select: {
-                        name: true,
-                      },
-                    },
-                  },
-                },
+    const searchParams = req.nextUrl.searchParams;
+    const isPaginatedRequest =
+      searchParams.has("limit") || searchParams.has("offset");
+    const limit = parsePurchasesLimit(searchParams.get("limit"));
+    const offset = parsePurchasesOffset(searchParams.get("offset"));
+    const where: Prisma.PurchaseInvoiceWhereInput = { organizationId };
+
+    const [purchases, total, totalAggregate, impactCount] = await Promise.all([
+      prisma.purchaseInvoice.findMany({
+        where,
+        include: purchaseListInclude,
+        orderBy: purchaseListOrderBy,
+        skip: isPaginatedRequest ? offset : undefined,
+        take: isPaginatedRequest ? limit : PURCHASES_PAGE_SIZE,
+      }),
+      isPaginatedRequest
+        ? prisma.purchaseInvoice.count({ where })
+        : Promise.resolve(null),
+      isPaginatedRequest
+        ? prisma.purchaseInvoice.aggregate({
+            where,
+            _sum: { total: true },
+          })
+        : Promise.resolve(null),
+      isPaginatedRequest
+        ? prisma.purchaseInvoice.count({
+            where: {
+              ...where,
+              currentAccountEntries: {
+                some: { sourceType: "PURCHASE" },
               },
             },
-          },
-        },
-        fiscalLines: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 50,
-    });
+          })
+        : Promise.resolve(null),
+    ]);
 
     const immediateCashOutPrefixes = Array.from(
       new Set(
@@ -362,103 +419,120 @@ export async function GET(req: NextRequest) {
       immediateCashOutCandidatesByPrefix.set(prefix, current);
     }
 
-    return NextResponse.json(
-      purchases.map((purchase) => {
-        const fiscalComputable = isPurchaseFiscalComputable({
-          invoiceNumber: purchase.invoiceNumber,
-          fiscalVoucherKind: purchase.fiscalVoucherKind,
-          fiscalVoucherType: purchase.fiscalVoucherType,
-          fiscalPointOfSale: purchase.fiscalPointOfSale,
-          fiscalVoucherNumber: purchase.fiscalVoucherNumber,
-        });
-        const immediatePaymentMethodName = resolveImmediatePaymentMethodName({
-          purchaseId: purchase.id,
-          invoiceNumber: purchase.invoiceNumber ?? null,
-          candidatesByPrefix: immediateCashOutCandidatesByPrefix,
-        });
-        const persistedImmediatePaymentLabel =
-          purchase.immediatePaymentLabel?.trim() || null;
-        const supplierAllocatedPaymentMethodName =
-          resolveSupplierAllocatedPaymentMethodName(
-            purchase.allocations as SupplierPaymentAllocationCandidate[],
-          );
-        const impactsAccount = purchase.currentAccountEntries.length > 0;
-        const paymentMethodName = impactsAccount
-          ? supplierAllocatedPaymentMethodName ?? immediatePaymentMethodName
-          : immediatePaymentMethodName ?? persistedImmediatePaymentLabel;
-        const totalAmount = toNumber(purchase.total);
-        const storedPaidTotal = toNumber(purchase.paidTotal);
-        const allocatedPaidTotal = (
-          purchase.allocations as Array<{ amount: unknown }>
-        ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
-        const effectivePaidTotal = impactsAccount
-          ? roundToTwo(allocatedPaidTotal)
-          : roundToTwo(storedPaidTotal);
-        const effectiveBalance = roundToTwo(
-          Math.max(totalAmount - effectivePaidTotal, 0),
+    const items = purchases.map((purchase) => {
+      const fiscalComputable = isPurchaseFiscalComputable({
+        invoiceNumber: purchase.invoiceNumber,
+        fiscalVoucherKind: purchase.fiscalVoucherKind,
+        fiscalVoucherType: purchase.fiscalVoucherType,
+        fiscalPointOfSale: purchase.fiscalPointOfSale,
+        fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+      });
+      const immediatePaymentMethodName = resolveImmediatePaymentMethodName({
+        purchaseId: purchase.id,
+        invoiceNumber: purchase.invoiceNumber ?? null,
+        candidatesByPrefix: immediateCashOutCandidatesByPrefix,
+      });
+      const persistedImmediatePaymentLabel =
+        purchase.immediatePaymentLabel?.trim() || null;
+      const supplierAllocatedPaymentMethodName =
+        resolveSupplierAllocatedPaymentMethodName(
+          purchase.allocations as SupplierPaymentAllocationCandidate[],
         );
-        const effectivePaymentStatus =
-          effectivePaidTotal <= 0
-            ? "UNPAID"
-            : effectiveBalance <= 0.005
-              ? "PAID"
-              : "PARTIAL";
+      const impactsAccount = purchase.currentAccountEntries.length > 0;
+      const paymentMethodName = impactsAccount
+        ? supplierAllocatedPaymentMethodName ?? immediatePaymentMethodName
+        : immediatePaymentMethodName ?? persistedImmediatePaymentLabel;
+      const totalAmount = toNumber(purchase.total);
+      const storedPaidTotal = toNumber(purchase.paidTotal);
+      const allocatedPaidTotal = (
+        purchase.allocations as Array<{ amount: unknown }>
+      ).reduce((sum, allocation) => sum + toNumber(allocation.amount), 0);
+      const effectivePaidTotal = impactsAccount
+        ? roundToTwo(allocatedPaidTotal)
+        : roundToTwo(storedPaidTotal);
+      const effectiveBalance = roundToTwo(
+        Math.max(totalAmount - effectivePaidTotal, 0),
+      );
+      const effectivePaymentStatus =
+        effectivePaidTotal <= 0
+          ? "UNPAID"
+          : effectiveBalance <= 0.005
+            ? "PAID"
+            : "PARTIAL";
 
-        return {
-          id: purchase.id,
-          supplierId: purchase.supplierId,
-          supplierName: purchase.supplier.displayName,
-          documentType: purchase.documentType,
-          linkedPurchaseInvoiceId: purchase.linkedPurchaseInvoiceId,
-          invoiceNumber: purchase.invoiceNumber,
-          invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
-          createdAt: purchase.createdAt.toISOString(),
-          subtotal: purchase.subtotal?.toString() ?? null,
-          taxes: purchase.taxes?.toString() ?? null,
-          total: purchase.total?.toString() ?? null,
-          fiscalVoucherKind: purchase.fiscalVoucherKind,
-          fiscalVoucherType: purchase.fiscalVoucherType,
-          fiscalPointOfSale: purchase.fiscalPointOfSale,
-          fiscalVoucherNumber: purchase.fiscalVoucherNumber,
-          authorizationMode: purchase.authorizationMode,
-          authorizationCode: purchase.authorizationCode,
-          currencyCode: purchase.currencyCode,
-          netTaxed: purchase.netTaxed.toString(),
-          netNonTaxed: purchase.netNonTaxed.toString(),
-          exemptAmount: purchase.exemptAmount.toString(),
-          vatTotal: purchase.vatTotal.toString(),
-          otherTaxesTotal: purchase.otherTaxesTotal.toString(),
-          discountType: purchase.discountType,
-          discountBase: purchase.discountBase,
-          discountValue: purchase.discountValue?.toString() ?? null,
-          discountAmount: purchase.discountAmount.toString(),
-          fiscalLines: purchase.fiscalLines.map((line) => ({
-            id: line.id,
-            type: line.type,
-            jurisdiction: line.jurisdiction,
-            baseAmount: line.baseAmount?.toString() ?? null,
-            rate: line.rate?.toString() ?? null,
-            amount: line.amount.toString(),
-            note: line.note,
-          })),
-          paidTotal: effectivePaidTotal.toFixed(2),
-          balance: effectiveBalance.toFixed(2),
-          paymentStatus: effectivePaymentStatus,
-          itemsCount: purchase.items.length,
-          status: purchase.status,
-          hasInvoice: fiscalComputable,
-          fiscalComputable,
-          fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
-          impactsAccount,
-          cashOutRegistered: Boolean(paymentMethodName),
-          immediatePaymentMethodName: paymentMethodName,
-          arcaValidationStatus: purchase.arcaValidationStatus,
-          arcaValidationMessage: purchase.arcaValidationMessage ?? null,
-          arcaValidationCheckedAt:
-            purchase.arcaValidationCheckedAt?.toISOString() ?? null,
-        };
-      }),
-    );
+      return {
+        id: purchase.id,
+        supplierId: purchase.supplierId,
+        supplierName: purchase.supplier.displayName,
+        documentType: purchase.documentType,
+        linkedPurchaseInvoiceId: purchase.linkedPurchaseInvoiceId,
+        invoiceNumber: purchase.invoiceNumber,
+        invoiceDate: purchase.invoiceDate?.toISOString().slice(0, 10) ?? null,
+        createdAt: purchase.createdAt.toISOString(),
+        subtotal: purchase.subtotal?.toString() ?? null,
+        taxes: purchase.taxes?.toString() ?? null,
+        total: purchase.total?.toString() ?? null,
+        fiscalVoucherKind: purchase.fiscalVoucherKind,
+        fiscalVoucherType: purchase.fiscalVoucherType,
+        fiscalPointOfSale: purchase.fiscalPointOfSale,
+        fiscalVoucherNumber: purchase.fiscalVoucherNumber,
+        authorizationMode: purchase.authorizationMode,
+        authorizationCode: purchase.authorizationCode,
+        currencyCode: purchase.currencyCode,
+        netTaxed: purchase.netTaxed.toString(),
+        netNonTaxed: purchase.netNonTaxed.toString(),
+        exemptAmount: purchase.exemptAmount.toString(),
+        vatTotal: purchase.vatTotal.toString(),
+        otherTaxesTotal: purchase.otherTaxesTotal.toString(),
+        discountType: purchase.discountType,
+        discountBase: purchase.discountBase,
+        discountValue: purchase.discountValue?.toString() ?? null,
+        discountAmount: purchase.discountAmount.toString(),
+        fiscalLines: purchase.fiscalLines.map((line) => ({
+          id: line.id,
+          type: line.type,
+          jurisdiction: line.jurisdiction,
+          baseAmount: line.baseAmount?.toString() ?? null,
+          rate: line.rate?.toString() ?? null,
+          amount: line.amount.toString(),
+          note: line.note,
+        })),
+        paidTotal: effectivePaidTotal.toFixed(2),
+        balance: effectiveBalance.toFixed(2),
+        paymentStatus: effectivePaymentStatus,
+        itemsCount: purchase.items.length,
+        status: purchase.status,
+        hasInvoice: fiscalComputable,
+        fiscalComputable,
+        fiscalRecordType: getPurchaseFiscalRecordType(fiscalComputable),
+        impactsAccount,
+        cashOutRegistered: Boolean(paymentMethodName),
+        immediatePaymentMethodName: paymentMethodName,
+        arcaValidationStatus: purchase.arcaValidationStatus,
+        arcaValidationMessage: purchase.arcaValidationMessage ?? null,
+        arcaValidationCheckedAt:
+          purchase.arcaValidationCheckedAt?.toISOString() ?? null,
+      };
+    });
+
+    if (isPaginatedRequest) {
+      const totalPurchases = total ?? items.length;
+      const nextOffset = offset + purchases.length;
+      const hasMore = nextOffset < totalPurchases;
+
+      return NextResponse.json({
+        items,
+        total: totalPurchases,
+        nextOffset: hasMore ? nextOffset : null,
+        hasMore,
+        summary: {
+          totalAmount: totalAggregate?._sum.total?.toString() ?? "0",
+          impactCount: impactCount ?? 0,
+        },
+      });
+    }
+
+    return NextResponse.json(items);
   } catch {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
