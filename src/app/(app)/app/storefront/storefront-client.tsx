@@ -10,6 +10,7 @@ import {
   CurrencyDollarIcon,
   DocumentTextIcon,
   EyeIcon,
+  FunnelIcon,
   PencilSquareIcon,
   PlusIcon,
   SaveIcon,
@@ -219,6 +220,10 @@ type PublicationSortKey =
   | "stock-desc"
   | "stock-asc";
 type PublicationStatusFilter = "active" | "paused" | "all";
+type PublicationPriceFilter = "all" | "with-price" | "without-price";
+type PublicationStockFilter = "all" | "with-stock" | "without-stock";
+type PublicationBrandFilter = "all" | "with-brand" | "without-brand";
+type PublicationImageFilter = "all" | "with-image" | "without-image";
 type OrderSortKey = "created-desc" | "created-asc" | "total-desc" | "total-asc";
 type OrderStatusFilter = "pending" | "to-deliver" | "delivered" | "closed" | "all";
 type OrderDateRangeFilter = "operational" | "day" | "week" | "month" | "all";
@@ -713,6 +718,17 @@ const comparePublicationCode = (
   if (compared !== 0) return direction === "desc" ? -compared : compared;
   return comparePublicationName(left, right);
 };
+
+const hasPublicationPrice = (row: PublicationRow) =>
+  toNumber(row.computedPriceFinal) > 0;
+
+const hasPublicationStock = (row: PublicationRow) =>
+  toNumber(row.webStockAvailable) > 0;
+
+const hasPublicationBrand = (row: PublicationRow) =>
+  Boolean(compactPublicationText(row.brand));
+
+const hasPublicationImage = (row: PublicationRow) => row.images.length > 0;
 
 const scorePublicationRelevance = (
   row: PublicationRow,
@@ -2389,6 +2405,15 @@ export default function StorefrontClient({
   );
   const [publicationStatusFilter, setPublicationStatusFilter] =
     useState<PublicationStatusFilter>("active");
+  const [publicationPriceFilter, setPublicationPriceFilter] =
+    useState<PublicationPriceFilter>("all");
+  const [publicationStockFilter, setPublicationStockFilter] =
+    useState<PublicationStockFilter>("all");
+  const [publicationBrandFilter, setPublicationBrandFilter] =
+    useState<PublicationBrandFilter>("all");
+  const [publicationImageFilter, setPublicationImageFilter] =
+    useState<PublicationImageFilter>("all");
+  const [isPublicationFiltersOpen, setIsPublicationFiltersOpen] = useState(false);
   const [selectedPublicationId, setSelectedPublicationId] = useState<string | null>(null);
   const [selectedImagePublicationId, setSelectedImagePublicationId] = useState<string | null>(null);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
@@ -2400,6 +2425,7 @@ export default function StorefrontClient({
     useState<OrderDateRangeFilter>("operational");
   const [orderSort, setOrderSort] = useState<OrderSortKey>("created-desc");
   const skipInitialQuerySyncRef = useRef(true);
+  const publicationFiltersRef = useRef<HTMLDivElement | null>(null);
   const publicationBaselineRef = useRef<Record<string, string>>({});
   const configBaselineRef = useRef("");
   const hasUnsavedChangesRef = useRef(false);
@@ -2546,6 +2572,33 @@ export default function StorefrontClient({
 
     return () => window.clearTimeout(timeout);
   }, [query]);
+
+  useEffect(() => {
+    if (!isPublicationFiltersOpen) return;
+
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (publicationFiltersRef.current?.contains(target)) return;
+      setIsPublicationFiltersOpen(false);
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsPublicationFiltersOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isPublicationFiltersOpen]);
 
   const dirtyPublicationIds = useMemo(
     () =>
@@ -3035,14 +3088,50 @@ export default function StorefrontClient({
         isOrderInsideDateRange(order, rangeStart),
     ).length;
   };
+  const activePublicationExtraFiltersCount =
+    (publicationPriceFilter === "all" ? 0 : 1) +
+    (publicationStockFilter === "all" ? 0 : 1) +
+    (publicationBrandFilter === "all" ? 0 : 1) +
+    (publicationImageFilter === "all" ? 0 : 1);
+  const resetPublicationExtraFilters = () => {
+    setPublicationPriceFilter("all");
+    setPublicationStockFilter("all");
+    setPublicationBrandFilter("all");
+    setPublicationImageFilter("all");
+    setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+  };
   const filteredPublications = useMemo(() => {
     const trimmedQuery = query.trim();
     const items = publications.filter((row) => {
       if (publicationStatusFilter === "active") {
-        return row.publicationStatus === "PUBLISHED";
+        if (row.publicationStatus !== "PUBLISHED") return false;
       }
       if (publicationStatusFilter === "paused") {
-        return row.publicationStatus === "PAUSED";
+        if (row.publicationStatus !== "PAUSED") return false;
+      }
+      if (publicationPriceFilter === "with-price" && !hasPublicationPrice(row)) {
+        return false;
+      }
+      if (publicationPriceFilter === "without-price" && hasPublicationPrice(row)) {
+        return false;
+      }
+      if (publicationStockFilter === "with-stock" && !hasPublicationStock(row)) {
+        return false;
+      }
+      if (publicationStockFilter === "without-stock" && hasPublicationStock(row)) {
+        return false;
+      }
+      if (publicationBrandFilter === "with-brand" && !hasPublicationBrand(row)) {
+        return false;
+      }
+      if (publicationBrandFilter === "without-brand" && hasPublicationBrand(row)) {
+        return false;
+      }
+      if (publicationImageFilter === "with-image" && !hasPublicationImage(row)) {
+        return false;
+      }
+      if (publicationImageFilter === "without-image" && hasPublicationImage(row)) {
+        return false;
       }
       return true;
     });
@@ -3077,7 +3166,16 @@ export default function StorefrontClient({
     });
 
     return items;
-  }, [publicationSort, publicationStatusFilter, publications, query]);
+  }, [
+    publicationBrandFilter,
+    publicationImageFilter,
+    publicationPriceFilter,
+    publicationSort,
+    publicationStatusFilter,
+    publicationStockFilter,
+    publications,
+    query,
+  ]);
   const filteredOrders = useMemo(() => {
     const normalizedQuery = orderQuery.trim().toLowerCase();
     const rangeStart = getOrderDateRangeStart(
@@ -3594,7 +3692,7 @@ export default function StorefrontClient({
         <div className="space-y-5">
           <div className="sticky top-4 z-20 rounded-[20px] border border-zinc-200 bg-white/92 px-3 py-2.5 shadow-[0_18px_38px_-30px_rgba(24,39,75,0.32)] backdrop-blur supports-[backdrop-filter]:bg-white/82">
             <div className="flex flex-col gap-2">
-              <div className="grid gap-2 lg:grid-cols-[minmax(260px,340px)_minmax(0,1fr)] lg:items-center">
+              <div className="grid gap-2 lg:grid-cols-[minmax(180px,250px)_minmax(0,1fr)_auto] lg:items-center">
                 <div className="flex min-h-[38px] items-center rounded-2xl border border-zinc-200 bg-white px-1.5 shadow-[0_10px_24px_-24px_rgba(24,39,75,0.32)]">
                   <span className="shrink-0 border-r border-zinc-200 px-1.5 text-xs font-medium text-zinc-500">
                     Ordenar
@@ -3629,6 +3727,183 @@ export default function StorefrontClient({
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
+                </div>
+                <div ref={publicationFiltersRef} className="relative">
+                  <button
+                    type="button"
+                    className={`inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-2xl border px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/30 lg:w-auto ${
+                      activePublicationExtraFiltersCount
+                        ? "border-sky-200 bg-sky-50 text-sky-900 hover:bg-sky-100/70"
+                        : "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 hover:text-zinc-950"
+                    }`}
+                    onClick={() =>
+                      setIsPublicationFiltersOpen((current) => !current)
+                    }
+                    aria-expanded={isPublicationFiltersOpen}
+                    aria-controls="publication-extra-filters"
+                  >
+                    <FunnelIcon className="size-4" />
+                    <span>Filtros</span>
+                    {activePublicationExtraFiltersCount ? (
+                      <span className="inline-flex size-5 items-center justify-center rounded-full bg-sky-700 text-[11px] font-semibold leading-none text-white">
+                        {activePublicationExtraFiltersCount}
+                      </span>
+                    ) : null}
+                  </button>
+
+                  {isPublicationFiltersOpen ? (
+                    <div
+                      id="publication-extra-filters"
+                      className="absolute right-0 z-30 mt-2 max-h-[min(32rem,calc(100dvh-8rem))] w-[min(21rem,calc(100vw-2rem))] overflow-y-auto rounded-[20px] border border-zinc-200 bg-white p-3 shadow-[0_24px_60px_-32px_rgba(24,39,75,0.42)]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-zinc-950">
+                            Filtros
+                          </div>
+                          <div className="mt-0.5 text-xs text-zinc-500">
+                            {filteredPublications.length.toLocaleString("es-AR")} resultados
+                          </div>
+                        </div>
+                        {activePublicationExtraFiltersCount ? (
+                          <button
+                            type="button"
+                            onClick={resetPublicationExtraFilters}
+                            className="inline-flex min-h-8 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-2.5 text-xs font-semibold text-zinc-600 transition hover:bg-zinc-50 hover:text-zinc-950"
+                          >
+                            <XMarkIcon className="size-3.5" />
+                            Limpiar
+                          </button>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-3 space-y-3">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Precio
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-zinc-50 p-1">
+                            {[
+                              { value: "all", label: "Todos" },
+                              { value: "with-price", label: "Con precio" },
+                              { value: "without-price", label: "Sin precio" },
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setPublicationPriceFilter(
+                                    option.value as PublicationPriceFilter,
+                                  );
+                                  setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+                                }}
+                                className={`min-h-9 rounded-[12px] px-2 text-xs font-semibold transition ${
+                                  publicationPriceFilter === option.value
+                                    ? "bg-white text-sky-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-sky-100"
+                                    : "text-zinc-600 hover:bg-white/70 hover:text-zinc-950"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Stock
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-zinc-50 p-1">
+                            {[
+                              { value: "all", label: "Todos" },
+                              { value: "with-stock", label: "Con stock" },
+                              { value: "without-stock", label: "Sin stock" },
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setPublicationStockFilter(
+                                    option.value as PublicationStockFilter,
+                                  );
+                                  setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+                                }}
+                                className={`min-h-9 rounded-[12px] px-2 text-xs font-semibold transition ${
+                                  publicationStockFilter === option.value
+                                    ? "bg-white text-sky-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-sky-100"
+                                    : "text-zinc-600 hover:bg-white/70 hover:text-zinc-950"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Marca
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-zinc-50 p-1">
+                            {[
+                              { value: "all", label: "Todas" },
+                              { value: "with-brand", label: "Con marca" },
+                              { value: "without-brand", label: "Sin marca" },
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setPublicationBrandFilter(
+                                    option.value as PublicationBrandFilter,
+                                  );
+                                  setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+                                }}
+                                className={`min-h-9 rounded-[12px] px-2 text-xs font-semibold transition ${
+                                  publicationBrandFilter === option.value
+                                    ? "bg-white text-sky-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-sky-100"
+                                    : "text-zinc-600 hover:bg-white/70 hover:text-zinc-950"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            Imagen
+                          </div>
+                          <div className="mt-2 grid grid-cols-3 gap-1 rounded-2xl border border-zinc-200 bg-zinc-50 p-1">
+                            {[
+                              { value: "all", label: "Todas" },
+                              { value: "with-image", label: "Con imagen" },
+                              { value: "without-image", label: "Sin imagen" },
+                            ].map((option) => (
+                              <button
+                                key={option.value}
+                                type="button"
+                                onClick={() => {
+                                  setPublicationImageFilter(
+                                    option.value as PublicationImageFilter,
+                                  );
+                                  setVisiblePublicationsCount(PUBLICATIONS_PAGE_SIZE);
+                                }}
+                                className={`min-h-9 rounded-[12px] px-2 text-xs font-semibold transition ${
+                                  publicationImageFilter === option.value
+                                    ? "bg-white text-sky-950 shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-sky-100"
+                                    : "text-zinc-600 hover:bg-white/70 hover:text-zinc-950"
+                                }`}
+                              >
+                                {option.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

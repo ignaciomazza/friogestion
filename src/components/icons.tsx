@@ -436,6 +436,26 @@ export function CheckIcon(props: IconProps) {
   );
 }
 
+export function FunnelIcon(props: IconProps) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+      strokeWidth={1.5}
+      stroke="currentColor"
+      aria-hidden="true"
+      {...props}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044c0 .343-.13.673-.364.924L15 12.802v5.57a1.5 1.5 0 0 1-.659 1.243l-3 2A1.5 1.5 0 0 1 9 20.372v-7.57L3.364 6.742A1.35 1.35 0 0 1 3 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0 1 12 3Z"
+      />
+    </svg>
+  );
+}
+
 export function SaveIcon(props: IconProps) {
   return (
     <svg
