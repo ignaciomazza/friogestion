@@ -61,6 +61,7 @@ type Totals = {
   total: number;
   exempt: number;
   ivaItems: Array<{ Id: number; BaseImp: number; Importe: number }>;
+  roundingRemainder: number;
 };
 
 const CURRENCY_MAP: Record<string, string> = {
@@ -68,6 +69,7 @@ const CURRENCY_MAP: Record<string, string> = {
   USD: "DOL",
 };
 const PAYMENT_SETTLEMENT_TOLERANCE = 0.01;
+const ROUNDING_NOTICE_THRESHOLD = 0.004;
 
 function getDebitNoteDelegate() {
   return (
@@ -263,6 +265,12 @@ function differsByMoreThanFiveCents(a: number, b: number) {
   return Math.abs(round2(a) - round2(b)) > 0.05;
 }
 
+function buildFiscalRoundingWarning(roundingRemainder: number) {
+  if (Math.abs(roundingRemainder) <= ROUNDING_NOTICE_THRESHOLD) return null;
+  const direction = roundingRemainder > 0 ? "sumo" : "resto";
+  return `Se ${direction} $${Math.abs(roundingRemainder).toFixed(2)} de redondeo fiscal en IVA para que el total coincida con la venta.`;
+}
+
 function buildQrPayload(data: {
   issueDate: Date;
   cuit: number;
@@ -419,6 +427,9 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
   const saleTotal = Number(sale.quote?.total ?? sale.total ?? fallbackSaleTotal);
   const adjustmentTotal = round2(saleTotal - baseTotals.total);
   const totals = resolveTotals(items, adjustmentTotal);
+  const fiscalRoundingWarning = buildFiscalRoundingWarning(
+    totals.roundingRemainder
+  );
 
   const fiscalSubtotal = baseTotals.net + baseTotals.exempt;
   const subtotalMismatch = differsByMoreThanOneCent(fiscalSubtotal, saleSubtotal);
@@ -614,6 +625,7 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
           serviceDates: null,
           manualTotals: toManualTotals(totals),
           fiscalAdjustment: adjustmentTotal,
+          fiscalRoundingAdjustment: totals.roundingRemainder,
           complianceWarnings: doc.warnings,
           requiresIncomeTaxDeduction: Boolean(input.requiresIncomeTaxDeduction),
         };
@@ -706,7 +718,12 @@ export async function issueFiscalInvoice(input: IssueInvoiceInput) {
       cae: invoice.cae,
       warnings: doc.warnings.length,
     });
-    return { invoice, warnings: doc.warnings };
+    return {
+      invoice,
+      warnings: fiscalRoundingWarning
+        ? [...doc.warnings, fiscalRoundingWarning]
+        : doc.warnings,
+    };
   } catch (error) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&

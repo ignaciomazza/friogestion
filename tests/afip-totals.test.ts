@@ -69,12 +69,29 @@ test("buildAdjustedTotalsFromRates treats installment interest as gross adjustme
   assert.equal(result.iva, 231);
 });
 
-test("buildAdjustedTotalsFromRates keeps IVA calculated from its taxable base", () => {
+test("buildAdjustedTotalsFromRates keeps target total with explicit fiscal rounding", () => {
   const result = buildAdjustedTotalsFromRates([{ base: 1000, rate: 21 }], 0.03);
   const [ivaItem] = result.ivaItems;
 
-  assert.equal(ivaItem.Importe, round2(ivaItem.BaseImp * 0.21));
   assert.equal(result.iva, ivaItem.Importe);
+  assert.equal(result.total, 1210.03);
+  assert.equal(result.roundingRemainder, 0.01);
   assert.equal(round2(result.net + result.iva + result.exempt), result.total);
-  assert.ok(Math.abs(Math.round(result.total * 100) - 121003) <= 1);
+  assert.ok(Math.abs(ivaItem.Importe - round2(ivaItem.BaseImp * 0.21)) <= 0.01);
+});
+
+test("buildAdjustedTotalsFromRates absorbs a one-cent taxable rounding remainder", () => {
+  const result = buildAdjustedTotalsFromRates(
+    [{ base: 824380.17, rate: 21 }],
+    -0.01
+  );
+  const [ivaItem] = result.ivaItems;
+
+  assert.equal(result.net, 824380.17);
+  assert.equal(result.iva, 173119.83);
+  assert.equal(result.total, 997500);
+  assert.equal(result.roundingRemainder, -0.01);
+  assert.equal(ivaItem.BaseImp, 824380.17);
+  assert.equal(ivaItem.Importe, 173119.83);
+  assert.equal(round2(result.net + result.iva + result.exempt), result.total);
 });

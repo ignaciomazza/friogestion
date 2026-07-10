@@ -930,6 +930,11 @@ export function NewSaleForm({
   const invoiceDraftPreview = createdSale ? buildInvoiceDraft() : null;
   const fiscalPreview =
     invoiceDraftPreview?.ok === true ? invoiceDraftPreview.fiscalTotals : null;
+  const fiscalRoundingRemainder = fiscalPreview?.roundingRemainder ?? 0;
+  const showFiscalRoundingNotice = Math.abs(fiscalRoundingRemainder) > 0.004;
+  const fiscalRoundingAction =
+    fiscalRoundingRemainder > 0 ? "sumara" : "restara";
+  const fiscalRoundingAmount = Math.abs(fiscalRoundingRemainder);
 
   const upsertCustomer = useCallback((customer: CustomerOption) => {
     setCustomerMatches((previous) => {
@@ -3406,6 +3411,13 @@ export function NewSaleForm({
                     />
                     <FiscalAmountItem label="Total" value={fiscalPreview.total} />
                   </div>
+                  {showFiscalRoundingNotice ? (
+                    <p className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-xs leading-5 text-amber-800">
+                      Se {fiscalRoundingAction} un redondeo fiscal de{" "}
+                      {formatCurrencyARS(fiscalRoundingAmount.toFixed(2))} en
+                      IVA para que el total coincida con la venta.
+                    </p>
+                  ) : null}
                 </section>
               ) : null}
 

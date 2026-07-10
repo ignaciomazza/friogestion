@@ -6,6 +6,15 @@ export type IvaItem = {
   Importe: number;
 };
 
+export type FiscalTotals = {
+  net: number;
+  iva: number;
+  total: number;
+  exempt: number;
+  ivaItems: IvaItem[];
+  roundingRemainder: number;
+};
+
 export type ManualTotals = {
   net: number;
   iva: number;
@@ -22,6 +31,8 @@ type RateEntry = {
   base: number;
   rate: number;
 };
+
+const ROUNDING_REMAINDER_TOLERANCE_CENTS = 1;
 
 function round2(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -53,9 +64,7 @@ function normalizeRate(rate: number) {
   return normalized;
 }
 
-export function buildTotalsFromRates(
-  items: RateEntry[]
-) {
+export function buildTotalsFromRates(items: RateEntry[]): FiscalTotals {
   const buckets = new Map<number, number>();
   for (const item of items) {
     const rate = normalizeRate(item.rate);
@@ -87,7 +96,7 @@ export function buildTotalsFromRates(
 
   const total = round2(net + iva + exempt);
 
-  return { net, iva, total, exempt, ivaItems };
+  return { net, iva, total, exempt, ivaItems, roundingRemainder: 0 };
 }
 
 function allocateAdjustment(total: number, weights: number[]) {
@@ -160,7 +169,7 @@ function findLastIndex<T>(items: T[], predicate: (item: T) => boolean) {
 export function buildAdjustedTotalsFromRates(
   items: RateEntry[],
   finalAdjustment = 0
-) {
+): FiscalTotals {
   const adjustment = round2(finalAdjustment);
   if (adjustment === 0) {
     return buildTotalsFromRates(items);
@@ -226,6 +235,7 @@ export function buildAdjustedTotalsFromRates(
     adjustedEntries.reduce((acc, entry) => acc + entry.gross, 0)
   );
   let diff = round2(targetTotal - total);
+  let roundingRemainder = 0;
   if (diff !== 0) {
     const lastTaxableIndex = findLastIndex(
       adjustedEntries,
@@ -257,6 +267,28 @@ export function buildAdjustedTotalsFromRates(
     }
   }
 
+  diff = round2(targetTotal - total);
+  if (diff !== 0) {
+    const diffCents = toCents(targetTotal) - toCents(total);
+    const lastTaxableIndex = findLastIndex(
+      adjustedEntries,
+      (entry) => entry.rate !== 0
+    );
+    if (
+      lastTaxableIndex >= 0 &&
+      Math.abs(diffCents) <= ROUNDING_REMAINDER_TOLERANCE_CENTS
+    ) {
+      const entry = adjustedEntries[lastTaxableIndex];
+      const nextIvaCents = toCents(entry.iva) + diffCents;
+      if (nextIvaCents >= 0) {
+        entry.iva = fromCents(nextIvaCents);
+        entry.gross = round2(entry.base + entry.iva);
+        total = round2(targetTotal);
+        roundingRemainder = fromCents(diffCents);
+      }
+    }
+  }
+
   let net = 0;
   let exempt = 0;
   let iva = 0;
@@ -285,7 +317,7 @@ export function buildAdjustedTotalsFromRates(
     ...ivaItems.flatMap((item) => [item.BaseImp, item.Importe]),
   ]);
 
-  return { net, iva, total, exempt, ivaItems };
+  return { net, iva, total, exempt, ivaItems, roundingRemainder };
 }
 
 export function toManualTotals(totals: {
