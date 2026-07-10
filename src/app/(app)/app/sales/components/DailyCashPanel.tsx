@@ -23,6 +23,7 @@ import { MoneyInput } from "@/components/inputs/MoneyInput";
 import { formatCurrencyARS } from "@/lib/format";
 import { formatQuantityInput, normalizeDecimalInput } from "@/lib/input-format";
 import type { ProductOption, SaleRow } from "../types";
+import { hasPositiveCatalogPrice } from "../utils";
 
 type PaymentMethodOption = {
   id: string;
@@ -350,32 +351,6 @@ const createLine = (): DailyLineDraft => ({
 const taxRateFromVatMode = (value: VatMode) =>
   value === "EXEMPT" ? 0 : Number(value);
 
-const amountModeInputLabel = (mode: AmountMode) => {
-  if (mode === "NET") return "Neto";
-  if (mode === "NET_UNIT") return "Neto unit.";
-  if (mode === "TOTAL_UNIT") return "Total unit.";
-  return "Total";
-};
-
-const suggestedProductAmount = (
-  productPrice: string | null,
-  line: DailyLineDraft,
-) => {
-  const netUnit = Number(productPrice ?? 0);
-  if (!Number.isFinite(netUnit) || netUnit <= 0) return "";
-  const qty = Number(line.qty || 0);
-  const normalizedQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
-  const rate = taxRateFromVatMode(line.taxRate) / 100;
-  if (line.amountMode === "NET_UNIT") return round2(netUnit).toFixed(2);
-  if (line.amountMode === "TOTAL_UNIT") {
-    return round2(netUnit * (1 + rate)).toFixed(2);
-  }
-  if (line.amountMode === "NET") {
-    return round2(netUnit * normalizedQty).toFixed(2);
-  }
-  return round2(netUnit * normalizedQty * (1 + rate)).toFixed(2);
-};
-
 const lineTotals = (line: Pick<DailyLineDraft, "amount" | "amountMode" | "taxRate" | "qty">) =>
   resolveTotals({
     amount: Number(line.amount || 0),
@@ -383,6 +358,30 @@ const lineTotals = (line: Pick<DailyLineDraft, "amount" | "amountMode" | "taxRat
     taxRate: taxRateFromVatMode(line.taxRate),
     qty: Number(line.qty || 0),
   });
+
+type DailyAmountLine = Pick<
+  DailyLineDraft,
+  "amount" | "amountMode" | "taxRate" | "qty"
+>;
+
+const netUnitPriceFromLine = (line: DailyAmountLine) => {
+  const qty = Number(line.qty || 0);
+  if (!Number.isFinite(qty) || qty <= 0) return 0;
+  return round2(lineTotals(line).net / qty);
+};
+
+const moneyValueOrEmpty = (value: number) =>
+  Number.isFinite(value) && value > 0 ? round2(value).toFixed(2) : "";
+
+const netUnitInputValue = (line: DailyAmountLine) =>
+  line.amountMode === "NET_UNIT"
+    ? line.amount
+    : moneyValueOrEmpty(netUnitPriceFromLine(line));
+
+const totalInputValue = (line: DailyAmountLine) =>
+  line.amountMode === "TOTAL"
+    ? line.amount
+    : moneyValueOrEmpty(lineTotals(line).total);
 
 function DailyTotalsStrip({
   totals,
@@ -492,13 +491,6 @@ const vatOptions: Array<DailySelectOption<VatMode>> = [
   { value: "10.5", label: "IVA 10.5%" },
   { value: "0", label: "Sin IVA" },
   { value: "EXEMPT", label: "Exento" },
-];
-
-const amountModeOptions: Array<DailySelectOption<AmountMode>> = [
-  { value: "TOTAL", label: "Total" },
-  { value: "NET", label: "Neto" },
-  { value: "TOTAL_UNIT", label: "Total Unitario" },
-  { value: "NET_UNIT", label: "Neto Unitario" },
 ];
 
 export function DailyCashPanel({
@@ -693,13 +685,34 @@ export function DailyCashPanel({
     patch: Partial<Omit<DailyLineDraft, "localId">>,
   ) => {
     setLines((previous) =>
+      previous.map((line) => {
+        if (line.localId !== localId) return line;
+        return {
+          ...line,
+          ...patch,
+          ...(patch.productSearch !== undefined
+            ? { productId: "" }
+            : {}),
+        };
+      }),
+    );
+  };
+
+  const updateLineNetUnit = (localId: string, value: string) => {
+    setLines((previous) =>
       previous.map((line) =>
         line.localId === localId
-          ? {
-              ...line,
-              ...patch,
-              ...(patch.productSearch !== undefined ? { productId: "" } : {}),
-            }
+          ? { ...line, amount: value, amountMode: "NET_UNIT" }
+          : line,
+      ),
+    );
+  };
+
+  const updateLineTotal = (localId: string, value: string) => {
+    setLines((previous) =>
+      previous.map((line) =>
+        line.localId === localId
+          ? { ...line, amount: value, amountMode: "TOTAL" }
           : line,
       ),
     );
@@ -717,18 +730,24 @@ export function DailyCashPanel({
 
   const selectProduct = (localId: string, product: ProductSearchOption) => {
     setLines((previous) =>
-      previous.map((line) =>
-        line.localId === localId
-          ? {
-              ...line,
-              productId: product.id,
-              productSearch: formatProductLabel(product),
-              amount:
-                line.amount ||
-                suggestedProductAmount(product.price, line),
-            }
-          : line,
-      ),
+      previous.map((line) => {
+        if (line.localId !== localId) return line;
+        const hasCatalogPrice = hasPositiveCatalogPrice(product.price);
+        const nextLine = {
+          ...line,
+          productId: product.id,
+          productSearch: formatProductLabel(product),
+          amountMode: hasCatalogPrice
+            ? ("NET_UNIT" as AmountMode)
+            : line.amountMode,
+        };
+        return {
+          ...nextLine,
+          amount: hasCatalogPrice
+            ? (product.price ?? "")
+            : line.amount,
+        };
+      }),
     );
     setOpenProductLineId(null);
     setProductMatches([]);
@@ -741,6 +760,14 @@ export function DailyCashPanel({
     setEditLines((previous) =>
       previous.map((line) => (line.id === id ? { ...line, ...patch } : line)),
     );
+  };
+
+  const updateEditLineNetUnit = (id: string, value: string) => {
+    updateEditLine(id, { amount: value, amountMode: "NET_UNIT" });
+  };
+
+  const updateEditLineTotal = (id: string, value: string) => {
+    updateEditLine(id, { amount: value, amountMode: "TOTAL" });
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -1061,14 +1088,12 @@ export function DailyCashPanel({
                   </label>
 
                   <label className="field-stack w-[8.25rem] shrink-0">
-                    <span className="input-label">
-                      {amountModeInputLabel(line.amountMode)}
-                    </span>
+                    <span className="input-label">Neto unit.</span>
                     <MoneyInput
                       className="input no-spinner h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
-                      value={line.amount}
+                      value={netUnitInputValue(line)}
                       onValueChange={(value) =>
-                        updateLine(line.localId, { amount: value })
+                        updateLineNetUnit(line.localId, value)
                       }
                       prefix="$"
                       placeholder="0,00"
@@ -1076,19 +1101,19 @@ export function DailyCashPanel({
                     />
                   </label>
 
-                  <div className="field-stack w-[8.25rem] shrink-0">
-                    <span className="input-label">Carga</span>
-                    <DailySelect
-                      value={line.amountMode}
-                      options={amountModeOptions}
+                  <label className="field-stack w-[8.25rem] shrink-0">
+                    <span className="input-label">Total</span>
+                    <MoneyInput
+                      className="input no-spinner h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
+                      value={totalInputValue(line)}
                       onValueChange={(value) =>
-                        updateLine(line.localId, { amountMode: value })
+                        updateLineTotal(line.localId, value)
                       }
-                      buttonClassName="px-2"
-                      optionClassName="px-2 py-1.5 text-xs"
-                      ariaLabel="Modo de carga"
+                      prefix="$"
+                      placeholder="0,00"
+                      caretToEndOnFocus
                     />
-                  </div>
+                  </label>
 
                   <div className="field-stack w-[6.75rem] shrink-0">
                     <span className="input-label">IVA</span>
@@ -1363,32 +1388,29 @@ export function DailyCashPanel({
                         />
                       </label>
                       <label className="field-stack w-[8.25rem] shrink-0">
-                        <span className="input-label">
-                          {amountModeInputLabel(line.amountMode)}
-                        </span>
+                        <span className="input-label">Neto unit.</span>
                         <MoneyInput
                           className="input h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
-                          value={line.amount}
+                          value={netUnitInputValue(line)}
                           onValueChange={(value) =>
-                            updateEditLine(line.id, { amount: value })
+                            updateEditLineNetUnit(line.id, value)
                           }
                           prefix="$"
                           caretToEndOnFocus
                         />
                       </label>
-                      <div className="field-stack w-[8.25rem] shrink-0">
-                        <span className="input-label">Carga</span>
-                        <DailySelect
-                          value={line.amountMode}
-                          options={amountModeOptions}
+                      <label className="field-stack w-[8.25rem] shrink-0">
+                        <span className="input-label">Total</span>
+                        <MoneyInput
+                          className="input h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
+                          value={totalInputValue(line)}
                           onValueChange={(value) =>
-                            updateEditLine(line.id, { amountMode: value })
+                            updateEditLineTotal(line.id, value)
                           }
-                          buttonClassName="px-2"
-                          optionClassName="px-2 py-1.5 text-xs"
-                          ariaLabel="Modo de carga"
+                          prefix="$"
+                          caretToEndOnFocus
                         />
-                      </div>
+                      </label>
                       <div className="field-stack w-[6.75rem] shrink-0">
                         <span className="input-label">IVA</span>
                         <DailySelect

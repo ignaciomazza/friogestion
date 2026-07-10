@@ -59,6 +59,7 @@ import type {
   ProductOption,
   SaleRow,
 } from "../types";
+import { hasPositiveCatalogPrice } from "../utils";
 import { InlineCustomerForm } from "../../quotes/components/InlineCustomerForm";
 import { ReceiptForm } from "./ReceiptForm";
 
@@ -203,13 +204,6 @@ const SALE_TAX_RATE_OPTIONS: Array<SaleSelectOption<VatMode>> = [
   { value: "10.5", label: "IVA 10,5" },
   { value: "0", label: "Sin IVA" },
   { value: "EXEMPT", label: "Exento" },
-];
-
-const SALE_AMOUNT_MODE_OPTIONS: Array<SaleSelectOption<AmountMode>> = [
-  { value: "TOTAL", label: "Total" },
-  { value: "NET", label: "Neto" },
-  { value: "TOTAL_UNIT", label: "Total Unitario" },
-  { value: "NET_UNIT", label: "Neto Unitario" },
 ];
 
 const CONSUMER_FINAL_THRESHOLD = 10_000_000;
@@ -448,37 +442,24 @@ const lineTotals = (
     qty: Number(line.qty || 0),
   });
 
-const amountModeInputLabel = (mode: AmountMode) => {
-  if (mode === "NET") return "Neto";
-  if (mode === "NET_UNIT") return "Neto unit.";
-  if (mode === "TOTAL_UNIT") return "Total unit.";
-  return "Total";
-};
-
-const suggestedProductAmount = (
-  productPrice: string | null,
-  line: SaleLineDraft,
-) => {
-  const netUnit = Number(productPrice ?? 0);
-  if (!Number.isFinite(netUnit) || netUnit <= 0) return "";
-  const qty = Number(line.qty || 0);
-  const normalizedQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
-  const rate = taxRateFromVatMode(line.taxRate) / 100;
-  if (line.amountMode === "NET_UNIT") return round2(netUnit).toFixed(2);
-  if (line.amountMode === "TOTAL_UNIT") {
-    return round2(netUnit * (1 + rate)).toFixed(2);
-  }
-  if (line.amountMode === "NET") {
-    return round2(netUnit * normalizedQty).toFixed(2);
-  }
-  return round2(netUnit * normalizedQty * (1 + rate)).toFixed(2);
-};
-
 const netUnitPriceFromLine = (line: SaleLineDraft) => {
   const qty = Number(line.qty || 0);
   if (!Number.isFinite(qty) || qty <= 0) return 0;
   return round2(lineTotals(line).net / qty);
 };
+
+const moneyValueOrEmpty = (value: number) =>
+  Number.isFinite(value) && value > 0 ? round2(value).toFixed(2) : "";
+
+const netUnitInputValue = (line: SaleLineDraft) =>
+  line.amountMode === "NET_UNIT"
+    ? line.amount
+    : moneyValueOrEmpty(netUnitPriceFromLine(line));
+
+const totalInputValue = (line: SaleLineDraft) =>
+  line.amountMode === "TOTAL"
+    ? line.amount
+    : moneyValueOrEmpty(lineTotals(line).total);
 
 function SaleLineTotalsStrip({
   totals,
@@ -1001,20 +982,17 @@ export function NewSaleForm({
       preferredCostCurrency,
     });
 
-  const getSuggestedProductAmount = (
+  const getSuggestedProductNetUnit = (
     product: ProductSearchOption,
-    line: SaleLineDraft,
     preferredPriceListId = selectedPriceListId,
     customerPriceListId?: string | null,
-  ) => {
-    const suggestedPrice = getSuggestedProductPrice({
+  ) =>
+    getSuggestedProductPrice({
       product,
       preferredPriceListId,
       customerPriceListId,
       preferredCostCurrency: "ARS",
-    });
-    return suggestedProductAmount(suggestedPrice ?? product.price ?? null, line);
-  };
+    }) ?? product.price ?? null;
 
   const applyPriceListAndRefreshLines = ({
     nextPriceListId,
@@ -1029,14 +1007,26 @@ export function NewSaleForm({
         if (!line.productId) return line;
         const product = productMap.get(line.productId);
         if (!product) return line;
-        const nextAmount = getSuggestedProductAmount(
+        const nextProductPrice = getSuggestedProductNetUnit(
           product,
-          line,
           nextPriceListId,
           customerPriceListId,
         );
-        if (!nextAmount || nextAmount === line.amount) return line;
-        return { ...line, amount: nextAmount };
+        if (!hasPositiveCatalogPrice(nextProductPrice)) return line;
+        if (
+          line.amountMode === "TOTAL" &&
+          hasPositiveCatalogPrice(line.amount)
+        ) {
+          return line;
+        }
+        if (nextProductPrice === line.amount && line.amountMode === "NET_UNIT") {
+          return line;
+        }
+        return {
+          ...line,
+          amountMode: "NET_UNIT",
+          amount: nextProductPrice ?? "",
+        };
       }),
     );
   };
@@ -1350,13 +1340,32 @@ export function NewSaleForm({
     value: string,
   ) => {
     setLines((previous) =>
+      previous.map((line, lineIndex) => {
+        if (lineIndex !== index) return line;
+        return {
+          ...line,
+          [field]: value,
+          ...(field === "productSearch" ? { productId: "" } : {}),
+        };
+      }),
+    );
+  };
+
+  const updateLineNetUnit = (index: number, value: string) => {
+    setLines((previous) =>
       previous.map((line, lineIndex) =>
         lineIndex === index
-          ? {
-              ...line,
-              [field]: value,
-              ...(field === "productSearch" ? { productId: "" } : {}),
-            }
+          ? { ...line, amount: value, amountMode: "NET_UNIT" }
+          : line,
+      ),
+    );
+  };
+
+  const updateLineTotal = (index: number, value: string) => {
+    setLines((previous) =>
+      previous.map((line, lineIndex) =>
+        lineIndex === index
+          ? { ...line, amount: value, amountMode: "TOTAL" }
           : line,
       ),
     );
@@ -1365,16 +1374,24 @@ export function NewSaleForm({
   const selectProduct = (index: number, product: ProductSearchOption) => {
     upsertProducts([product]);
     setLines((previous) =>
-      previous.map((line, lineIndex) =>
-        lineIndex === index
-          ? {
-              ...line,
-              productId: product.id,
-              productSearch: formatProductLabel(product),
-              amount: getSuggestedProductAmount(product, line),
-            }
-          : line,
-      ),
+      previous.map((line, lineIndex) => {
+        if (lineIndex !== index) return line;
+        const productPrice = getSuggestedProductNetUnit(product);
+        const nextLine = {
+          ...line,
+          productId: product.id,
+          productSearch: formatProductLabel(product),
+          amountMode: hasPositiveCatalogPrice(productPrice)
+            ? ("NET_UNIT" as AmountMode)
+            : line.amountMode,
+        };
+        return {
+          ...nextLine,
+          amount: hasPositiveCatalogPrice(productPrice)
+            ? (productPrice ?? "")
+            : line.amount,
+        };
+      }),
     );
     setOpenProductIndex(null);
     setProductMatches([]);
@@ -2782,14 +2799,12 @@ export function NewSaleForm({
                     </label>
 
                     <label className="field-stack w-[8.25rem] shrink-0">
-                      <span className="input-label">
-                        {amountModeInputLabel(line.amountMode)}
-                      </span>
+                      <span className="input-label">Neto unit.</span>
                       <MoneyInput
                         className="input no-spinner h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
-                        value={line.amount}
+                        value={netUnitInputValue(line)}
                         onValueChange={(value) =>
-                          updateLine(index, "amount", value)
+                          updateLineNetUnit(index, value)
                         }
                         prefix="$"
                         placeholder="0,00"
@@ -2799,19 +2814,21 @@ export function NewSaleForm({
                       />
                     </label>
 
-                    <div className="field-stack w-[8.25rem] shrink-0">
-                      <span className="input-label">Carga</span>
-                      <SaleSelect
-                        value={line.amountMode}
-                        options={SALE_AMOUNT_MODE_OPTIONS}
+                    <label className="field-stack w-[8.25rem] shrink-0">
+                      <span className="input-label">Total</span>
+                      <MoneyInput
+                        className="input no-spinner h-10 w-full min-w-0 px-2 text-right text-xs tabular-nums"
+                        value={totalInputValue(line)}
                         onValueChange={(value) =>
-                          updateLine(index, "amountMode", value)
+                          updateLineTotal(index, value)
                         }
-                        ariaLabel="Modo de carga"
-                        buttonClassName="px-2"
-                        optionClassName="px-2 py-1.5 text-xs"
+                        prefix="$"
+                        placeholder="0,00"
+                        maxDecimals={2}
+                        caretToEndOnFocus
+                        required
                       />
-                    </div>
+                    </label>
 
                     <div className="field-stack w-[6.75rem] shrink-0">
                       <span className="input-label">IVA</span>

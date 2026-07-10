@@ -9,6 +9,11 @@ export const formatProductLabel = (product: ProductOption) =>
 
 export const normalizeQuery = (value: string) => value.trim().toLowerCase();
 
+export const hasPositiveCatalogPrice = (value: string | null | undefined) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) && parsed > 0;
+};
+
 export const formatUnit = (unit: string | null) => {
   if (!unit) return "-";
   return UNIT_LABELS[unit as (typeof UNIT_VALUES)[number]] ?? unit ?? "-";
