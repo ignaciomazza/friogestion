@@ -5,9 +5,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ToastContainer } from "react-toastify";
 import {
   ArrowDownTrayIcon,
+  ArrowPathIcon,
   CurrencyDollarIcon,
   ChevronDownIcon,
   DocumentTextIcon,
+  TrashIcon,
 } from "@/components/icons";
 import { WhatsappPdfButton } from "@/components/WhatsappPdfButton";
 import { getAfipMissingItems, summarizeAfipMissing } from "@/lib/afip/messages";
@@ -226,6 +228,18 @@ function toDateInputValue(value: Date) {
   const month = `${value.getMonth() + 1}`.padStart(2, "0");
   const day = `${value.getDate()}`.padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function buildFiscalInvoicePdfHref(
+  invoiceId: string,
+  variant: "factura" | "comprobante",
+) {
+  const params = variant === "comprobante" ? "?variant=comprobante" : "";
+  return `/api/fiscal-invoices/${invoiceId}/pdf${params}`;
+}
+
+function openPdfInNewTab(href: string) {
+  window.open(href, "_blank", "noopener,noreferrer");
 }
 
 function isInvoiceResolution(value: unknown): value is InvoiceResolution {
@@ -1017,11 +1031,7 @@ export default function BillingClient({
           : note
       )
     );
-    window.open(
-      `/api/fiscal-invoices/${invoice.id}/pdf`,
-      "_blank",
-      "noopener,noreferrer"
-    );
+    openPdfInNewTab(buildFiscalInvoicePdfHref(invoice.id, "factura"));
   };
 
   const waitForQueuedInvoice = async (jobId: string, saleSnapshot: SaleRow) => {
@@ -1507,11 +1517,7 @@ export default function BillingClient({
         `Factura ${formatVoucherLabel(invoiceToCancel.pointOfSale, invoiceToCancel.number)} anulada con nota de credito.`
       );
       setInvoiceWarnings([]);
-      window.open(
-        `/api/credit-notes/${noteEntry.id}/pdf`,
-        "_blank",
-        "noopener,noreferrer"
-      );
+      openPdfInNewTab(`/api/credit-notes/${noteEntry.id}/pdf`);
       setCreditNoteStep("FORM");
       setInvoiceToCancel(null);
       setCreditPreview(null);
@@ -1589,11 +1595,7 @@ export default function BillingClient({
         )} revertida con nota de debito.`,
       );
       setInvoiceWarnings([]);
-      window.open(
-        `/api/debit-notes/${noteEntry.id}/pdf`,
-        "_blank",
-        "noopener,noreferrer",
-      );
+      openPdfInNewTab(`/api/debit-notes/${noteEntry.id}/pdf`);
       setCreditNoteToRevert(null);
       setDebitNoteStep("FORM");
       setDebitPreviewStatus(null);
@@ -2239,46 +2241,71 @@ export default function BillingClient({
                               </td>
                               <td className="py-2 pr-3 text-right">
                                 <div className="flex flex-wrap items-center justify-end gap-2">
-                                  <a
+                                  <button
+                                    type="button"
                                     className="btn text-xs"
-                                    href={`/api/fiscal-invoices/${invoice.id}/pdf`}
-                                    target="_blank"
-                                    rel="noreferrer"
+                                    onClick={() =>
+                                      openPdfInNewTab(
+                                        buildFiscalInvoicePdfHref(invoice.id, "factura"),
+                                      )
+                                    }
+                                  >
+                                    <DocumentTextIcon className="size-4" />
+                                    Factura
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn text-xs"
+                                    onClick={() =>
+                                      openPdfInNewTab(
+                                        buildFiscalInvoicePdfHref(
+                                          invoice.id,
+                                          "comprobante",
+                                        ),
+                                      )
+                                    }
                                   >
                                     <ArrowDownTrayIcon className="size-4" />
-                                    PDF factura
-                                  </a>
+                                    Comprobante
+                                  </button>
                                   <WhatsappPdfButton
                                     documentType="fiscalInvoice"
                                     documentId={invoice.id}
-                                    documentLabel={`Factura ${formatVoucherLabel(
+                                    documentLabel={`Comprobante ${formatVoucherLabel(
                                       invoice.pointOfSale,
                                       invoice.number,
                                     )}`}
                                     customerName={invoice.customerName}
                                     customerPhone={invoice.customerPhone}
                                     className="btn btn-emerald text-xs"
+                                    pdfVariant="comprobante"
                                   />
                                   {linkedCreditNote ? (
                                     <>
-                                      <a
+                                      <button
+                                        type="button"
                                         className="btn btn-sky text-xs"
-                                        href={`/api/credit-notes/${linkedCreditNote.id}/pdf`}
-                                        target="_blank"
-                                        rel="noreferrer"
+                                        onClick={() =>
+                                          openPdfInNewTab(
+                                            `/api/credit-notes/${linkedCreditNote.id}/pdf`,
+                                          )
+                                        }
                                       >
                                         <ArrowDownTrayIcon className="size-4" />
                                         PDF NC
-                                      </a>
-                                      <a
+                                      </button>
+                                      <button
+                                        type="button"
                                         className="btn text-xs"
-                                        href={`/api/credit-notes/${linkedCreditNote.id}/source-invoice-pdf`}
-                                        target="_blank"
-                                        rel="noreferrer"
+                                        onClick={() =>
+                                          openPdfInNewTab(
+                                            `/api/credit-notes/${linkedCreditNote.id}/source-invoice-pdf`,
+                                          )
+                                        }
                                       >
                                         <ArrowDownTrayIcon className="size-4" />
                                         PDF factura origen
-                                      </a>
+                                      </button>
                                       <WhatsappPdfButton
                                         documentType="creditNote"
                                         documentId={linkedCreditNote.id}
@@ -2294,15 +2321,18 @@ export default function BillingClient({
                                           <span className="rounded-full border border-rose-200 bg-white px-2 py-1 text-[11px] font-medium text-rose-800">
                                             Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""}
                                           </span>
-                                          <a
+                                          <button
+                                            type="button"
                                             className="btn btn-amber text-xs"
-                                            href={`/api/debit-notes/${linkedDebitNote.id}/pdf`}
-                                            target="_blank"
-                                            rel="noreferrer"
+                                            onClick={() =>
+                                              openPdfInNewTab(
+                                                `/api/debit-notes/${linkedDebitNote.id}/pdf`,
+                                              )
+                                            }
                                           >
                                             <ArrowDownTrayIcon className="size-4" />
                                             PDF ND
-                                          </a>
+                                          </button>
                                           <WhatsappPdfButton
                                             documentType="debitNote"
                                             documentId={linkedDebitNote.id}
@@ -2325,6 +2355,7 @@ export default function BillingClient({
                                             openDebitNoteModal(invoice, linkedCreditNote)
                                           }
                                         >
+                                          <ArrowPathIcon className="size-4" />
                                           Anulada {creditNoteLabel ? `· NC ${creditNoteLabel}` : ""} · Revertir NC
                                         </button>
                                       )}
@@ -2335,7 +2366,8 @@ export default function BillingClient({
                                       className="btn btn-rose text-xs"
                                       onClick={() => openCreditNoteModal(invoice)}
                                     >
-                                      Anular factura
+                                      <TrashIcon className="size-4" />
+                                      Anular
                                     </button>
                                   )}
                                 </div>

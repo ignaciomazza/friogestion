@@ -11,7 +11,6 @@ import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
 import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
-  isConsumerFinalFiscalTaxProfile,
   normalizeCustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
@@ -292,8 +291,7 @@ export async function GET(
     const receiverFiscalCondition = receiverFiscalProfile
       ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[receiverFiscalProfile]
       : null;
-    const hideTaxBreakdown =
-      isConsumerFinalFiscalTaxProfile(receiverFiscalProfile);
+    const hideTaxBreakdown = false;
     const manualIssuerActivityStart =
       creditNote.organization.activityStart?.toLocaleDateString("es-AR") ?? null;
     const issuerTaxpayer = await resolveIssuerTaxpayerSummary({
@@ -358,11 +356,15 @@ export async function GET(
             serviceDates: null,
           },
           items,
-          transparency: null,
           logoSrc,
           qrBase64,
           paymentMethod,
           hideTaxBreakdown,
+          transparencyLegend: {
+            enabled: true,
+            ivaContained: iva,
+            otherNationalIndirectTaxes: otherTaxes,
+          },
         }}
       />
     );

@@ -185,7 +185,6 @@ export async function GET(
                 : null,
           },
           items: items ?? [],
-          transparency: null,
           logoSrc,
           qrBase64:
             payload && typeof payload === "object"

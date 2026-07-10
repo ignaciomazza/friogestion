@@ -13,6 +13,7 @@ type WhatsappPdfButtonProps = {
   customerPhone?: string | null;
   className?: string;
   stopPropagation?: boolean;
+  pdfVariant?: "factura" | "comprobante";
 };
 
 type ShareTokenResponse = {
@@ -43,6 +44,7 @@ export function WhatsappPdfButton({
   documentLabel,
   className = "btn text-xs",
   stopPropagation,
+  pdfVariant,
 }: WhatsappPdfButtonProps) {
   const [isCopying, setIsCopying] = useState(false);
 
@@ -59,7 +61,7 @@ export function WhatsappPdfButton({
       const res = await fetch("/api/pdf/share-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ documentType, documentId }),
+        body: JSON.stringify({ documentType, documentId, pdfVariant }),
       });
       const data = (await res.json().catch(() => null)) as ShareTokenResponse | null;
       if (!res.ok || !data?.url) {

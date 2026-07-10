@@ -53,40 +53,41 @@ type FiscalPdfData = {
     taxRate?: number | null;
     taxAmount?: number | null;
   }>;
-  transparency?: {
-    enabled?: boolean;
-    ivaContained?: number | null;
-    otherNationalIndirectTaxes?: number | null;
-  } | null;
   logoSrc?: string | null;
   qrBase64?: string | null;
   paymentMethod?: string | null;
   hideTaxBreakdown?: boolean;
+  transparencyLegend?: {
+    enabled?: boolean;
+    ivaContained?: number | null;
+    otherNationalIndirectTaxes?: number | null;
+  } | null;
 };
 
 const styles = StyleSheet.create({
   page: {
-    padding: 28,
-    fontSize: 8.5,
+    padding: 24,
+    fontSize: 8.2,
     fontFamily: "Helvetica",
     color: "#172033",
     backgroundColor: "#ffffff",
   },
   accent: {
-    height: 4,
+    height: 3,
     backgroundColor: "#0f172a",
     borderRadius: 999,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 12,
+    marginBottom: 10,
+    paddingHorizontal: 9,
   },
   logo: {
-    width: 136,
-    height: 50,
+    width: 126,
+    height: 46,
     objectFit: "contain",
   },
   issuerBrand: {
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
     maxWidth: "52%",
   },
   title: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: 700,
   },
   subtitle: {
@@ -115,17 +116,17 @@ const styles = StyleSheet.create({
     color: "#172033",
   },
   section: {
-    marginBottom: 10,
+    marginBottom: 8,
   },
   row: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 12,
+    gap: 8,
   },
   label: {
     fontSize: 7,
     color: "#6b7280",
-    marginBottom: 3,
+    marginBottom: 2,
     textTransform: "uppercase",
     letterSpacing: 0.4,
   },
@@ -141,47 +142,36 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#e4e7ec",
     backgroundColor: "#fcfcfd",
-    borderRadius: 10,
-    padding: 8,
-    minHeight: 78,
-  },
-  issuerColumn: {
-    width: "50%",
-  },
-  issuerPrimaryCard: {
-    width: "100%",
-    minHeight: 0,
-    marginBottom: 7,
-  },
-  issuerSecondaryCard: {
-    width: "100%",
-    minHeight: 0,
+    borderRadius: 8,
+    padding: 7,
+    minHeight: 70,
   },
   partyHeader: {
     marginBottom: 4,
   },
   detailLine: {
-    marginTop: 3,
+    marginTop: 2.4,
     color: "#344054",
   },
   serviceDates: {
-    marginBottom: 8,
+    marginBottom: 6,
   },
   tableContainer: {
     borderWidth: 1,
     borderColor: "#d0d5dd",
-    borderRadius: 12,
+    borderRadius: 8,
     backgroundColor: "#ffffff",
+    overflow: "hidden",
   },
   tableHeader: {
     flexDirection: "row",
     backgroundColor: "#eef2f7",
-    borderTopLeftRadius: 11,
-    borderTopRightRadius: 11,
+    borderTopLeftRadius: 7,
+    borderTopRightRadius: 7,
     borderBottomWidth: 1,
     borderBottomColor: "#d0d5dd",
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    paddingVertical: 4.2,
+    paddingHorizontal: 7,
   },
   tableHeaderText: {
     fontSize: 8,
@@ -189,11 +179,15 @@ const styles = StyleSheet.create({
   },
   tableRow: {
     flexDirection: "row",
-    paddingVertical: 5,
-    paddingHorizontal: 8,
+    paddingVertical: 4.5,
+    paddingHorizontal: 7,
   },
   tableRowAlt: {
     backgroundColor: "#fcfcfd",
+  },
+  tableRowLast: {
+    borderBottomLeftRadius: 7,
+    borderBottomRightRadius: 7,
   },
   colDesc: { width: "44%" },
   colQty: { width: "10%", textAlign: "right" },
@@ -212,21 +206,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#d0d5dd",
     backgroundColor: "#f8fafc",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 4.5,
   },
-  summaryRight: {
-    width: "44%",
-    marginTop: 8,
+  settlementRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+  },
+  settlementSummary: {
+    width: "42%",
   },
   paymentBox: {
     borderWidth: 1,
     borderColor: "#d0d5dd",
     backgroundColor: "#ffffff",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
   },
   paymentLabel: {
     fontSize: 7,
@@ -242,62 +240,34 @@ const styles = StyleSheet.create({
   totalRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 3,
+    paddingVertical: 2.4,
   },
   totalHighlight: {
     fontSize: 10,
     fontWeight: 700,
   },
-  summaryRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  transparencyBox: {
-    width: "52%",
-    marginTop: 8,
-    borderWidth: 1,
-    borderColor: "#d0d5dd",
-    backgroundColor: "#ffffff",
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  transparencyTitle: {
-    fontSize: 8,
-    fontWeight: 700,
-    marginBottom: 4,
-  },
-  transparencyRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 2,
-  },
   footer: {
-    marginTop: 12,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#d0d5dd",
+    width: "58%",
     flexDirection: "row",
     justifyContent: "flex-end",
-    alignItems: "center",
+    alignItems: "flex-start",
   },
   authorization: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: 10,
   },
   authorizationCard: {
-    width: 158,
+    width: 150,
     borderWidth: 1,
     borderColor: "#111827",
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
     backgroundColor: "#ffffff",
   },
   authorizationTitle: {
-    fontSize: 8,
+    fontSize: 7.3,
     color: "#667085",
     marginBottom: 5,
     textTransform: "uppercase",
@@ -313,8 +283,60 @@ const styles = StyleSheet.create({
     color: "#344054",
   },
   qr: {
-    width: 92,
-    height: 92,
+    width: 88,
+    height: 88,
+  },
+  transparencyLegend: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: "#d0d5dd",
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+  },
+  transparencyLegendLabel: {
+    width: 95,
+    fontSize: 6.8,
+    fontWeight: 700,
+    color: "#475467",
+    textTransform: "uppercase",
+    letterSpacing: 0.25,
+  },
+  transparencyLegendText: {
+    flex: 1,
+    fontSize: 7.2,
+    color: "#475467",
+    lineHeight: 1.25,
+  },
+  issuerContactFooter: {
+    marginTop: 8,
+    paddingHorizontal: 9,
+  },
+  issuerContactGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+  issuerContactItem: {
+    width: "50%",
+    marginTop: 1,
+  },
+  issuerContactItemLeft: {
+    paddingRight: 8,
+  },
+  issuerContactItemRight: {
+    paddingLeft: 8,
+  },
+  issuerContactText: {
+    fontSize: 7.2,
+    color: "#475467",
+    lineHeight: 1.25,
+  },
+  issuerContactTextRight: {
+    textAlign: "right",
   },
 });
 
@@ -344,39 +366,14 @@ function normalizeMultilineDetail(value?: string | null) {
   return lines.join("\n");
 }
 
-function normalizeComparableText(value?: string | null) {
-  if (!value) return "";
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-}
-
-function isConsumerFinalFiscalCondition(value?: string | null) {
-  const normalized = normalizeComparableText(value);
-  return normalized.includes("consumidor final");
-}
-
 export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
   const currency = data.voucher.currencyCode === "USD" ? "USD" : "ARS";
   const voucherNumber = formatVoucherDisplay(
     data.voucher.pointOfSale,
     data.voucher.number,
   );
-  const receiverIdentity = [
-    data.receiver.fiscalCondition,
-    data.receiver.legalName,
-    data.receiver.name,
-  ]
-    .map((value) => normalizeComparableText(value))
-    .join(" ");
-  const isConsumerFinalReceiver =
-    isConsumerFinalFiscalCondition(receiverIdentity);
   const forceHideTaxBreakdown = data.hideTaxBreakdown === true;
-  const hideVatBreakdown =
-    forceHideTaxBreakdown ||
-    data.transparency?.enabled === true ||
-    isConsumerFinalReceiver;
+  const hideVatBreakdown = forceHideTaxBreakdown;
   const issuerSocialMedia = normalizeMultilineDetail(data.issuer.socialMedia);
   const hasIssuerContactDetails = Boolean(
     data.issuer.address ||
@@ -385,6 +382,13 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
       data.issuer.website ||
       issuerSocialMedia
   );
+  const issuerContactLines = [
+    data.issuer.address,
+    data.issuer.email,
+    data.issuer.phone,
+    data.issuer.website,
+    issuerSocialMedia,
+  ].filter((value): value is string => Boolean(value));
   const totals = hideVatBreakdown
     ? [{ label: "Total", value: data.voucher.total }]
     : [
@@ -399,19 +403,17 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
           item.value !== undefined &&
           (item.label === "Total" || Number(item.value) !== 0)
       );
-  const transparency =
-    data.transparency?.enabled === true &&
-    !forceHideTaxBreakdown &&
-    !isConsumerFinalReceiver
+  const transparencyLegend =
+    data.transparencyLegend?.enabled === true
       ? {
-          ivaContained:
-            data.transparency.ivaContained ?? data.voucher.iva ?? 0,
+          ivaContained: data.transparencyLegend.ivaContained ?? 0,
           otherNationalIndirectTaxes:
-            data.transparency.otherNationalIndirectTaxes ??
-            data.voucher.otherTaxes ??
-            0,
+            data.transparencyLegend.otherNationalIndirectTaxes ?? 0,
         }
       : null;
+  const showOtherTransparencyTaxes =
+    transparencyLegend !== null &&
+    Math.abs(transparencyLegend.otherNationalIndirectTaxes) > 0.004;
 
   return (
     <Document>
@@ -439,53 +441,26 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
 
         <View style={styles.section}>
           <View style={styles.row}>
-            <View style={styles.issuerColumn}>
-              <View style={[styles.partyCard, styles.issuerPrimaryCard]}>
-                <View style={styles.partyHeader}>
-                  <Text style={styles.label}>Emisor</Text>
-                  <Text style={styles.strong}>
-                    {data.issuer.legalName ?? data.issuer.name}
-                  </Text>
-                </View>
-                {data.issuer.legalName &&
-                data.issuer.legalName !== data.issuer.name ? (
-                  <Text style={styles.detailLine}>{data.issuer.name}</Text>
-                ) : null}
-                {data.issuer.taxId ? (
-                  <Text style={styles.detailLine}>CUIT {data.issuer.taxId}</Text>
-                ) : null}
-                <Text style={styles.detailLine}>
-                  Condicion fiscal: {data.issuer.fiscalCondition?.trim() || "No informada"}
-                </Text>
-                <Text style={styles.detailLine}>
-                  Inicio de actividad: {data.issuer.activityStart?.trim() || "No informado"}
+            <View style={styles.partyCard}>
+              <View style={styles.partyHeader}>
+                <Text style={styles.label}>Emisor</Text>
+                <Text style={styles.strong}>
+                  {data.issuer.legalName ?? data.issuer.name}
                 </Text>
               </View>
-              <View style={[styles.partyCard, styles.issuerSecondaryCard]}>
-                <View style={styles.partyHeader}>
-                  <Text style={styles.label}>Contacto emisor</Text>
-                </View>
-                {data.issuer.address ? (
-                  <Text style={styles.detailLine}>{data.issuer.address}</Text>
-                ) : null}
-                {data.issuer.email ? (
-                  <Text style={styles.detailLine}>{data.issuer.email}</Text>
-                ) : null}
-                {data.issuer.phone ? (
-                  <Text style={styles.detailLine}>{data.issuer.phone}</Text>
-                ) : null}
-                {data.issuer.website ? (
-                  <Text style={styles.detailLine}>{data.issuer.website}</Text>
-                ) : null}
-                {issuerSocialMedia ? (
-                  <Text style={styles.detailLine}>{issuerSocialMedia}</Text>
-                ) : null}
-                {!hasIssuerContactDetails ? (
-                  <Text style={[styles.detailLine, styles.muted]}>
-                    Sin datos de contacto
-                  </Text>
-                ) : null}
-              </View>
+              {data.issuer.legalName &&
+              data.issuer.legalName !== data.issuer.name ? (
+                <Text style={styles.detailLine}>{data.issuer.name}</Text>
+              ) : null}
+              {data.issuer.taxId ? (
+                <Text style={styles.detailLine}>CUIT {data.issuer.taxId}</Text>
+              ) : null}
+              <Text style={styles.detailLine}>
+                Condicion fiscal: {data.issuer.fiscalCondition?.trim() || "No informada"}
+              </Text>
+              <Text style={styles.detailLine}>
+                Inicio de actividad: {data.issuer.activityStart?.trim() || "No informado"}
+              </Text>
             </View>
             <View style={styles.partyCard}>
               <View style={styles.partyHeader}>
@@ -569,11 +544,13 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
                 <View
                   key={`${item.description}-${index}`}
                   wrap={false}
-                  style={
-                    index % 2 === 0
-                      ? [styles.tableRow, styles.tableRowAlt]
-                      : styles.tableRow
-                  }
+                  style={[
+                    styles.tableRow,
+                    ...(index % 2 === 0 ? [styles.tableRowAlt] : []),
+                    ...(index === data.items.length - 1
+                      ? [styles.tableRowLast]
+                      : []),
+                  ]}
                 >
                   <View style={styles.colDesc}>
                     <Text>{item.description}</Text>
@@ -612,34 +589,8 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
           </View>
         </View>
 
-        <View style={styles.summaryRow}>
-          {transparency ? (
-            <View style={styles.transparencyBox}>
-              <Text style={styles.transparencyTitle}>
-                Regimen de Transparencia Fiscal al Consumidor (Ley 27.743)
-              </Text>
-              <View style={styles.transparencyRow}>
-                <Text style={styles.muted}>IVA contenido</Text>
-                <Text>
-                  {formatCurrency(transparency.ivaContained, currency)}
-                </Text>
-              </View>
-              <View style={styles.transparencyRow}>
-                <Text style={styles.muted}>
-                  Otros impuestos nacionales indirectos
-                </Text>
-                <Text>
-                  {formatCurrency(
-                    transparency.otherNationalIndirectTaxes,
-                    currency
-                  )}
-                </Text>
-              </View>
-            </View>
-          ) : (
-            <View style={{ width: "52%" }} />
-          )}
-          <View style={styles.summaryRight}>
+        <View style={styles.settlementRow} wrap={false}>
+          <View style={styles.settlementSummary}>
             <View style={styles.paymentBox}>
               <Text style={styles.paymentLabel}>Metodo de pago</Text>
               <Text style={styles.paymentValue}>
@@ -666,29 +617,77 @@ export function FiscalPdfDocument({ data }: { data: FiscalPdfData }) {
               ))}
             </View>
           </View>
-        </View>
 
-        <View style={styles.footer} wrap={false}>
-          <View style={styles.authorization} wrap={false}>
-            <View style={styles.authorizationCard}>
-              <Text style={styles.authorizationTitle}>
-                Comprobante autorizado ARCA
-              </Text>
-              <Text style={styles.label}>CAE</Text>
-              <Text style={styles.authorizationValue}>
-                {data.voucher.cae ?? "-"}
-              </Text>
-              <Text style={styles.label}>Vto. CAE</Text>
-              <Text style={styles.authorizationDue}>
-                {data.voucher.caeDueDate ?? "-"}
-              </Text>
+          <View style={styles.footer}>
+            <View style={styles.authorization} wrap={false}>
+              <View style={styles.authorizationCard}>
+                <Text style={styles.authorizationTitle}>
+                  Comprobante autorizado ARCA
+                </Text>
+                <Text style={styles.label}>CAE</Text>
+                <Text style={styles.authorizationValue}>
+                  {data.voucher.cae ?? "-"}
+                </Text>
+                <Text style={styles.label}>Vto. CAE</Text>
+                <Text style={styles.authorizationDue}>
+                  {data.voucher.caeDueDate ?? "-"}
+                </Text>
+              </View>
+              {data.qrBase64 ? (
+                // eslint-disable-next-line jsx-a11y/alt-text
+                <Image src={data.qrBase64} style={styles.qr} />
+              ) : null}
             </View>
-            {data.qrBase64 ? (
-              // eslint-disable-next-line jsx-a11y/alt-text
-              <Image src={data.qrBase64} style={styles.qr} />
-            ) : null}
           </View>
         </View>
+
+        {transparencyLegend ? (
+          <View style={styles.transparencyLegend} wrap={false}>
+            <Text style={styles.transparencyLegendLabel}>
+              Transparencia fiscal
+            </Text>
+            <Text style={styles.transparencyLegendText}>
+              Regimen Fiscal de Transparencia al Consumidor (Ley 27.743):
+              IVA contenido {formatCurrency(transparencyLegend.ivaContained, currency)}
+              {showOtherTransparencyTaxes
+                ? `; otros impuestos nacionales indirectos ${formatCurrency(
+                    transparencyLegend.otherNationalIndirectTaxes,
+                    currency
+                  )}`
+                : ""}
+              .
+            </Text>
+          </View>
+        ) : null}
+
+        {hasIssuerContactDetails ? (
+          <View style={styles.issuerContactFooter}>
+            <View style={styles.issuerContactGrid}>
+              {issuerContactLines.map((line, index) => (
+                <View
+                  key={`${line}-${index}`}
+                  style={[
+                    styles.issuerContactItem,
+                    ...(index % 2 === 0
+                      ? [styles.issuerContactItemLeft]
+                      : [styles.issuerContactItemRight]),
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.issuerContactText,
+                      ...(index % 2 === 1
+                        ? [styles.issuerContactTextRight]
+                        : []),
+                    ]}
+                  >
+                    {line}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
       </Page>
     </Document>
   );

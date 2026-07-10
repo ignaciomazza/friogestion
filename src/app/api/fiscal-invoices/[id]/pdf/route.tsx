@@ -9,7 +9,6 @@ import { resolveIssuerTaxpayerSummary } from "@/lib/pdf/issuer-taxpayer";
 import { resolveSalePaymentMethodLabel } from "@/lib/sales/payment-method";
 import {
   CUSTOMER_FISCAL_TAX_PROFILE_LABELS,
-  isConsumerFinalFiscalTaxProfile,
   normalizeCustomerFiscalTaxProfile,
 } from "@/lib/customers/fiscal-profile";
 import { resolvePdfShareOrganizationId } from "@/lib/pdf/share-token";
@@ -104,8 +103,12 @@ export async function GET(
     const receiverFiscalCondition = receiverFiscalProfile
       ? CUSTOMER_FISCAL_TAX_PROFILE_LABELS[receiverFiscalProfile]
       : null;
-    const hideTaxBreakdown =
-      isConsumerFinalFiscalTaxProfile(receiverFiscalProfile);
+    const pdfVariant = req.nextUrl.searchParams.get("variant");
+    const isComprobanteVariant =
+      pdfVariant === "comprobante" ||
+      pdfVariant === "receipt" ||
+      pdfVariant === "simple";
+    const hideTaxBreakdown = isComprobanteVariant;
     const iva = Number(voucherData.ImpIVA ?? 0);
     const otherTaxes = Number(voucherData.ImpTrib ?? 0);
     const issuerTaxId =
@@ -133,7 +136,9 @@ export async function GET(
     const doc = (
       <FiscalPdfDocument
         data={{
-          title: `Factura ${invoice.type ?? ""}`.trim(),
+          title: isComprobanteVariant
+            ? `Comprobante ${invoice.type ?? ""}`.trim()
+            : `Factura ${invoice.type ?? ""}`.trim(),
           issuer: {
             name: invoice.organization.name,
             legalName: invoice.organization.legalName ?? undefined,
@@ -180,7 +185,6 @@ export async function GET(
                 : null,
           },
           items,
-          transparency: null,
           logoSrc,
           qrBase64:
             payload && typeof payload === "object"
@@ -188,6 +192,13 @@ export async function GET(
               : null,
           paymentMethod,
           hideTaxBreakdown,
+          transparencyLegend: isComprobanteVariant
+            ? null
+            : {
+                enabled: true,
+                ivaContained: iva,
+                otherNationalIndirectTaxes: otherTaxes,
+              },
         }}
       />
     );
@@ -198,7 +209,9 @@ export async function GET(
     return new NextResponse(body, {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="factura-${invoice.id}.pdf"`,
+        "Content-Disposition": `inline; filename="${
+          isComprobanteVariant ? "comprobante" : "factura"
+        }-${invoice.id}.pdf"`,
       },
     });
   } catch {

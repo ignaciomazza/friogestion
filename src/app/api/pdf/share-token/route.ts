@@ -21,6 +21,7 @@ const bodySchema = z.object({
     "debitNote",
   ]),
   documentId: z.string().min(1),
+  pdfVariant: z.enum(["factura", "comprobante"]).optional(),
 });
 
 const findDocument = async (
@@ -96,6 +97,7 @@ const buildSharedPdfUrl = (
   documentType: PdfShareDocumentType,
   documentId: string,
   shareToken: string,
+  pdfVariant?: "factura" | "comprobante",
 ) => {
   if (documentType === "quote") {
     const url = new URL("/api/pdf/quote", req.nextUrl.origin);
@@ -139,6 +141,9 @@ const buildSharedPdfUrl = (
         : `/api/debit-notes/${documentId}/pdf`;
   const url = new URL(path, req.nextUrl.origin);
   url.searchParams.set("shareToken", shareToken);
+  if (documentType === "fiscalInvoice" && pdfVariant === "comprobante") {
+    url.searchParams.set("variant", "comprobante");
+  }
   return url.toString();
 };
 
@@ -168,6 +173,7 @@ export async function POST(req: NextRequest) {
         body.documentType,
         body.documentId,
         shareToken,
+        body.pdfVariant,
       ),
       expiresIn: PDF_SHARE_TOKEN_EXPIRES_IN,
     });
